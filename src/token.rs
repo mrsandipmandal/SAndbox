@@ -1,0 +1,103 @@
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    // Literals
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+
+    // Identifier
+    Ident(String),
+
+    // Keywords
+    Let,
+    Mut,
+    Fn,
+    Struct,
+    If,
+    Else,
+    While,
+    For,
+    In,
+    Return,
+    Print,
+
+    // v0.2: Error handling
+    Result,
+    Ok,
+    Err,
+    Panic,
+    QuestionMark,
+
+    // v0.2: Modules
+    Mod,
+    Use,
+
+    // Type keywords
+    TypeI64,
+    TypeF64,
+    TypeBool,
+    TypeString,
+    TypeMoney,
+    TypeDecimal,
+
+    // Operators
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Assign,
+    Arrow,
+    Dot,
+    Comma,
+    Colon,
+    Semicolon,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+
+    // Money
+    Currency(String),
+
+    // Special
+    Eof,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Token::Int(n) => write!(f, "{}", n),
+            Token::Float(n) => write!(f, "{}", n),
+            Token::Str(s) => write!(f, "\"{}\"", s),
+            Token::Bool(b) => write!(f, "{}", b),
+            Token::Ident(s) => write!(f, "{}", s),
+            Token::Currency(s) => write!(f, "{}", s),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Spanned {
+    pub token: Token,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl Spanned {
+    pub fn new(token: Token, line: usize, col: usize) -> Self {
+        Self { token, line, col }
+    }
+}

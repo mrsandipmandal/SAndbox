@@ -1,0 +1,19 @@
+// Fibonacci sequence in Sandbox
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 {
+        return n
+    }
+    let a = fib(n - 1)
+    let b = fib(n - 2)
+    return a + b
+}
+
+fn main() {
+    let mut i: i64 = 0
+    while i < 10 {
+        let result = fib(i)
+        print(result)
+        i = i + 1
+    }
+}

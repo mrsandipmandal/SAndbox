@@ -1,0 +1,13 @@
+// Money type demo in Sandbox
+// Compiler enforces currency safety at compile time
+
+fn main() {
+    let salary: Money<INR> = 50000 INR
+    let tax: Money<INR> = 7500 INR
+    let total = salary + tax
+    print(total)
+}
+
+// This would be a compile error:
+// let usd: Money<USD> = 100 USD
+// salary + usd  ← ERROR: Currency mismatch INR + USD

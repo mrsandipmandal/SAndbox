@@ -1,0 +1,16 @@
+// Struct demo in Sandbox
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn distance_sq(p: Point) -> i64 {
+    return p.x * p.x + p.y * p.y
+}
+
+fn main() {
+    let p = Point { x: 3, y: 4 }
+    let d = distance_sq(p)
+    print(d)
+}

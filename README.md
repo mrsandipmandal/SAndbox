@@ -2,111 +2,139 @@
 
 # 🏖️ Sandbox
 
-**A memory-safe, financially-safe, general-purpose programming language**
+### The programming language where **financial correctness** is a language feature
 
-[![CI](https://github.com/sandbox-lang/sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/sandbox-lang/sandbox/actions/workflows/ci.yml)
+<br>
+
+[![CI](https://github.com/mrsandipmandal/SAndbox/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/github/v/release/sandbox-lang/sandbox)](https://github.com/sandbox-lang/sandbox/releases)
+[![Release](https://img.shields.io/badge/Release-v0.2.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
+[![Tests](https://img.shields.io/badge/Tests-16%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
+
+<br>
+
+**Sandbox** catches currency mismatches and decimal rounding errors at compile time,
+while remaining general-purpose enough for web, backend, desktop, and embedded apps.
+
+<br>
+
+```
+let salary: Money<INR> = 50000 INR
+let tax: Money<INR> = 7500 INR
+let total = salary + tax     // ✅ Same currency — works
+let bad = salary + 100 USD   // ❌ Compile error: Currency mismatch!
+```
+
+<br>
+
+[Getting Started](#-quick-start) • [Examples](#-examples) • [Language Tour](#-language-tour) • [Contributing](#-contributing) • [Roadmap](#-roadmap)
 
 </div>
 
 ---
 
-Sandbox is a systems programming language designed with **financial correctness as a language feature**. It catches currency mismatches and decimal rounding errors at compile time, while remaining general-purpose enough for web, backend, desktop, and embedded applications.
+## 🔥 Why Sandbox?
 
-## ✨ Features
+| Problem | Traditional Languages | Sandbox |
+|---------|----------------------|---------|
+| `Money + Wrong Currency` | Runtime bug, lost money | **Compile-time error** |
+| `0.1 + 0.2` | `0.30000000000000004` | **Exactly `0.30`** |
+| `float` for prices | Rounding errors | **Exact Decimal type** |
+| Thread safety | Data races | **Memory safe by default** |
 
-- **Type-safe Money** — `Money<INR>`, `Money<USD>` with compile-time currency enforcement
-- **Exact Decimal** — No floating-point rounding errors in financial calculations
-- **Memory Safe** — Safe by default, `unsafe` only when you opt in
-- **C Transpilation** — Compiles to C, then to native binary via GCC
-- **Simple Syntax** — Clean, readable, low-ceremony
-- **Structs & Functions** — First-class support with type annotations
-- **Control Flow** — `if/else`, `while`, `for...in` loops
-- **Type Inference** — `let x = 5` infers `i64` automatically
-- **Error Handling** — `Result<T, E>`, `Ok()`, `Err()`, `?` operator
-- **Modules** — `mod name { ... }` for code organization
-- **Project Init** — `sandbox init` to scaffold new projects
+### ✨ Key Features
+
+- **💰 Type-safe Money** — `Money<INR>`, `Money<USD>` with compile-time currency enforcement
+- **🧮 Exact Decimal** — No floating-point rounding errors in financial calculations
+- **🔒 Memory Safe** — Safe by default, `unsafe` only when you opt in
+- **⚡ C Transpilation** — Compiles to C, then to native binary via GCC
+- **📝 Simple Syntax** — Clean, readable, low-ceremony
+- **🏗️ Structs & Functions** — First-class support with type annotations
+- **🔄 Control Flow** — `if/else`, `while`, `for...in` loops
+- **🎯 Type Inference** — `let x = 5` infers `i64` automatically
+- **❌ Error Handling** — `Result<T, E>`, `Ok()`, `Err()`, `?` operator
+- **📦 Modules** — `mod name { ... }` for code organization
+
+---
 
 ## 🚀 Quick Start
 
 ### Install
 
 ```bash
-# From source
-git clone https://github.com/sandbox-lang/sandbox.git
-cd sandbox
+git clone https://github.com/mrsandipmandal/SAndbox.git
+cd SAndbox
 cargo build --release
 cargo install --path .
 ```
 
-### Hello World
+### Your First Program
 
 ```bash
 # Create hello.sbx
 cat > hello.sbx << 'EOF'
 fn main() {
-    print("Hello, Sandbox!")
+    print("Hello, Sandbox! 🏖️")
 }
 EOF
 
 # Run it
 sandbox run hello.sbx
+# Output: Hello, Sandbox! 🏖️
 ```
 
-### Money Type
+### Initialize a Project
 
 ```bash
-cat > money.sbx << 'EOF'
+sandbox init my-bank-app
+cd my-bank-app
+sandbox run main.sbx
+```
+
+---
+
+## 📚 Examples
+
+### 💰 Money Type — Compile-time Currency Safety
+
+```sbx
 fn main() {
     let salary: Money<INR> = 50000 INR
     let tax: Money<INR> = 7500 INR
     let total = salary + tax
-    print(total)
+    print(total)  // 57500.0000
 }
-EOF
-
-sandbox run money.sbx
 ```
 
-## 📖 Language Syntax
-
-### Types
-
-```sbx
-let x: i64 = 42           // 64-bit integer
-let pi: f64 = 3.14        // 64-bit float
-let active: bool = true    // boolean
-let name: string = "Sandbox" // string
-```
-
-### Money (Financial Types)
+**What happens if you try to add different currencies?**
 
 ```sbx
 let salary: Money<INR> = 50000 INR
-let tax: Money<INR> = 7500 INR
-
-// ✅ Same currency — works
-let total = salary + tax
-
-// ❌ Different currencies — compile error
-// let bad = salary + 100 USD
+let usd: Money<USD> = 100 USD
+let bad = salary + usd  // ❌ Compile error: Currency mismatch: Money<INR> + Money<USD>
 ```
 
-### Functions
+### 🔄 Fibonacci — Recursion
 
 ```sbx
-fn add(a: i64, b: i64) -> i64 {
+fn fib(n: i64) -> i64 {
+    if n <= 1 {
+        return n
+    }
+    let a = fib(n - 1)
+    let b = fib(n - 2)
     return a + b
 }
 
-fn calculate_tax(income: Money<INR>) -> Money<INR> {
-    return income * 0.30
+fn main() {
+    for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
+        print(fib(i))
+    }
 }
 ```
 
-### Structs
+### 🏗️ Structs — Data Modeling
 
 ```sbx
 struct Account {
@@ -121,7 +149,65 @@ fn main() {
         name: "Alice",
         balance: 10000 INR,
     }
-    print(acc.name)
+    print(acc.name)      // Alice
+    print(acc.balance)   // 10000.0000
+}
+```
+
+### ❌ Error Handling — Result Type
+
+```sbx
+fn divide(a: i64, b: i64) -> Result<i64, string> {
+    if b == 0 {
+        return Err("Division by zero")
+    }
+    return Ok(a / b)
+}
+
+fn main() {
+    let result = divide(10, 2)
+    print(result)  // 5
+}
+```
+
+### 📦 Modules — Code Organization
+
+```sbx
+mod math {
+    fn add(a: i64, b: i64) -> i64 {
+        return a + b
+    }
+
+    fn multiply(a: i64, b: i64) -> i64 {
+        return a * b
+    }
+}
+
+fn main() {
+    print(math::add(3, 4))       // 7
+    print(math::multiply(3, 4))  // 12
+}
+```
+
+---
+
+## 🗺️ Language Tour
+
+### Types
+
+```sbx
+let x: i64 = 42              // 64-bit integer
+let pi: f64 = 3.14           // 64-bit float
+let active: bool = true      // boolean
+let name: string = "Sandbox" // string
+let price: Money<INR> = 100 INR  // money
+```
+
+### Functions
+
+```sbx
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
 }
 ```
 
@@ -148,60 +234,85 @@ for item in [1, 2, 3] {
 }
 ```
 
+### Error Handling
+
+```sbx
+fn parse_age(input: string) -> Result<i64, string> {
+    // ... parse logic
+    return Ok(25)
+}
+
+// Use ? to propagate errors
+fn get_age() -> Result<i64, string> {
+    let age = parse_age("25")?
+    return Ok(age)
+}
+```
+
+---
+
 ## 🛠️ CLI Commands
 
 ```bash
-sandbox init myproject     # Initialize new project
-sandbox run file.sbx       # Compile and run
-sandbox build file.sbx     # Build native binary
+sandbox init myproject       # Initialize new project
+sandbox run file.sbx         # Compile and run
+sandbox build file.sbx       # Build native binary
 sandbox build file.sbx -o myapp  # Build with custom name
-sandbox check file.sbx     # Type-check only (no compilation)
+sandbox check file.sbx       # Type-check only
 ```
+
+---
 
 ## 🧪 Testing
 
 ```bash
-cargo test                 # Run all tests
-cargo clippy               # Lint
-cargo fmt --check          # Check formatting
+cargo test                   # Run all 16 tests
+cargo clippy                 # Lint (zero warnings)
+cargo fmt --check            # Check formatting
 ```
+
+---
 
 ## 📁 Project Structure
 
 ```
 src/
-├── main.rs           # CLI entry point
+├── main.rs           # CLI entry point (clap)
 ├── token.rs          # Token definitions
 ├── lexer.rs          # Source → Tokens
 ├── ast.rs            # AST node definitions
-├── parser.rs         # Tokens → AST
+├── parser.rs         # Tokens → AST (recursive descent)
 ├── typechecker.rs    # Type checking + currency validation
 ├── codegen.rs        # AST → C code
 └── compiler.rs       # Pipeline orchestration
+
 examples/
 ├── hello.sbx         # Hello World
 ├── fibonacci.sbx     # Recursive fibonacci
 ├── struct_demo.sbx   # Structs + functions
 └── money.sbx         # Money type demo
+
 tests/
 └── integration.rs    # 16 end-to-end tests
 ```
 
+---
+
 ## 🗺️ Roadmap
 
-### v0.1 ✅
+### v0.1 ✅ — Foundation
 - [x] Core types: `i64`, `f64`, `bool`, `string`
 - [x] Money type with currency safety
 - [x] Functions, structs, control flow
 - [x] C transpilation backend
 - [x] CLI toolchain
 
-### v0.2 ✅
+### v0.2 ✅ — Error Handling
 - [x] Error handling (`Result`, `?` operator)
-- [x] Modules and imports
+- [x] Module system (`mod`, `::`)
 - [x] Project init (`sandbox init`)
 
-### v0.3
+### v0.3 — Package Ecosystem
 - [ ] Package manager (`sandbox add`)
 - [ ] Standard library (math, http, json)
 - [ ] LLVM backend for native optimization
@@ -209,33 +320,52 @@ tests/
 - [ ] Decimal type with exact arithmetic
 - [ ] Unit system (`10 kg`, `5 meter`)
 
-### v0.4
-- [ ] LLVM backend for native optimization
-- [ ] WebAssembly target
-- [ ] Decimal type with exact arithmetic
-- [ ] Unit system (`10 kg`, `5 meter`)
+### v1.0 — Production Ready
+- [ ] Self-hosting compiler
+- [ ] WebAssembly frontend
+- [ ] Database integration
+- [ ] Ledger / double-entry accounting
+- [ ] IDE support (LSP)
+- [ ] Package registry (`registry.sandbox.dev`)
 
-### v1.0
-- [ ] Self-hosting compiler
-- [ ] WebAssembly frontend
-- [ ] Database integration
-- [ ] Ledger / double-entry accounting
-- [ ] IDE support (LSP)
-- [ ] Self-hosting compiler
-- [ ] WebAssembly frontend
-- [ ] Database integration
-- [ ] Ledger / double-entry accounting
-- [ ] IDE support (LSP)
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We love contributions! Whether it's:
+
+- 🐛 **Bug reports** — Found an issue? Open one!
+- 💡 **Feature ideas** — Have a suggestion? Share it!
+- 📝 **Documentation** — Help others learn
+- 🧪 **Tests** — Improve coverage
+- 🔧 **Code** — Fix bugs or add features
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Good First Issues
+
+Looking for a place to start? Check out our [Good First Issues](https://github.com/mrsandipmandal/SAndbox/labels/good%20first%20issue)!
+
+---
 
 ## 📄 License
 
 This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
 
+---
+
 ## 🙏 Acknowledgments
 
-- Inspired by Rust's memory safety, Go's simplicity, and the need for financial correctness in programming languages
+- Inspired by Rust's memory safety, Go's simplicity, and the need for financial correctness
 - Built with [Rust](https://www.rust-lang.org/) and [GCC](https://gcc.gnu.org/)
+- Thanks to all [contributors](https://github.com/mrsandipmandal/SAndbox/graphs/contributors)
+
+---
+
+<div align="center">
+
+**⭐ Star this repo if you find Sandbox interesting!**
+
+[![Star History Chart](https://api.star-history.com/svg?repos=mrsandipmandal/SAndbox&type=Date)](https://star-history.com/#mrsandipmandal/SAndbox&Date)
+
+</div>

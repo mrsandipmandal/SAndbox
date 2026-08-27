@@ -1,0 +1,34 @@
+// Calculator Example
+// Demonstrates error handling with Result type
+
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+fn subtract(a: i64, b: i64) -> i64 {
+    return a - b
+}
+
+fn multiply(a: i64, b: i64) -> i64 {
+    return a * b
+}
+
+fn divide(a: i64, b: i64) -> Result<i64, string> {
+    if b == 0 {
+        return Err("Division by zero")
+    }
+    return Ok(a / b)
+}
+
+fn main() {
+    print("Calculator Demo")
+    print(add(10, 5))
+    print(subtract(10, 5))
+    print(multiply(10, 5))
+
+    let result = divide(10, 2)
+    print(result)
+
+    let error = divide(10, 0)
+    print(error)
+}

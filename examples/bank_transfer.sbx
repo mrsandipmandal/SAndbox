@@ -1,0 +1,33 @@
+// Bank Transfer Example
+// Demonstrates Money type safety and error handling
+
+struct Account {
+    id: i64,
+    name: string,
+    balance: Money<INR>,
+}
+
+fn transfer(from: Account, to: Account, amount: Money<INR>) -> Result<string, string> {
+    if from.balance < amount {
+        return Err("Insufficient balance")
+    }
+    return Ok("Transfer successful")
+}
+
+fn main() {
+    let alice = Account {
+        id: 1,
+        name: "Alice",
+        balance: 10000 INR,
+    }
+
+    let bob = Account {
+        id: 2,
+        name: "Bob",
+        balance: 5000 INR,
+    }
+
+    let amount = 3000 INR
+    let result = transfer(alice, bob, amount)
+    print(result)
+}

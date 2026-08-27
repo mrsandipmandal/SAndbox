@@ -1,0 +1,29 @@
+// Sorting Example
+// Demonstrates functions, arrays, and control flow
+
+fn bubble_sort(arr: [i64]) -> [i64] {
+    let n = 5  // array length
+    let mut i: i64 = 0
+    while i < n {
+        let mut j: i64 = 0
+        while j < n - i - 1 {
+            if arr[j] > arr[j + 1] {
+                // Swap
+                let temp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = temp
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return arr
+}
+
+fn main() {
+    let numbers = [64, 34, 25, 12, 22, 11, 90]
+    print("Unsorted:")
+    for num in numbers {
+        print(num)
+    }
+}

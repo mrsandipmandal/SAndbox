@@ -9,8 +9,8 @@
 [![CI](https://github.com/mrsandipmandal/SAndbox/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/Release-v0.3.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
-[![Tests](https://img.shields.io/badge/Tests-24%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
+[![Release](https://img.shields.io/badge/Release-v0.4.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
+[![Tests](https://img.shields.io/badge/Tests-31%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 
 <br>
 
@@ -47,8 +47,10 @@ let bad = salary + 100 USD   // ❌ Compile error: Currency mismatch!
 
 - **💰 Type-safe Money** — `Money<INR>`, `Money<USD>` with compile-time currency enforcement
 - **🧮 Exact Decimal** — No floating-point rounding errors in financial calculations
+- **📏 Unit System** — Physical units with compile-time dimensional analysis (`100 kg`, `5 meter`)
 - **🔒 Memory Safe** — Safe by default, `unsafe` only when you opt in
 - **⚡ C Transpilation** — Compiles to C, then to native binary via GCC
+- **🌐 WebAssembly** — Generate .wat text format for browser/edge deployment
 - **📝 Simple Syntax** — Clean, readable, low-ceremony
 - **🏗️ Structs & Functions** — First-class support with type annotations
 - **🔄 Control Flow** — `if/else`, `while`, `for...in` loops
@@ -266,6 +268,23 @@ let len = string::length("Sandbox")          // 7
 let eq = string::equals("abc", "abc")        // true
 ```
 
+### Unit System
+
+```sbx
+let weight: kg = 100 kg
+let half = weight / 2           // 50 kg
+let distance: meter = 500 meter
+let time: second = 10 second
+let area = 5 meter * 3 meter    // 15 meter·meter
+```
+
+### WebAssembly Target
+
+```bash
+sandbox build file.sbx --target wasm   # Generate .wat + .wasm
+sandbox wasm file.sbx -o output.wat    # Generate .wat only
+```
+
 ### Package Management
 
 ```bash
@@ -284,12 +303,14 @@ sandbox init myproject        # Initialize new project
 sandbox run file.sbx          # Compile and run
 sandbox build file.sbx        # Build native binary
 sandbox build file.sbx -o myapp  # Build with custom name
+sandbox build file.sbx --target wasm  # Build to WebAssembly
 sandbox check file.sbx        # Type-check only
 sandbox fmt file.sbx          # Format source file
 sandbox fmt --check file.sbx  # Check formatting
 sandbox add <pkg>             # Add dependency
 sandbox install               # Install dependencies
 sandbox tree                  # Show dependency tree
+sandbox wasm file.sbx         # Generate .wat file
 ```
 
 ---
@@ -297,7 +318,7 @@ sandbox tree                  # Show dependency tree
 ## 🧪 Testing
 
 ```bash
-cargo test                   # Run all 24 tests
+cargo test                   # Run all 31 tests
 cargo clippy                 # Lint (zero warnings)
 cargo fmt --check            # Check formatting
 ```
@@ -316,6 +337,7 @@ src/
 ├── typechecker.rs    # Type checking + stdlib registration
 ├── codegen.rs        # AST → C code
 ├── stdlib.rs         # Standard library (math, string, array)
+├── wasmgen.rs        # WebAssembly .wat codegen
 └── compiler.rs       # Pipeline orchestration
 
 examples/
@@ -325,10 +347,12 @@ examples/
 ├── money.sbx         # Money type demo
 ├── math_demo.sbx     # Math stdlib functions
 ├── string_demo.sbx   # String stdlib functions
-└── sorting_v3.sbx    # Array operations
+├── sorting_v3.sbx    # Array operations
+├── units_demo.sbx    # Unit system demo
+└── wasm_demo.sbx     # WebAssembly target demo
 
 tests/
-└── integration.rs    # 24 end-to-end tests
+└── integration.rs    # 31 end-to-end tests
 ```
 
 ---
@@ -354,15 +378,15 @@ tests/
 - [x] String concatenation with `+` operator
 - [ ] LLVM backend for native optimization
 
-### v0.4 — Type System
-- [ ] Decimal type with exact arithmetic
-- [ ] Unit system (`10 kg`, `5 meter`)
-- [ ] WebAssembly target
+### v0.4 ✅ — Units, Decimal & WebAssembly
+- [x] Unit system with compile-time dimensional analysis
+- [x] Decimal type with exact i128 arithmetic
+- [x] WebAssembly .wat codegen backend
 - [ ] HTTP / JSON standard library
+- [ ] LLVM backend for native optimization
 
 ### v1.0 — Production Ready
 - [ ] Self-hosting compiler
-- [ ] WebAssembly frontend
 - [ ] Database integration
 - [ ] Ledger / double-entry accounting
 - [ ] IDE support (LSP)

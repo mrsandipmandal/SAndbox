@@ -11,11 +11,11 @@ pub enum Type {
     String,
     Money(String),
     Decimal,
+    Unit(String), // e.g., "kg", "meter", "second"
     Array(Box<Type>),
     Void,
     Custom(String),
-    // v0.2: Error handling
-    Result(Box<Type>, Box<Type>), // Result<T, E>
+    Result(Box<Type>, Box<Type>),
 }
 
 impl fmt::Display for Type {
@@ -27,6 +27,7 @@ impl fmt::Display for Type {
             Type::String => write!(f, "string"),
             Type::Money(c) => write!(f, "Money<{}>", c),
             Type::Decimal => write!(f, "Decimal"),
+            Type::Unit(u) => write!(f, "{}", u),
             Type::Array(t) => write!(f, "[{}]", t),
             Type::Void => write!(f, "void"),
             Type::Custom(n) => write!(f, "{}", n),
@@ -74,15 +75,18 @@ pub enum Expr {
         amount: f64,
         currency: String,
     },
-    DecimalLiteral(String),
-    // v0.2: Error handling
-    OkExpr(Box<Expr>),    // Ok(value)
-    ErrExpr(Box<Expr>),   // Err(error)
-    PanicExpr(Box<Expr>), // panic!("message")
-    TryExpr(Box<Expr>),   // expr?
+    DecimalLiteral(String), // "100.25" — stored as string, computed as i128
+    UnitLiteral {
+        value: Box<Expr>,
+        unit: String,
+    }, // 10 kg, 5.5 meter
+    OkExpr(Box<Expr>),
+    ErrExpr(Box<Expr>),
+    PanicExpr(Box<Expr>),
+    TryExpr(Box<Expr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinOp {
     Add,
     Sub,
@@ -164,7 +168,6 @@ pub enum TopLevel {
         name: String,
         fields: Vec<Field>,
     },
-    // v0.2: Module definition
     ModuleDef {
         name: String,
         items: Vec<TopLevel>,

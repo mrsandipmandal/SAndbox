@@ -552,3 +552,116 @@ fn main() {
         output
     );
 }
+
+// ── v0.4 tests ──
+
+#[test]
+fn test_unit_literal() {
+    let (output, ok) = compile_and_run(
+        r#"
+fn main() {
+    let weight: kg = 100 kg
+    let half = weight / 2
+    print(half)
+}
+"#,
+    );
+    assert!(ok, "Compilation failed: {}", output);
+    assert!(output.contains("50"), "Expected 50, got: {}", output);
+}
+
+#[test]
+fn test_unit_arithmetic() {
+    let (output, ok) = compile_and_run(
+        r#"
+fn main() {
+    let distance: meter = 500 meter
+    let time: second = 10 second
+    let area = 5 meter * 3 meter
+    print(area)
+}
+"#,
+    );
+    assert!(ok, "Compilation failed: {}", output);
+    assert!(output.contains("15"), "Expected 15, got: {}", output);
+}
+
+#[test]
+fn test_unit_mismatch_error() {
+    let (_output, ok) = compile_and_run(
+        r#"
+fn main() {
+    let w: kg = 100 kg
+    let d: meter = 50 meter
+    let bad = w + d
+    print(bad)
+}
+"#,
+    );
+    assert!(!ok, "Expected compile error for unit mismatch");
+}
+
+#[test]
+fn test_wasm_codegen() {
+    let tmp = TempDir::new().unwrap();
+    let wat_path = tmp.path().join("test.wat");
+    let (output, ok) = run_sandbox(&[
+        "wasm",
+        "examples/wasm_demo.sbx",
+        "-o",
+        wat_path.to_str().unwrap(),
+    ]);
+    assert!(ok, "WASM generation failed: {}", output);
+    assert!(wat_path.exists(), ".wat file not created");
+    let wat = fs::read_to_string(&wat_path).unwrap();
+    assert!(wat.contains("(module"), "Missing module declaration in WAT");
+    assert!(wat.contains("func $add"), "Missing add function in WAT");
+    assert!(wat.contains("func $main"), "Missing main function in WAT");
+    assert!(
+        wat.contains("export \"main\""),
+        "Missing main export in WAT"
+    );
+}
+
+#[test]
+fn test_decimal_literal() {
+    let (output, ok) = compile_and_run(
+        r#"
+fn main() {
+    let x = 100.25
+    print(x)
+}
+"#,
+    );
+    assert!(ok, "Compilation failed: {}", output);
+    assert!(
+        output.contains("100.25"),
+        "Expected 100.25, got: {}",
+        output
+    );
+}
+
+#[test]
+fn test_build_native() {
+    let tmp = TempDir::new().unwrap();
+    let out = tmp.path().join("myapp");
+    let (output, ok) = run_sandbox(&["build", "examples/hello.sbx", "-o", out.to_str().unwrap()]);
+    assert!(ok, "Build failed: {}", output);
+    assert!(out.exists(), "Binary not created");
+}
+
+#[test]
+fn test_build_wasm() {
+    let tmp = TempDir::new().unwrap();
+    let out = tmp.path().join("demo");
+    let (output, ok) = run_sandbox(&[
+        "build",
+        "examples/wasm_demo.sbx",
+        "--target",
+        "wasm",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert!(ok, "WASM build failed: {}", output);
+    assert!(out.with_extension("wat").exists(), ".wat file not created");
+}

@@ -19,23 +19,19 @@ impl TypeChecker {
     }
 
     pub fn check(&mut self, program: &Program) -> Result<()> {
-        // Register stdlib builtins
         for (name, sig) in stdlib::builtins() {
             let param_tys: Vec<Type> = sig.params.iter().map(|p| p.1.clone()).collect();
             self.functions.insert(name, (param_tys, Some(sig.ret)));
         }
 
-        // First pass: register all struct definitions
         for item in &program.items {
             self.register_structs(item, "");
         }
 
-        // Second pass: register all function signatures
         for item in &program.items {
             self.register_functions(item, "");
         }
 
-        // Third pass: type check function bodies
         for item in &program.items {
             if let TopLevel::FnDef {
                 name, params, body, ..
@@ -72,7 +68,7 @@ impl TypeChecker {
             } => {
                 let val_ty = self.check_expr(value)?;
                 if let Some(expected) = ty {
-                    if &val_ty != expected {
+                    if !self.types_compatible(expected, &val_ty) {
                         return Err(anyhow!(
                             "Type mismatch: expected '{}', got '{}' for '{}'",
                             expected,
@@ -86,7 +82,7 @@ impl TypeChecker {
             Stmt::Assign { name, value } => {
                 let val_ty = self.check_expr(value)?;
                 let var_ty = self.lookup_var(name)?;
-                if val_ty != var_ty {
+                if !self.types_compatible(&var_ty, &val_ty) {
                     return Err(anyhow!(
                         "Type mismatch in assignment: expected '{}', got '{}' for '{}'",
                         var_ty,
@@ -157,6 +153,7 @@ impl TypeChecker {
             Expr::Bool(_) => Ok(Type::Bool),
             Expr::MoneyLiteral { currency, .. } => Ok(Type::Money(currency.clone())),
             Expr::DecimalLiteral(_) => Ok(Type::Decimal),
+            Expr::UnitLiteral { unit, .. } => Ok(Type::Unit(unit.clone())),
             Expr::Ident(name) => self.lookup_var(name),
             Expr::ArrayLiteral(elems) => {
                 if elems.is_empty() {
@@ -180,7 +177,7 @@ impl TypeChecker {
                 let ty = self.check_expr(expr)?;
                 match op {
                     UnOp::Neg => {
-                        if ty != Type::I64 && ty != Type::F64 {
+                        if !matches!(ty, Type::I64 | Type::F64 | Type::Decimal | Type::Unit(_)) {
                             return Err(anyhow!("Cannot negate '{}'", ty));
                         }
                         Ok(ty)
@@ -194,7 +191,6 @@ impl TypeChecker {
                 }
             }
             Expr::Call { name, args } => {
-                // Try user-defined first, then stdlib builtins
                 let (param_tys, ret_ty): (Vec<Type>, Option<Type>) = if let Some(sig) =
                     self.functions.get(name).or_else(|| {
                         name.rfind("::")
@@ -221,7 +217,7 @@ impl TypeChecker {
                 }
                 for (i, (arg, expected)) in args.iter().zip(&param_tys).enumerate() {
                     let arg_ty = self.check_expr(arg)?;
-                    if arg_ty != *expected {
+                    if !self.types_compatible(expected, &arg_ty) {
                         return Err(anyhow!(
                             "Arg {} of '{}': expected '{}', got '{}'",
                             i + 1,
@@ -244,7 +240,7 @@ impl TypeChecker {
                         .find(|f| &f.name == fname)
                         .ok_or_else(|| anyhow!("Unknown field '{}' in struct '{}'", fname, name))?;
                     let val_ty = self.check_expr(fval)?;
-                    if val_ty != sf.ty {
+                    if !self.types_compatible(&sf.ty, &val_ty) {
                         return Err(anyhow!(
                             "Field '{}.{}': expected '{}', got '{}'",
                             name,
@@ -309,12 +305,25 @@ impl TypeChecker {
         }
     }
 
+    /// Check if two types are compatible (same type or auto-coercion)
+    fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
+        if expected == actual {
+            return true;
+        }
+        // Decimal accepts Int and Float literals
+        matches!(
+            (expected, actual),
+            (Type::Decimal, Type::I64) | (Type::Decimal, Type::F64) | (Type::F64, Type::I64)
+        )
+    }
+
     fn check_binop(&self, op: &BinOp, lt: &Type, rt: &Type) -> Result<Type> {
         match op {
             BinOp::Add | BinOp::Sub => {
                 if lt == rt {
                     return Ok(lt.clone());
                 }
+                // Money + Money (same currency)
                 if let (Type::Money(lc), Type::Money(rc)) = (lt, rt) {
                     if lc != rc {
                         return Err(anyhow!("Currency mismatch: Money<{}> + Money<{}>", lc, rc));
@@ -325,17 +334,54 @@ impl TypeChecker {
                 if let (Type::String, Type::String) = (lt, rt) {
                     return Ok(Type::String);
                 }
+                // Unit + Unit (same unit)
+                if let (Type::Unit(lu), Type::Unit(ru)) = (lt, rt) {
+                    if lu != ru {
+                        return Err(anyhow!("Unit mismatch: {} + {}", lu, ru));
+                    }
+                    return Ok(Type::Unit(lu.clone()));
+                }
+                // Decimal + Int/Float
+                if matches!(lt, Type::Decimal) && matches!(rt, Type::I64 | Type::F64) {
+                    return Ok(Type::Decimal);
+                }
+                if matches!(rt, Type::Decimal) && matches!(lt, Type::I64 | Type::F64) {
+                    return Ok(Type::Decimal);
+                }
                 Err(anyhow!("Cannot apply {:?} to '{}' and '{}'", op, lt, rt))
             }
             BinOp::Mul | BinOp::Div => {
                 if lt == rt {
                     return Ok(lt.clone());
                 }
+                // Money * scalar
                 if let (Type::Money(c), Type::F64) | (Type::F64, Type::Money(c)) = (lt, rt) {
                     return Ok(Type::Money(c.clone()));
                 }
                 if let (Type::Money(c), Type::I64) | (Type::I64, Type::Money(c)) = (lt, rt) {
                     return Ok(Type::Money(c.clone()));
+                }
+                // Decimal * scalar
+                if matches!(lt, Type::Decimal) && matches!(rt, Type::I64 | Type::F64) {
+                    return Ok(Type::Decimal);
+                }
+                if matches!(rt, Type::Decimal) && matches!(lt, Type::I64 | Type::F64) {
+                    return Ok(Type::Decimal);
+                }
+                // Unit * scalar → Unit
+                if let (Type::Unit(u), Type::I64) | (Type::I64, Type::Unit(u)) = (lt, rt) {
+                    return Ok(Type::Unit(u.clone()));
+                }
+                if let (Type::Unit(u), Type::F64) | (Type::F64, Type::Unit(u)) = (lt, rt) {
+                    return Ok(Type::Unit(u.clone()));
+                }
+                // Unit * Unit → composite (simplified: just use product notation)
+                if let (Type::Unit(lu), Type::Unit(ru)) = (lt, rt) {
+                    if *op == BinOp::Mul {
+                        return Ok(Type::Unit(format!("{}·{}", lu, ru)));
+                    }
+                    // Unit / Unit → dimensionless ratio
+                    return Ok(Type::F64);
                 }
                 Err(anyhow!("Cannot apply {:?} to '{}' and '{}'", op, lt, rt))
             }
@@ -346,7 +392,7 @@ impl TypeChecker {
                 Err(anyhow!("Cannot apply {:?} to '{}' and '{}'", op, lt, rt))
             }
             BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                if lt == rt {
+                if self.types_compatible(lt, rt) || self.types_compatible(rt, lt) {
                     Ok(Type::Bool)
                 } else {
                     Err(anyhow!("Cannot compare '{}' and '{}'", lt, rt))

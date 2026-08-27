@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-08-27
+
+### Added
+
+- **Unit System** — Physical units with compile-time dimensional analysis
+  - Unit literals: `100 kg`, `5 meter`, `10 second`, `2.5 kW`
+  - Unit types: `kg`, `meter`, `second`, `watt`, `celsius`, `byte`, etc.
+  - Unit arithmetic: same-unit add/sub, scalar multiply/divide
+  - Composite units: `meter·meter` for area, dimensionless ratios
+  - Compile-time mismatch detection: `kg + meter` → error
+- **Decimal Type** — Exact decimal arithmetic with i128 backend
+  - 18-digit precision (scale 10^18)
+  - Compatible with Int and Float literals
+- **WebAssembly Backend** — Generate .wat text format
+  - `sandbox wasm file.sbx -o output.wat`
+  - `sandbox build file.sbx --target wasm`
+  - Supports: functions, if/else, while loops, arithmetic, function calls
+  - String data section, memory export, main function export
+- **CLI**: `sandbox build --target wasm` and `sandbox wasm` commands
+- 7 new integration tests (31 total)
+- 2 new examples: units_demo, wasm_demo
+
+### Changed
+
+- Version bumped to 0.4.0
+- AST: Added `UnitLiteral` expression and `Unit` type
+- Type checker: Unit dimensional analysis, Decimal compatibility
+- Codegen: Unit literals emit raw values, Decimal uses i128 scaling
+
 ## [0.3.0] - 2026-08-27
 
 ### Added
@@ -18,20 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `sandbox install` — Install all dependencies (placeholder for registry)
   - `sandbox tree` — Show dependency tree
 - **Formatter** — `sandbox fmt` and `sandbox fmt --check` for .sbx files
-- **String Concatenation** — `+` operator for strings generates `__sbx_str_concat`
-- **Improved For-Loops** — Inline unrolled codegen for array literals
-- **Variable Type Tracking** — CodeGen tracks variable C types for correct `printf` format
-- **stdlib C Runtime** — String helpers, math functions via C stdlib
-- **Type keyword module syntax** — `string::concat`, `math::sqrt` work with type keywords as module names
 - 8 new integration tests (24 total)
-- 4 new examples: math_demo, string_demo, sorting_v3, bank_transfer
-
-### Changed
-
-- Version bumped to 0.3.0
-- Type checker registers stdlib builtins automatically
-- Codegen uses `std::collections::HashMap` for variable type tracking
-- For-loop with array literals generates scoped blocks (no redefinition errors)
 
 ## [0.2.0] - 2026-08-27
 
@@ -44,14 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Module System** — `mod name { ... }` for code organization
 - **Module Calls** — `module::function()` syntax
 - **sandbox init** — Initialize new project with `sandbox.toml` and `main.sbx`
-- **use Statement** — Import syntax (parsed, not yet resolved)
 - 4 new integration tests (16 total)
-
-### Changed
-
-- Version bumped to 0.2.0
-- Type checker now handles module-prefixed functions
-- Codegen flattens modules to C functions
 
 ## [0.1.0] - 2026-08-27
 

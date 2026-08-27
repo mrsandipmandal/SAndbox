@@ -1,0 +1,19 @@
+// units_demo.sbx — Unit system demo
+
+fn main() {
+    let weight: kg = 100 kg
+    let half_weight = weight / 2
+    print(half_weight)
+
+    let distance: meter = 500 meter
+    let time: second = 10 second
+    let speed = distance / time
+    print(speed)
+
+    let area = 5 meter * 3 meter
+    print(area)
+
+    let price_per_kg: f64 = 2.5
+    let total_price = price_per_kg * weight
+    print(total_price)
+}

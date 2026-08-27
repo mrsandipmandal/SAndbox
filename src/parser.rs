@@ -2,6 +2,60 @@ use crate::ast::*;
 use crate::token::{Spanned, Token};
 use anyhow::{anyhow, Result};
 
+/// Known unit names for unit literal parsing
+const UNITS: &[&str] = &[
+    "kg",
+    "g",
+    "mg",
+    "ton",
+    "meter",
+    "m",
+    "km",
+    "cm",
+    "mm",
+    "second",
+    "s",
+    "ms",
+    "minute",
+    "min",
+    "hour",
+    "h",
+    "watt",
+    "kW",
+    "MW",
+    "joule",
+    "J",
+    "kJ",
+    "newton",
+    "N",
+    "pascal",
+    "Pa",
+    "celsius",
+    "fahrenheit",
+    "kelvin",
+    "liter",
+    "L",
+    "mL",
+    "byte",
+    "KB",
+    "MB",
+    "GB",
+    "TB",
+    "hertz",
+    "Hz",
+    "kHz",
+    "MHz",
+    "GHz",
+    "percent",
+    "bps",
+    "kbps",
+    "Mbps",
+];
+
+fn is_unit_name(name: &str) -> bool {
+    UNITS.contains(&name)
+}
+
 pub struct Parser {
     tokens: Vec<Spanned>,
     pos: usize,
@@ -33,7 +87,6 @@ impl Parser {
             Token::Struct => self.parse_struct_def(),
             Token::Mod => self.parse_module_def(),
             Token::Use => {
-                // use statements are skipped for now (single-file mode)
                 self.skip_use_statement();
                 self.parse_top_level()
             }
@@ -42,8 +95,7 @@ impl Parser {
     }
 
     fn skip_use_statement(&mut self) {
-        self.advance(); // skip 'use'
-                        // Skip until semicolon or end of line
+        self.advance();
         while !self.is_at_end() && !self.peek_token(&Token::Semicolon) {
             self.advance();
         }
@@ -163,7 +215,6 @@ impl Parser {
                 self.expect_token(&Token::RBracket)?;
                 Ok(Type::Array(Box::new(inner)))
             }
-            // v0.2: Result<T, E> type
             Token::Result => {
                 self.advance();
                 self.expect_token(&Token::Lt)?;
@@ -172,6 +223,12 @@ impl Parser {
                 let err_ty = self.parse_type()?;
                 self.expect_token(&Token::Gt)?;
                 Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
+            }
+            // Unit types like `kg`, `meter`
+            Token::Ident(ref name) if is_unit_name(name) => {
+                let unit = name.clone();
+                self.advance();
+                Ok(Type::Unit(unit))
             }
             Token::Ident(name) => {
                 self.advance();
@@ -201,7 +258,6 @@ impl Parser {
             Token::For => self.parse_for(),
             Token::Return => self.parse_return(),
             Token::Print => self.parse_print(),
-            // v0.2: panic!("message")
             Token::Panic => self.parse_panic(),
             Token::Ident(_) if self.peek_token_at(1, &Token::Assign) => {
                 let name = self.expect_ident()?;
@@ -298,7 +354,6 @@ impl Parser {
         Ok(Stmt::Print(expr))
     }
 
-    // v0.2: panic!("message")
     fn parse_panic(&mut self) -> Result<Stmt> {
         self.expect_token(&Token::Panic)?;
         self.expect_token(&Token::LParen)?;
@@ -419,7 +474,6 @@ impl Parser {
                         break;
                     }
                 }
-                // v0.2: ? operator
                 Token::QuestionMark => {
                     self.advance();
                     expr = Expr::TryExpr(Box::new(expr));
@@ -434,6 +488,18 @@ impl Parser {
         match self.current_token().clone() {
             Token::Int(n) => {
                 self.advance();
+                // Check for unit literal: 10 kg, 5 meter, etc.
+                if let Token::Ident(ref unit) = self.current_token() {
+                    if is_unit_name(unit) {
+                        let unit_name = unit.clone();
+                        self.advance();
+                        return Ok(Expr::UnitLiteral {
+                            value: Box::new(Expr::Int(n)),
+                            unit: unit_name,
+                        });
+                    }
+                }
+                // Check for currency literal: 100 INR
                 if let Token::Currency(ref c) = self.current_token().clone() {
                     let currency = c.clone();
                     self.advance();
@@ -447,6 +513,18 @@ impl Parser {
             }
             Token::Float(n) => {
                 self.advance();
+                // Check for unit literal: 5.5 meter
+                if let Token::Ident(ref unit) = self.current_token() {
+                    if is_unit_name(unit) {
+                        let unit_name = unit.clone();
+                        self.advance();
+                        return Ok(Expr::UnitLiteral {
+                            value: Box::new(Expr::Float(n)),
+                            unit: unit_name,
+                        });
+                    }
+                }
+                // Check for currency literal
                 if let Token::Currency(ref c) = self.current_token().clone() {
                     let currency = c.clone();
                     self.advance();
@@ -470,7 +548,6 @@ impl Parser {
                 self.advance();
                 Err(self.error(format!("Unexpected currency '{}' without amount", c)))
             }
-            // v0.2: Ok(value)
             Token::Ok => {
                 self.advance();
                 self.expect_token(&Token::LParen)?;
@@ -478,7 +555,6 @@ impl Parser {
                 self.expect_token(&Token::RParen)?;
                 Ok(Expr::OkExpr(Box::new(value)))
             }
-            // v0.2: Err(error)
             Token::Err => {
                 self.advance();
                 self.expect_token(&Token::LParen)?;
@@ -488,12 +564,10 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                // Handle module::function calls
                 let full_name =
                     if self.peek_token(&Token::Colon) && self.peek_token_at(1, &Token::Colon) {
-                        // Consume both :: tokens
-                        self.advance(); // first :
-                        self.advance(); // second :
+                        self.advance();
+                        self.advance();
                         let fn_name = self.expect_ident()?;
                         format!("{}::{}", name, fn_name)
                     } else {
@@ -522,7 +596,7 @@ impl Parser {
                     Ok(Expr::Ident(full_name))
                 }
             }
-            // Type keywords used as module names (e.g. string::concat)
+            // Type keywords as module names
             Token::TypeString
             | Token::TypeI64
             | Token::TypeF64
@@ -540,9 +614,9 @@ impl Parser {
                     Token::TypeDecimal => "decimal".to_string(),
                     _ => unreachable!(),
                 };
-                self.advance(); // skip type keyword
-                self.advance(); // first :
-                self.advance(); // second :
+                self.advance();
+                self.advance();
+                self.advance();
                 let fn_name = self.expect_ident()?;
                 let full_name = format!("{}::{}", module_name, fn_name);
                 Ok(Expr::Ident(full_name))

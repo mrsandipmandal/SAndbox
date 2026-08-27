@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 const MONEY_SCALE: i64 = 10000;
+const DECIMAL_SCALE: i64 = 1_000_000_000_000_000_000; // 10^18
 
 pub struct CodeGen {
     output: String,
@@ -24,6 +25,7 @@ impl CodeGen {
         writeln!(self.output, "#include <stdio.h>").unwrap();
         writeln!(self.output, "#include <stdlib.h>").unwrap();
         writeln!(self.output, "#include <string.h>").unwrap();
+        writeln!(self.output, "#include <math.h>").unwrap();
         writeln!(self.output).unwrap();
 
         self.output.push_str(&stdlib::c_preamble());
@@ -201,7 +203,6 @@ impl CodeGen {
                 body,
             } => {
                 if let Expr::ArrayLiteral(elems) = iterable {
-                    // Inline unrolled for literal arrays — each in its own block
                     for elem in elems {
                         self.write_indent();
                         writeln!(self.output, "{{").unwrap();
@@ -290,6 +291,10 @@ impl CodeGen {
                 )
                 .unwrap();
             }
+            Expr::UnitLiteral { unit, value } => {
+                let val = self.gen_expr(value);
+                writeln!(self.output, "printf(\"%ld {}\\n\", (long){});", unit, val).unwrap();
+            }
             Expr::Ident(name) => {
                 let var_type = self.var_types.get(name.as_str()).map(|s| s.as_str());
                 if var_type == Some("const char*") {
@@ -323,6 +328,7 @@ impl CodeGen {
             Expr::Bool(_) => "int".into(),
             Expr::Str(_) => "const char*".into(),
             Expr::MoneyLiteral { .. } | Expr::DecimalLiteral(_) => "long".into(),
+            Expr::UnitLiteral { .. } => "long".into(),
             Expr::ArrayLiteral(elems) if !elems.is_empty() => {
                 format!("{}*", self.infer_c_type(&elems[0]))
             }
@@ -357,7 +363,25 @@ impl CodeGen {
                 let scaled = (*amount * MONEY_SCALE as f64) as i64;
                 format!("((long){}L) /* {} */", scaled, currency)
             }
-            Expr::DecimalLiteral(s) => format!("((long){}L)", s),
+            Expr::DecimalLiteral(s) => {
+                // Parse decimal string to i128 scaled value
+                if let Some((int_part, frac_part)) = s.split_once('.') {
+                    let int_val: i128 = int_part.parse().unwrap_or(0);
+                    let mut frac_str = frac_part.to_string();
+                    // Pad or truncate to 18 digits
+                    while frac_str.len() < 18 {
+                        frac_str.push('0');
+                    }
+                    frac_str.truncate(18);
+                    let frac_val: i128 = frac_str.parse().unwrap_or(0);
+                    let total = int_val * DECIMAL_SCALE as i128 + frac_val;
+                    format!("((__int128){}LL)", total)
+                } else {
+                    let val: i128 = s.parse().unwrap_or(0);
+                    format!("((__int128){}LL)", val * DECIMAL_SCALE as i128)
+                }
+            }
+            Expr::UnitLiteral { value, .. } => self.gen_expr(value),
             Expr::BinaryOp { op, left, right } => {
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
@@ -453,6 +477,7 @@ impl CodeGen {
             Type::Bool => "int".into(),
             Type::String => "const char*".into(),
             Type::Money(_) | Type::Decimal => "long".into(),
+            Type::Unit(_) => "long".into(),
             Type::Array(inner) => format!("{}*", self.c_type(inner)),
             Type::Void => "void".into(),
             Type::Custom(name) => name.clone(),

@@ -6,6 +6,7 @@ mod parser;
 mod stdlib;
 mod token;
 mod typechecker;
+mod wasmgen;
 
 use clap::{Parser as ClapParser, Subcommand};
 use std::fs;
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 #[derive(ClapParser)]
 #[command(
     name = "sandbox",
-    version = "0.3.0",
+    version = "0.4.0",
     about = "A memory-safe, financially-safe, general-purpose programming language"
 )]
 struct Cli {
@@ -29,13 +30,16 @@ enum Commands {
         /// Path to .sbx file
         file: PathBuf,
     },
-    /// Compile a .sbx file to native binary
+    /// Compile a .sbx file to native binary or WebAssembly
     Build {
         /// Path to .sbx file
         file: PathBuf,
         /// Output binary name
         #[arg(short, long)]
         output: Option<String>,
+        /// Target: native (default) or wasm
+        #[arg(short, long, default_value = "native")]
+        target: String,
     },
     /// Type-check a .sbx file without compiling
     Check {
@@ -68,6 +72,14 @@ enum Commands {
     Install,
     /// Show dependency tree
     Tree,
+    /// Generate WebAssembly text format (.wat)
+    Wasm {
+        /// Path to .sbx file
+        file: PathBuf,
+        /// Output .wat file path
+        #[arg(short, long)]
+        output: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -80,15 +92,24 @@ fn main() -> anyhow::Result<()> {
             let compiler = compiler::Compiler::new(&source, &filename);
             compiler.run()?;
         }
-        Commands::Build { file, output } => {
+        Commands::Build {
+            file,
+            output,
+            target,
+        } => {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
             let out_name = output.unwrap_or_else(|| {
                 file.file_stem()
                     .map_or("a.out".to_string(), |s| s.to_string_lossy().to_string())
             });
-            let compiler = compiler::Compiler::new(&source, &filename);
-            compiler.build(&out_name)?;
+            if target == "wasm" {
+                let compiler = compiler::Compiler::new(&source, &filename);
+                compiler.build_wasm(&out_name)?;
+            } else {
+                let compiler = compiler::Compiler::new(&source, &filename);
+                compiler.build(&out_name)?;
+            }
         }
         Commands::Check { file } => {
             let source = fs::read_to_string(&file)?;
@@ -110,6 +131,17 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Tree => {
             show_tree()?;
+        }
+        Commands::Wasm { file, output } => {
+            let source = fs::read_to_string(&file)?;
+            let filename = file.to_string_lossy().to_string();
+            let out_name = output.unwrap_or_else(|| {
+                file.file_stem().map_or("output.wat".to_string(), |s| {
+                    format!("{}.wat", s.to_string_lossy())
+                })
+            });
+            let compiler = compiler::Compiler::new(&source, &filename);
+            compiler.wasm(&out_name)?;
         }
     }
 
@@ -154,7 +186,7 @@ fn main() {{
     Ok(())
 }
 
-// ── v0.3: Format ──
+// ── Format ──
 
 fn run_fmt(path: &PathBuf, check_only: bool) -> anyhow::Result<()> {
     if path.is_dir() {
@@ -213,7 +245,6 @@ fn fmt_single_file(path: &PathBuf, check_only: bool) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// Simple Sandbox formatter — normalizes indentation and spacing
 fn simple_fmt(source: &str) -> String {
     let mut output = String::new();
     let mut indent: usize = 0;
@@ -222,7 +253,6 @@ fn simple_fmt(source: &str) -> String {
     for line in source.lines() {
         let trimmed = line.trim();
 
-        // Skip empty lines
         if trimmed.is_empty() {
             if !prev_blank {
                 output.push('\n');
@@ -232,25 +262,21 @@ fn simple_fmt(source: &str) -> String {
         }
         prev_blank = false;
 
-        // Decrease indent for closing braces
         if trimmed.starts_with('}') || trimmed.starts_with(']') {
             indent = indent.saturating_sub(1);
         }
 
-        // Write indented line
         for _ in 0..indent {
             output.push_str("    ");
         }
         output.push_str(trimmed);
         output.push('\n');
 
-        // Increase indent for opening braces
         if trimmed.ends_with('{') || trimmed.ends_with('[') {
             indent += 1;
         }
     }
 
-    // Ensure trailing newline
     if !output.ends_with('\n') {
         output.push('\n');
     }
@@ -258,7 +284,7 @@ fn simple_fmt(source: &str) -> String {
     output
 }
 
-// ── v0.3: Package Manager ──
+// ── Package Manager ──
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SandboxToml {
@@ -297,7 +323,6 @@ fn add_dependency(name: &str, version: &str) -> anyhow::Result<()> {
     let mut content = find_sandbox_toml()?;
     let mut config = parse_sandbox_toml(&content)?;
 
-    // Check if already exists
     if config.dependencies.contains_key(name) {
         println!("📦 '{}' already in dependencies (updating)", name);
     }
@@ -306,7 +331,6 @@ fn add_dependency(name: &str, version: &str) -> anyhow::Result<()> {
         .dependencies
         .insert(name.to_string(), version.to_string());
 
-    // Rebuild the TOML file
     content = rebuild_toml(&config);
     fs::write("sandbox.toml", &content)?;
 
@@ -354,8 +378,7 @@ fn install_dependencies() -> anyhow::Result<()> {
     println!("📦 Installing dependencies...");
     for (name, version) in &config.dependencies {
         println!("  → {} v{}", name, version);
-        // v0.3: stub — in future, download from registry
-        println!("  ✓ {} (placeholder — registry coming in v0.4)", name);
+        println!("  ✓ {} (placeholder — registry coming in future)", name);
     }
 
     println!("✅ All dependencies installed");

@@ -1,7 +1,9 @@
+use crate::ast::Program;
 use crate::codegen::CodeGen;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::typechecker::TypeChecker;
+use crate::wasmgen::WasmGen;
 use anyhow::{anyhow, Result};
 use std::fs;
 use std::process::Command;
@@ -44,6 +46,26 @@ impl Compiler {
         Ok(c_code)
     }
 
+    fn parse_for_codegen(&self) -> Result<Program> {
+        println!("[sandbox] Compiling {}", self.filename);
+
+        println!("  → Lexing...");
+        let mut lexer = Lexer::new(&self.source);
+        let tokens = lexer.tokenize()?;
+        println!("  ✓ {} tokens", tokens.len());
+
+        println!("  → Parsing...");
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse()?;
+        println!("  ✓ {} top-level items", program.items.len());
+
+        println!("  → Type checking...");
+        let mut checker = TypeChecker::new();
+        checker.check(&program)?;
+
+        Ok(program)
+    }
+
     pub fn build(&self, output: &str) -> Result<()> {
         let c_code = self.compile()?;
         let c_path = format!("{}.c", output);
@@ -64,10 +86,45 @@ impl Compiler {
         Ok(())
     }
 
+    pub fn build_wasm(&self, output: &str) -> Result<()> {
+        let program = self.parse_for_codegen()?;
+
+        println!("  → Generating WebAssembly (.wat)...");
+        let mut wasmgen = WasmGen::new();
+        let wat = wasmgen.generate(&program);
+
+        let wat_path = format!("{}.wat", output);
+        fs::write(&wat_path, &wat)?;
+        println!("  ✓ {} lines of WAT", wat.lines().count());
+
+        // Try to compile with wat2wasm if available
+        let wasm_path = format!("{}.wasm", output);
+        let status = Command::new("wat2wasm")
+            .arg(&wat_path)
+            .arg("-o")
+            .arg(&wasm_path)
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {
+                println!("  ✓ Built: {}", wasm_path);
+                println!("  Run with: wasmtime {}", wasm_path);
+            }
+            _ => {
+                println!(
+                    "  ⚠ wat2wasm not found. .wat file generated at: {}",
+                    wat_path
+                );
+                println!("  Install wabt: apt install wabt  (or brew install wabt)");
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn run(&self) -> Result<()> {
         let c_code = self.compile()?;
 
-        // Use unique temp files to avoid race conditions
         let id = format!(
             "{}_{}",
             std::process::id(),
@@ -121,6 +178,18 @@ impl Compiler {
         checker.check(&program)?;
 
         println!("[sandbox] All checks passed for {}", self.filename);
+        Ok(())
+    }
+
+    pub fn wasm(&self, output: &str) -> Result<()> {
+        let program = self.parse_for_codegen()?;
+
+        println!("  → Generating WebAssembly text format...");
+        let mut wasmgen = WasmGen::new();
+        let wat = wasmgen.generate(&program);
+
+        fs::write(output, &wat)?;
+        println!("  ✓ {} lines of WAT → {}", wat.lines().count(), output);
         Ok(())
     }
 }

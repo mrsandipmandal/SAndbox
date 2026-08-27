@@ -2,7 +2,6 @@ use crate::ast::*;
 use crate::token::{Spanned, Token};
 use anyhow::{anyhow, Result};
 
-/// Known unit names for unit literal parsing
 const UNITS: &[&str] = &[
     "kg",
     "g",
@@ -79,8 +78,6 @@ impl Parser {
         Ok(Program { items })
     }
 
-    // ── Top-level ──
-
     fn parse_top_level(&mut self) -> Result<TopLevel> {
         match self.current_token() {
             Token::Fn => self.parse_fn_def(),
@@ -90,7 +87,12 @@ impl Parser {
                 self.skip_use_statement();
                 self.parse_top_level()
             }
-            t => Err(self.error(format!("Expected 'fn', 'struct', or 'mod', got {:?}", t))),
+            Token::Ledger => self.parse_ledger_def(),
+            Token::Database => self.parse_database_def(),
+            t => Err(self.error(format!(
+                "Expected 'fn', 'struct', 'mod', 'ledger', or 'database', got {:?}",
+                t
+            ))),
         }
     }
 
@@ -103,6 +105,8 @@ impl Parser {
             self.advance();
         }
     }
+
+    // ── Function / Struct / Module (unchanged) ──
 
     fn parse_fn_def(&mut self) -> Result<TopLevel> {
         self.expect_token(&Token::Fn)?;
@@ -172,6 +176,230 @@ impl Parser {
         Ok(params)
     }
 
+    // ── v1.0: Ledger DSL ──
+
+    fn parse_ledger_def(&mut self) -> Result<TopLevel> {
+        self.expect_token(&Token::Ledger)?;
+        let name = self.expect_ident()?;
+        self.expect_token(&Token::LBrace)?;
+        let mut entries = Vec::new();
+        while !self.peek_token(&Token::RBrace) {
+            let side = match self.current_token() {
+                Token::Debit => {
+                    self.advance();
+                    LedgerSide::Debit
+                }
+                Token::Credit => {
+                    self.advance();
+                    LedgerSide::Credit
+                }
+                t => return Err(self.error(format!("Expected 'debit' or 'credit', got {:?}", t))),
+            };
+            let account = self.parse_expr()?;
+            let amount = self.parse_expr()?;
+            entries.push(LedgerEntry {
+                side,
+                account,
+                amount,
+            });
+            if self.peek_token(&Token::Comma) {
+                self.advance();
+            }
+        }
+        self.expect_token(&Token::RBrace)?;
+        Ok(TopLevel::LedgerDef(LedgerDef { name, entries }))
+    }
+
+    // ── v1.0: Database DSL ──
+
+    fn parse_database_def(&mut self) -> Result<TopLevel> {
+        self.expect_token(&Token::Database)?;
+        let name = self.expect_ident()?;
+        self.expect_token(&Token::LBrace)?;
+        let mut tables = Vec::new();
+        let mut queries = Vec::new();
+        while !self.peek_token(&Token::RBrace) {
+            match self.current_token() {
+                Token::Table => {
+                    tables.push(self.parse_table_def()?);
+                }
+                Token::Query => {
+                    queries.push(self.parse_query_def()?);
+                }
+                t => return Err(self.error(format!("Expected 'table' or 'query', got {:?}", t))),
+            }
+        }
+        self.expect_token(&Token::RBrace)?;
+        Ok(TopLevel::DatabaseDef(DatabaseDef {
+            name,
+            tables,
+            queries,
+        }))
+    }
+
+    fn parse_table_def(&mut self) -> Result<TableDef> {
+        self.expect_token(&Token::Table)?;
+        let name = self.expect_ident()?;
+        self.expect_token(&Token::LBrace)?;
+        let mut columns = Vec::new();
+        while !self.peek_token(&Token::RBrace) {
+            let col_name = self.expect_ident()?;
+            self.expect_token(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            columns.push(ColumnDef { name: col_name, ty });
+            if !self.peek_token(&Token::RBrace) {
+                self.expect_token(&Token::Comma)?;
+            }
+        }
+        self.expect_token(&Token::RBrace)?;
+        Ok(TableDef { name, columns })
+    }
+
+    fn parse_query_def(&mut self) -> Result<QueryDef> {
+        self.expect_token(&Token::Query)?;
+        let name = self.expect_ident()?;
+        self.expect_token(&Token::LParen)?;
+        let params = self.parse_params()?;
+        self.expect_token(&Token::RParen)?;
+        let ret = if self.peek_token(&Token::Arrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect_token(&Token::LBrace)?;
+
+        // Parse SQL-like query body
+        let kind = match self.current_token() {
+            Token::Select => self.parse_select_query()?,
+            Token::Insert => self.parse_insert_query()?,
+            Token::Update => self.parse_update_query()?,
+            Token::Delete => self.parse_delete_query()?,
+            t => return Err(self.error(format!("Expected SQL keyword, got {:?}", t))),
+        };
+
+        self.expect_token(&Token::RBrace)?;
+        Ok(QueryDef {
+            name,
+            params,
+            ret,
+            kind,
+        })
+    }
+
+    fn parse_select_query(&mut self) -> Result<QueryKind> {
+        self.expect_token(&Token::Select)?;
+        let mut columns = Vec::new();
+        loop {
+            match self.current_token() {
+                Token::Star => {
+                    self.advance();
+                    columns.push(SqlExpr::Star);
+                    break;
+                }
+                Token::Ident(_) => {
+                    let name = self.expect_ident()?;
+                    columns.push(SqlExpr::Column(name));
+                }
+                _ => break,
+            }
+            if !self.peek_token(&Token::Comma) {
+                break;
+            }
+            self.advance();
+        }
+        self.expect_token(&Token::From)?;
+        let from_table = self.expect_ident()?;
+        let where_clause = if self.peek_token(&Token::Where) {
+            self.advance();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(QueryKind::Select {
+            columns,
+            from_table,
+            where_clause,
+        })
+    }
+
+    fn parse_insert_query(&mut self) -> Result<QueryKind> {
+        self.expect_token(&Token::Insert)?;
+        self.expect_token(&Token::Into)?;
+        let table = self.expect_ident()?;
+        self.expect_token(&Token::LParen)?;
+        let mut columns = Vec::new();
+        while !self.peek_token(&Token::RParen) {
+            columns.push(self.expect_ident()?);
+            if !self.peek_token(&Token::RParen) {
+                self.expect_token(&Token::Comma)?;
+            }
+        }
+        self.expect_token(&Token::RParen)?;
+        self.expect_token(&Token::Values)?;
+        self.expect_token(&Token::LParen)?;
+        let mut values = Vec::new();
+        while !self.peek_token(&Token::RParen) {
+            values.push(self.parse_expr()?);
+            if !self.peek_token(&Token::RParen) {
+                self.expect_token(&Token::Comma)?;
+            }
+        }
+        self.expect_token(&Token::RParen)?;
+        Ok(QueryKind::Insert {
+            table,
+            columns,
+            values,
+        })
+    }
+
+    fn parse_update_query(&mut self) -> Result<QueryKind> {
+        self.expect_token(&Token::Update)?;
+        let table = self.expect_ident()?;
+        self.expect_token(&Token::Set)?;
+        let mut set_clauses = Vec::new();
+        loop {
+            if self.peek_token(&Token::Where) {
+                break;
+            }
+            let col = self.expect_ident()?;
+            self.expect_token(&Token::Assign)?;
+            let val = self.parse_expr()?;
+            set_clauses.push((col, val));
+            if !self.peek_token(&Token::Comma) {
+                break;
+            }
+            self.advance();
+        }
+        let where_clause = if self.peek_token(&Token::Where) {
+            self.advance();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(QueryKind::Update {
+            table,
+            set_clauses,
+            where_clause,
+        })
+    }
+
+    fn parse_delete_query(&mut self) -> Result<QueryKind> {
+        self.expect_token(&Token::Delete)?;
+        self.expect_token(&Token::From)?;
+        let table = self.expect_ident()?;
+        let where_clause = if self.peek_token(&Token::Where) {
+            self.advance();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(QueryKind::Delete {
+            table,
+            where_clause,
+        })
+    }
+
     // ── Types ──
 
     fn parse_type(&mut self) -> Result<Type> {
@@ -224,7 +452,6 @@ impl Parser {
                 self.expect_token(&Token::Gt)?;
                 Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
             }
-            // Unit types like `kg`, `meter`
             Token::Ident(ref name) if is_unit_name(name) => {
                 let unit = name.clone();
                 self.advance();
@@ -488,7 +715,6 @@ impl Parser {
         match self.current_token().clone() {
             Token::Int(n) => {
                 self.advance();
-                // Check for unit literal: 10 kg, 5 meter, etc.
                 if let Token::Ident(ref unit) = self.current_token() {
                     if is_unit_name(unit) {
                         let unit_name = unit.clone();
@@ -499,7 +725,6 @@ impl Parser {
                         });
                     }
                 }
-                // Check for currency literal: 100 INR
                 if let Token::Currency(ref c) = self.current_token().clone() {
                     let currency = c.clone();
                     self.advance();
@@ -513,7 +738,6 @@ impl Parser {
             }
             Token::Float(n) => {
                 self.advance();
-                // Check for unit literal: 5.5 meter
                 if let Token::Ident(ref unit) = self.current_token() {
                     if is_unit_name(unit) {
                         let unit_name = unit.clone();
@@ -524,7 +748,6 @@ impl Parser {
                         });
                     }
                 }
-                // Check for currency literal
                 if let Token::Currency(ref c) = self.current_token().clone() {
                     let currency = c.clone();
                     self.advance();
@@ -596,7 +819,6 @@ impl Parser {
                     Ok(Expr::Ident(full_name))
                 }
             }
-            // Type keywords as module names
             Token::TypeString
             | Token::TypeI64
             | Token::TypeF64

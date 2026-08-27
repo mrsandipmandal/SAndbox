@@ -1,0 +1,78 @@
+// selfhost_compiler.sbx — Self-hosting mini-compiler
+// Compiles a SUBSET of Sandbox to C code
+
+fn compile_line(line: string) -> string {
+    let result: string = ""
+    let trimmed = string::trim(line)
+
+    // Let declaration: let x = expr
+    if string::starts_with(trimmed, "let ") {
+        let after_let = string::substring(trimmed, 4, 100)
+        let eq_pos = string::find(after_let, " = ")
+        let var_name = string::substring(after_let, 0, eq_pos)
+        let value = string::substring(after_let, eq_pos + 3, 100)
+        result = string::concat("long ", var_name)
+        result = string::concat(result, " = ")
+        result = string::concat(result, value)
+        result = string::concat(result, ";")
+        return result
+    }
+
+    // Print: print(expr)
+    if string::starts_with(trimmed, "print(") {
+        let inner = string::substring(trimmed, 6, 100)
+        let close_pos = string::find(inner, ")")
+        let expr = string::substring(inner, 0, close_pos)
+        if string::starts_with(expr, "\"") {
+            result = string::concat("printf(\"%s\\n\", ", expr)
+            result = string::concat(result, ");")
+        } else {
+            result = string::concat("printf(\"%ld\\n\", (long)", expr)
+            result = string::concat(result, ");")
+        }
+        return result
+    }
+
+    // Return: return expr
+    if string::starts_with(trimmed, "return ") {
+        let expr = string::substring(trimmed, 7, 100)
+        result = string::concat("return ", expr)
+        result = string::concat(result, ";")
+        return result
+    }
+
+    // Assignment: x = expr
+    if string::contains(trimmed, " = ") {
+        let eq_pos = string::find(trimmed, " = ")
+        let var = string::substring(trimmed, 0, eq_pos)
+        let val = string::substring(trimmed, eq_pos + 3, 100)
+        result = string::concat(var, " = ")
+        result = string::concat(result, val)
+        result = string::concat(result, ";")
+        return result
+    }
+
+    return trimmed
+}
+
+fn main() {
+    print("Sandbox Self-Hosting Compiler v1.0")
+
+    let test_line = "let x = 42"
+    let c_code: string = compile_line(test_line)
+    print(c_code)
+
+    let test_print = "print(\"Hello!\")"
+    let c_print: string = compile_line(test_print)
+    print(c_print)
+
+    let test_return = "return x + 1"
+    let c_return: string = compile_line(test_return)
+    print(c_return)
+
+    let test_assign = "x = 100"
+    let c_assign: string = compile_line(test_assign)
+    print(c_assign)
+
+    print("Self-hosted compiler test complete!")
+}

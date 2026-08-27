@@ -2,6 +2,7 @@ mod ast;
 mod codegen;
 mod compiler;
 mod lexer;
+mod lsp;
 mod parser;
 mod stdlib;
 mod token;
@@ -80,6 +81,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Start the LSP server for IDE support
+    Lsp,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -142,6 +145,9 @@ fn main() -> anyhow::Result<()> {
             });
             let compiler = compiler::Compiler::new(&source, &filename);
             compiler.wasm(&out_name)?;
+        }
+        Commands::Lsp => {
+            lsp::run_lsp()?;
         }
     }
 

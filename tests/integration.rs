@@ -665,3 +665,74 @@ fn test_build_wasm() {
     assert!(ok, "WASM build failed: {}", output);
     assert!(out.with_extension("wat").exists(), ".wat file not created");
 }
+
+// ── v1.0 tests ──
+
+#[test]
+fn test_ledger_balanced() {
+    let (output, ok) = compile_and_run(
+        r#"
+ledger Transfer {
+    debit account_a 1000 INR
+    credit account_b 1000 INR
+}
+
+fn main() {
+    let result = __validate_Transfer()
+    print(result)
+}
+"#,
+    );
+    assert!(ok, "Compilation failed: {}", output);
+    assert!(
+        output.contains("0"),
+        "Expected 0 (balanced), got: {}",
+        output
+    );
+}
+
+#[test]
+fn test_ledger_unbalanced() {
+    let (_output, ok) = compile_and_run(
+        r#"
+ledger Bad {
+    debit account_a 1000 INR
+    credit account_b 500 INR
+}
+
+fn main() {
+    let result = __validate_Bad()
+    print(result)
+}
+"#,
+    );
+    // Unbalanced ledger should fail type-checking
+    assert!(!ok, "Expected compile error for unbalanced ledger");
+}
+
+#[test]
+fn test_database_queries() {
+    let (output, ok) = run_sandbox(&["run", "examples/database_demo.sbx"]);
+    assert!(ok, "Database demo failed: {}", output);
+    assert!(
+        output.contains("Database defined"),
+        "Missing output: {}",
+        output
+    );
+}
+
+#[test]
+fn test_selfhost_compiler() {
+    let (output, ok) = run_sandbox(&["run", "examples/selfhost_compiler.sbx"]);
+    assert!(ok, "Self-host compiler failed: {}", output);
+    assert!(
+        output.contains("Self-Hosting Compiler"),
+        "Missing output: {}",
+        output
+    );
+    assert!(
+        output.contains("long x = 42;"),
+        "Missing compiled output: {}",
+        output
+    );
+}

@@ -35,13 +35,32 @@ pub enum Token {
     Mod,
     Use,
 
-    // Type keywords
+    // v0.3: Types
     TypeI64,
     TypeF64,
     TypeBool,
     TypeString,
     TypeMoney,
     TypeDecimal,
+
+    // v1.0: Ledger DSL
+    Ledger,
+    Debit,
+    Credit,
+
+    // v1.0: Database DSL
+    Database,
+    Table,
+    Query,
+    Select,
+    Insert,
+    Update,
+    Delete,
+    Where,
+    From,
+    Into,
+    Values,
+    Set,
 
     // Operators
     Plus,

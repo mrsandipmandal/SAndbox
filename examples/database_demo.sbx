@@ -1,0 +1,41 @@
+// database_demo.sbx — Database DSL with tables and queries
+
+database BankingDB {
+    table accounts {
+        id: i64,
+        name: string,
+        balance: Money<INR>
+    }
+
+    table transactions {
+        id: i64,
+        from_account: i64,
+        to_account: i64,
+        amount: Money<INR>
+    }
+
+    query get_account(id: i64) -> accounts {
+        select id, name, balance FROM accounts WHERE id
+    }
+
+    query create_account(id: i64, name: string) -> void {
+        INSERT INTO accounts (id, name) VALUES (0, "placeholder")
+    }
+
+    query update_balance(id: i64, new_balance: Money<INR>) -> void {
+        UPDATE accounts SET balance = 0 WHERE id
+    }
+
+    query delete_account(id: i64) -> void {
+        DELETE FROM accounts WHERE id
+    }
+}
+
+fn main() {
+    print("Database defined")
+
+    BankingDB_create_account(1, "Alice")
+    BankingDB_get_account(1)
+    BankingDB_update_balance(1, 50000 INR)
+    BankingDB_delete_account(1)
+}

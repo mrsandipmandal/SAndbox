@@ -102,6 +102,31 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
         vec![("a".into(), Type::String), ("b".into(), Type::String)],
         Type::Bool,
     );
+    // v1.0: Additional string functions for self-hosting compiler
+    register(
+        &mut m,
+        "string::trim",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::starts_with",
+        vec![("s".into(), Type::String), ("prefix".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "string::contains",
+        vec![("s".into(), Type::String), ("sub".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "string::find",
+        vec![("s".into(), Type::String), ("sub".into(), Type::String)],
+        Type::I64,
+    );
 
     // ── array module ──
     register(
@@ -155,6 +180,10 @@ pub fn c_name(name: &str) -> &str {
         "string::concat" => "__sbx_str_concat",
         "string::substring" => "__sbx_str_sub",
         "string::equals" => "__sbx_str_eq",
+        "string::trim" => "__sbx_str_trim",
+        "string::starts_with" => "__sbx_str_starts_with",
+        "string::contains" => "__sbx_str_contains",
+        "string::find" => "__sbx_str_find",
         "array::len" => "__sbx_arr_len",
         "array::push" => "__sbx_arr_push",
         "array::sort" => "__sbx_arr_sort",
@@ -202,6 +231,29 @@ static const char* __sbx_str_sub(const char* s, long start, long len) {
 
 static int __sbx_str_eq(const char* a, const char* b) {
     return strcmp(a, b) == 0;
+}
+
+static const char* __sbx_str_trim(const char* s) {
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    size_t len = strlen(s);
+    while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' || s[len-1] == '\n' || s[len-1] == '\r')) len--;
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+static int __sbx_str_starts_with(const char* s, const char* prefix) {
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static int __sbx_str_contains(const char* s, const char* sub) {
+    return strstr(s, sub) != NULL;
+}
+
+static long __sbx_str_find(const char* s, const char* sub) {
+    const char* pos = strstr(s, sub);
+    return pos ? (long)(pos - s) : -1;
 }
 
 static long __sbx_arr_len(long* arr) {

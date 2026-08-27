@@ -156,7 +156,7 @@ impl Lexer {
     }
 
     fn read_string(&mut self) -> Result<Token> {
-        self.advance(); // skip opening "
+        self.advance();
         let mut s = String::new();
         loop {
             if self.pos >= self.input.len() {
@@ -240,15 +240,12 @@ impl Lexer {
             "in" => Token::In,
             "return" => Token::Return,
             "print" => Token::Print,
-            // v0.2: Error handling
             "Result" => Token::Result,
             "Ok" => Token::Ok,
             "Err" => Token::Err,
             "panic" => Token::Panic,
-            // v0.2: Modules
             "mod" => Token::Mod,
             "use" => Token::Use,
-            // Types
             "i64" => Token::TypeI64,
             "f64" => Token::TypeF64,
             "bool" => Token::TypeBool,
@@ -257,7 +254,24 @@ impl Lexer {
             "Decimal" => Token::TypeDecimal,
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
-            // Known currencies
+            // v1.0: Ledger DSL
+            "ledger" => Token::Ledger,
+            "debit" => Token::Debit,
+            "credit" => Token::Credit,
+            // v1.0: Database DSL
+            "database" => Token::Database,
+            "table" => Token::Table,
+            "query" => Token::Query,
+            "select" | "SELECT" => Token::Select,
+            "insert" | "INSERT" => Token::Insert,
+            "update" | "UPDATE" => Token::Update,
+            "delete" | "DELETE" => Token::Delete,
+            "where" | "WHERE" => Token::Where,
+            "from" | "FROM" => Token::From,
+            "into" | "INTO" => Token::Into,
+            "values" | "VALUES" => Token::Values,
+            "set" | "SET" => Token::Set,
+            // Currencies
             "INR" | "USD" | "EUR" | "GBP" | "JPY" | "CNY" | "BDT" => Token::Currency(text),
             _ => Token::Ident(text),
         })

@@ -1,0 +1,30 @@
+// ledger_demo.sbx — Double-entry accounting with Ledger DSL
+
+ledger Transfer {
+    debit account_a 1000 INR
+    credit account_b 1000 INR
+}
+
+ledger Payment {
+    debit merchant 500 USD
+    credit customer 500 USD
+}
+
+ledger UnbalancedTest {
+    debit account_a 1000 INR
+    credit account_b 500 INR
+}
+
+fn main() {
+    print("Ledger validation complete")
+
+    let result = __validate_Transfer()
+    print(result)
+
+    let result2 = __validate_Payment()
+    print(result2)
+
+    // UnbalancedTest should fail validation (1000 != 500)
+    let result3 = __validate_UnbalancedTest()
+    print(result3)
+}

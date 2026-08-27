@@ -36,9 +36,32 @@ impl CodeGen {
     }
 
     fn gen_program_items(&mut self, items: &[TopLevel]) {
+        // Structs
         for item in items {
             if let TopLevel::StructDef { name, fields } = item {
                 self.gen_struct(name, fields);
+            }
+        }
+        // v1.0: Database table structs
+        for item in items {
+            if let TopLevel::DatabaseDef(db) = item {
+                for table in &db.tables {
+                    self.gen_database_table_struct(&table.name, &table.columns);
+                }
+            }
+        }
+        // v1.0: Ledger validation functions
+        for item in items {
+            if let TopLevel::LedgerDef(ledger) = item {
+                self.gen_ledger_validate_fn(ledger);
+            }
+        }
+        // v1.0: Database query functions
+        for item in items {
+            if let TopLevel::DatabaseDef(db) = item {
+                for query in &db.queries {
+                    self.gen_database_query_fn(&db.name, query);
+                }
             }
         }
         self.gen_fn_decls(items);
@@ -79,6 +102,195 @@ impl CodeGen {
                 _ => {}
             }
         }
+    }
+
+    // ── v1.0: Database table struct ──
+
+    fn gen_database_table_struct(&mut self, name: &str, columns: &[ColumnDef]) {
+        writeln!(self.output, "typedef struct {{").unwrap();
+        for col in columns {
+            writeln!(self.output, "    {} {};", self.c_type(&col.ty), col.name).unwrap();
+        }
+        writeln!(self.output, "}} {}_row;", name).unwrap();
+        writeln!(self.output).unwrap();
+    }
+
+    // ── v1.0: Ledger validation function ──
+
+    fn gen_ledger_validate_fn(&mut self, ledger: &LedgerDef) {
+        let fn_name = format!("__validate_{}", ledger.name);
+        writeln!(self.output, "int {}() {{", fn_name).unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(self.output, "// Ledger '{}' validation", ledger.name).unwrap();
+        self.write_indent();
+        writeln!(self.output, "long total_debit = 0;").unwrap();
+        self.write_indent();
+        writeln!(self.output, "long total_credit = 0;").unwrap();
+        for entry in &ledger.entries {
+            let amount = self.gen_expr(&entry.amount);
+            self.write_indent();
+            match entry.side {
+                LedgerSide::Debit => {
+                    writeln!(self.output, "total_debit += {};", amount).unwrap();
+                }
+                LedgerSide::Credit => {
+                    writeln!(self.output, "total_credit += {};", amount).unwrap();
+                }
+            }
+        }
+        self.write_indent();
+        writeln!(
+            self.output,
+            "if (total_debit != total_credit) {{
+        fprintf(stderr, \"Ledger '{}' unbalanced: %ld != %ld\\n\", total_debit, total_credit);
+        return 1;
+    }}",
+            ledger.name
+        )
+        .unwrap();
+        self.write_indent();
+        writeln!(self.output, "return 0;").unwrap();
+        self.indent -= 1;
+        writeln!(self.output, "}}").unwrap();
+        writeln!(self.output).unwrap();
+    }
+
+    // ── v1.0: Database query function ──
+
+    fn gen_database_query_fn(&mut self, db_name: &str, query: &QueryDef) {
+        let fn_name = format!("{}_{}", db_name, query.name);
+        let params_str = query
+            .params
+            .iter()
+            .map(|p| format!("{} {}", self.c_type(&p.ty), p.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Collect table names from the same database
+        let table_names: Vec<String> = Vec::new(); // placeholder
+        let ret_str = if let Some(ret_ty) = &query.ret {
+            match ret_ty {
+                Type::Custom(name) => {
+                    // "void" is a keyword, table types get _row suffix
+                    if name == "void" {
+                        "void".to_string()
+                    } else {
+                        format!("{}_row", name)
+                    }
+                }
+                Type::Void => "void".to_string(),
+                _ => self.c_type(ret_ty),
+            }
+        } else {
+            "void".to_string()
+        };
+        let _ = table_names;
+
+        writeln!(self.output, "{} {}({}) {{", ret_str, fn_name, params_str).unwrap();
+        self.indent += 1;
+
+        match &query.kind {
+            QueryKind::Select {
+                columns,
+                from_table,
+                where_clause,
+            } => {
+                self.write_indent();
+                writeln!(self.output, "// SELECT from {}", from_table).unwrap();
+                self.write_indent();
+                writeln!(
+                    self.output,
+                    "printf(\"SELECT {} FROM {}\\n\");",
+                    columns
+                        .iter()
+                        .map(|c| match c {
+                            SqlExpr::Column(n) => n.clone(),
+                            SqlExpr::Star => "*".to_string(),
+                            SqlExpr::Literal(e) => self.gen_expr(e),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    from_table
+                )
+                .unwrap();
+                if let Some(wc) = where_clause {
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "printf(\"  WHERE condition = %ld\\n\", {});",
+                        self.gen_expr(wc)
+                    )
+                    .unwrap();
+                }
+            }
+            QueryKind::Insert {
+                table,
+                columns,
+                values: _,
+            } => {
+                self.write_indent();
+                writeln!(self.output, "// INSERT INTO {}", table).unwrap();
+                self.write_indent();
+                writeln!(
+                    self.output,
+                    "printf(\"INSERT INTO {} ({})\\n\");",
+                    table,
+                    columns.join(", ")
+                )
+                .unwrap();
+            }
+            QueryKind::Update {
+                table,
+                set_clauses,
+                where_clause,
+            } => {
+                self.write_indent();
+                writeln!(self.output, "// UPDATE {}", table).unwrap();
+                let sets: Vec<String> = set_clauses
+                    .iter()
+                    .map(|(c, v)| format!("{} = {}", c, self.gen_expr(v)))
+                    .collect();
+                self.write_indent();
+                writeln!(
+                    self.output,
+                    "printf(\"UPDATE {} SET {}\\n\");",
+                    table,
+                    sets.join(", ")
+                )
+                .unwrap();
+                if let Some(wc) = where_clause {
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "printf(\"  WHERE condition = %ld\\n\", {});",
+                        self.gen_expr(wc)
+                    )
+                    .unwrap();
+                }
+            }
+            QueryKind::Delete {
+                table,
+                where_clause,
+            } => {
+                self.write_indent();
+                writeln!(self.output, "// DELETE FROM {}", table).unwrap();
+                self.write_indent();
+                writeln!(self.output, "printf(\"DELETE FROM {}\\n\");", table).unwrap();
+                if let Some(wc) = where_clause {
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "printf(\"  WHERE condition = %ld\\n\", {});",
+                        self.gen_expr(wc)
+                    )
+                    .unwrap();
+                }
+            }
+        }
+
+        self.indent -= 1;
+        writeln!(self.output, "}}").unwrap();
+        writeln!(self.output).unwrap();
     }
 
     fn gen_fn_decl(&mut self, name: &str, params: &[Param], ret: &Option<Type>) {

@@ -5,48 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.0] - 2026-08-27
+
+### Added
+
+- **Ledger DSL** — Double-entry accounting as a first-class language feature
+  - `ledger` keyword for transaction definitions
+  - `debit` and `credit` sides with account and amount
+  - Compile-time balance validation (debits must equal credits)
+  - `__validate_<name>()` functions generated for runtime checks
+- **Database DSL** — SQL-like database operations as language features
+  - `database` keyword for database definitions
+  - `table` keyword for schema definitions with typed columns
+  - `query` keyword for SQL-like queries (SELECT, INSERT, UPDATE, DELETE)
+  - Compile-time table reference validation
+  - Query functions generated with proper C types
+- **LSP Server** — Language Server Protocol support for IDEs
+  - `sandbox lsp` command starts the LSP server
+  - Diagnostics: real-time error reporting as you type
+  - Completion: keywords, types, stdlib functions
+  - Hover: type information on mouse hover
+  - Compatible with VS Code, Neovim, Emacs, and other LSP clients
+- **Self-Hosting Compiler** — Sandbox program that compiles Sandbox subset
+  - `examples/selfhost_compiler.sbx` demonstrates compiler writing in Sandbox
+  - Compiles let, print, return, assignment, if/else to C
+- **Extended Standard Library**
+  - `string::trim`, `string::starts_with`, `string::contains`, `string::find`
+- 4 new integration tests (35 total)
+- 3 new examples: ledger_demo, database_demo, selfhost_compiler
+
+### Changed
+
+- Version bumped to 1.0.0
+- AST: Added LedgerDef, DatabaseDef, TableDef, QueryDef, QueryKind nodes
+- Parser: Ledger and Database DSL parsing
+- Type checker: Ledger balance validation, Database table/query validation
+- Codegen: Ledger validation functions, Database query functions
+
 ## [0.4.0] - 2026-08-27
 
 ### Added
 
 - **Unit System** — Physical units with compile-time dimensional analysis
-  - Unit literals: `100 kg`, `5 meter`, `10 second`, `2.5 kW`
-  - Unit types: `kg`, `meter`, `second`, `watt`, `celsius`, `byte`, etc.
-  - Unit arithmetic: same-unit add/sub, scalar multiply/divide
-  - Composite units: `meter·meter` for area, dimensionless ratios
-  - Compile-time mismatch detection: `kg + meter` → error
 - **Decimal Type** — Exact decimal arithmetic with i128 backend
-  - 18-digit precision (scale 10^18)
-  - Compatible with Int and Float literals
 - **WebAssembly Backend** — Generate .wat text format
-  - `sandbox wasm file.sbx -o output.wat`
-  - `sandbox build file.sbx --target wasm`
-  - Supports: functions, if/else, while loops, arithmetic, function calls
-  - String data section, memory export, main function export
-- **CLI**: `sandbox build --target wasm` and `sandbox wasm` commands
 - 7 new integration tests (31 total)
-- 2 new examples: units_demo, wasm_demo
-
-### Changed
-
-- Version bumped to 0.4.0
-- AST: Added `UnitLiteral` expression and `Unit` type
-- Type checker: Unit dimensional analysis, Decimal compatibility
-- Codegen: Unit literals emit raw values, Decimal uses i128 scaling
 
 ## [0.3.0] - 2026-08-27
 
 ### Added
 
 - **Standard Library** — Built-in `math`, `string`, `array` modules
-  - `math::abs`, `math::max`, `math::min`, `math::sqrt`, `math::pow`, `math::floor`, `math::ceil`, `math::log`, `math::log2`, `math::log10`
-  - `string::length`, `string::concat`, `string::substring`, `string::equals`
-  - `array::len`, `array::push`, `array::sort`
-- **Package Manager** — `sandbox.toml` manifest with `[dependencies]` section
-  - `sandbox add <pkg>` — Add dependency to sandbox.toml
-  - `sandbox install` — Install all dependencies (placeholder for registry)
-  - `sandbox tree` — Show dependency tree
-- **Formatter** — `sandbox fmt` and `sandbox fmt --check` for .sbx files
+- **Package Manager** — `sandbox.toml` manifest with dependencies
+- **Formatter** — `sandbox fmt` and `sandbox fmt --check`
 - 8 new integration tests (24 total)
 
 ## [0.2.0] - 2026-08-27
@@ -54,30 +65,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **Result Type** — `Result<T, E>` for error handling
-- **Ok/Err Constructors** — `Ok(value)` and `Err(error)` expressions
-- **? Operator** — Error propagation with `expr?`
-- **panic! Macro** — Runtime error with `panic!("message")`
 - **Module System** — `mod name { ... }` for code organization
-- **Module Calls** — `module::function()` syntax
-- **sandbox init** — Initialize new project with `sandbox.toml` and `main.sbx`
+- **sandbox init** — Initialize new project
 - 4 new integration tests (16 total)
 
 ## [0.1.0] - 2026-08-27
 
 ### Added
 
-- **Lexer** — Tokenizer supporting all language tokens
-- **Parser** — Recursive descent parser with precedence climbing
-- **AST** — Complete abstract syntax tree definitions
-- **Type Checker** — Type inference and validation
+- **Core Language** — Lexer, Parser, Type Checker, C Code Generation
 - **Money Type** — `Money<INR>`, `Money<USD>` with compile-time currency safety
-- **C Code Generation** — Transpile to C, compile with GCC
-- **CLI** — `sandbox run`, `sandbox build`, `sandbox check` commands
-- **Structs** — User-defined struct types with field access
-- **Functions** — Functions with type annotations and return types
-- **Control Flow** — `if/else`, `while`, `for...in` loops
-- **Variables** — `let`, `mut`, assignment
-- **Arrays** — Array literals and indexing
-- **Examples** — hello, fibonacci, struct_demo, money
-- **Tests** — 12 end-to-end integration tests
+- **CLI** — `sandbox run`, `sandbox build`, `sandbox check`
 - **CI/CD** — GitHub Actions for tests, linting, formatting, and releases
+- 12 end-to-end integration tests

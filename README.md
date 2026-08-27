@@ -9,8 +9,8 @@
 [![CI](https://github.com/mrsandipmandal/SAndbox/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/Release-v0.4.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
-[![Tests](https://img.shields.io/badge/Tests-31%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
+[![Release](https://img.shields.io/badge/Release-v1.0.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
+[![Tests](https://img.shields.io/badge/Tests-35%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 
 <br>
 
@@ -51,6 +51,9 @@ let bad = salary + 100 USD   // ❌ Compile error: Currency mismatch!
 - **🔒 Memory Safe** — Safe by default, `unsafe` only when you opt in
 - **⚡ C Transpilation** — Compiles to C, then to native binary via GCC
 - **🌐 WebAssembly** — Generate .wat text format for browser/edge deployment
+- **📒 Ledger DSL** — Double-entry accounting with compile-time balance validation
+- **🗄️ Database DSL** — SQL-like tables and queries as language features
+- **🔧 IDE Support** — LSP server with diagnostics, completion, and hover
 - **📝 Simple Syntax** — Clean, readable, low-ceremony
 - **🏗️ Structs & Functions** — First-class support with type annotations
 - **🔄 Control Flow** — `if/else`, `while`, `for...in` loops
@@ -318,7 +321,7 @@ sandbox wasm file.sbx         # Generate .wat file
 ## 🧪 Testing
 
 ```bash
-cargo test                   # Run all 31 tests
+cargo test                   # Run all 35 tests
 cargo clippy                 # Lint (zero warnings)
 cargo fmt --check            # Check formatting
 ```
@@ -338,6 +341,7 @@ src/
 ├── codegen.rs        # AST → C code
 ├── stdlib.rs         # Standard library (math, string, array)
 ├── wasmgen.rs        # WebAssembly .wat codegen
+├── lsp.rs            # Language Server Protocol server
 └── compiler.rs       # Pipeline orchestration
 
 examples/
@@ -349,10 +353,13 @@ examples/
 ├── string_demo.sbx   # String stdlib functions
 ├── sorting_v3.sbx    # Array operations
 ├── units_demo.sbx    # Unit system demo
-└── wasm_demo.sbx     # WebAssembly target demo
+├── wasm_demo.sbx     # WebAssembly target demo
+├── ledger_demo.sbx   # Double-entry accounting
+├── database_demo.sbx # Database DSL with queries
+└── selfhost_compiler.sbx  # Self-hosting mini-compiler
 
 tests/
-└── integration.rs    # 31 end-to-end tests
+└── integration.rs    # 35 end-to-end tests
 ```
 
 ---
@@ -385,11 +392,11 @@ tests/
 - [ ] HTTP / JSON standard library
 - [ ] LLVM backend for native optimization
 
-### v1.0 — Production Ready
-- [ ] Self-hosting compiler
-- [ ] Database integration
-- [ ] Ledger / double-entry accounting
-- [ ] IDE support (LSP)
+### v1.0 ✅ — Production Ready
+- [x] Self-hosting compiler (Sandbox → C subset)
+- [x] Database DSL (table, query, SELECT/INSERT/UPDATE/DELETE)
+- [x] Ledger DSL (double-entry accounting with validation)
+- [x] IDE support (LSP server with diagnostics, completion, hover)
 - [ ] Package registry (`registry.sandbox.dev`)
 
 ---

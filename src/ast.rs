@@ -11,7 +11,7 @@ pub enum Type {
     String,
     Money(String),
     Decimal,
-    Unit(String), // e.g., "kg", "meter", "second"
+    Unit(String),
     Array(Box<Type>),
     Void,
     Custom(String),
@@ -75,11 +75,11 @@ pub enum Expr {
         amount: f64,
         currency: String,
     },
-    DecimalLiteral(String), // "100.25" — stored as string, computed as i128
+    DecimalLiteral(String),
     UnitLiteral {
         value: Box<Expr>,
         unit: String,
-    }, // 10 kg, 5.5 meter
+    },
     OkExpr(Box<Expr>),
     ErrExpr(Box<Expr>),
     PanicExpr(Box<Expr>),
@@ -156,6 +156,88 @@ pub struct Field {
     pub ty: Type,
 }
 
+// ── v1.0: Ledger DSL ──
+
+#[derive(Debug, Clone)]
+pub struct LedgerEntry {
+    pub side: LedgerSide,
+    pub account: Expr,
+    pub amount: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LedgerSide {
+    Debit,
+    Credit,
+}
+
+#[derive(Debug, Clone)]
+pub struct LedgerDef {
+    pub name: String,
+    pub entries: Vec<LedgerEntry>,
+}
+
+// ── v1.0: Database DSL ──
+
+#[derive(Debug, Clone)]
+pub struct ColumnDef {
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableDef {
+    pub name: String,
+    pub columns: Vec<ColumnDef>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SqlExpr {
+    Column(String),
+    Literal(Expr),
+    Star,
+}
+
+#[derive(Debug, Clone)]
+pub enum QueryKind {
+    Select {
+        columns: Vec<SqlExpr>,
+        from_table: String,
+        where_clause: Option<Expr>,
+    },
+    Insert {
+        table: String,
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+    Update {
+        table: String,
+        set_clauses: Vec<(String, Expr)>,
+        where_clause: Option<Expr>,
+    },
+    Delete {
+        table: String,
+        where_clause: Option<Expr>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryDef {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret: Option<Type>,
+    pub kind: QueryKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatabaseDef {
+    pub name: String,
+    pub tables: Vec<TableDef>,
+    pub queries: Vec<QueryDef>,
+}
+
+// ── Top-level items ──
+
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     FnDef {
@@ -172,6 +254,10 @@ pub enum TopLevel {
         name: String,
         items: Vec<TopLevel>,
     },
+    // v1.0: Ledger
+    LedgerDef(LedgerDef),
+    // v1.0: Database
+    DatabaseDef(DatabaseDef),
 }
 
 // ── Program ──

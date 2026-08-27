@@ -32,6 +32,26 @@ impl TypeChecker {
             self.register_functions(item, "");
         }
 
+        // v1.0: Register ledger validate functions
+        for item in &program.items {
+            if let TopLevel::LedgerDef(ledger) = item {
+                let fn_name = format!("__validate_{}", ledger.name);
+                self.functions.insert(fn_name, (vec![], Some(Type::I64)));
+            }
+        }
+
+        // v1.0: Register database query functions
+        for item in &program.items {
+            if let TopLevel::DatabaseDef(db) = item {
+                for query in &db.queries {
+                    let fn_name = format!("{}_{}", db.name, query.name);
+                    let param_tys: Vec<Type> = query.params.iter().map(|p| p.ty.clone()).collect();
+                    self.functions
+                        .insert(fn_name, (param_tys, query.ret.clone()));
+                }
+            }
+        }
+
         for item in &program.items {
             if let TopLevel::FnDef {
                 name, params, body, ..
@@ -47,6 +67,22 @@ impl TypeChecker {
                 self.check_block(body)?;
                 self.scopes.pop();
                 println!("  ✓ Function '{}' type-checked", name);
+            }
+        }
+
+        // v1.0: Validate ledgers
+        for item in &program.items {
+            if let TopLevel::LedgerDef(ledger) = item {
+                self.validate_ledger(ledger)?;
+                println!("  ✓ Ledger '{}' validated", ledger.name);
+            }
+        }
+
+        // v1.0: Validate databases
+        for item in &program.items {
+            if let TopLevel::DatabaseDef(db) = item {
+                self.validate_database(db)?;
+                println!("  ✓ Database '{}' validated", db.name);
             }
         }
 
@@ -466,5 +502,134 @@ impl TypeChecker {
             }
             _ => {}
         }
+    }
+
+    // ── v1.0: Ledger validation ──
+
+    fn validate_ledger(&self, ledger: &LedgerDef) -> Result<()> {
+        if ledger.entries.is_empty() {
+            return Err(anyhow!("Ledger '{}' has no entries", ledger.name));
+        }
+        // Check that debits == credits
+        let mut total_debit: i64 = 0;
+        let mut total_credit: i64 = 0;
+        for entry in &ledger.entries {
+            let amount = self.eval_literal_i64(&entry.amount)?;
+            match entry.side {
+                LedgerSide::Debit => total_debit += amount,
+                LedgerSide::Credit => total_credit += amount,
+            }
+        }
+        if total_debit != total_credit {
+            return Err(anyhow!(
+                "Ledger '{}' is unbalanced: debits ({}) != credits ({})",
+                ledger.name,
+                total_debit,
+                total_credit
+            ));
+        }
+        Ok(())
+    }
+
+    fn eval_literal_i64(&self, expr: &Expr) -> Result<i64> {
+        match expr {
+            Expr::Int(n) => Ok(*n),
+            Expr::MoneyLiteral { amount, .. } => Ok(*amount as i64 * 10000),
+            Expr::Ident(name) => {
+                // Look up in scope
+                for scope in self.scopes.iter().rev() {
+                    if let Some(ty) = scope.get(name) {
+                        // For money variables, return 0 (we can't resolve at check time)
+                        if matches!(ty, Type::Money(_)) {
+                            return Ok(0);
+                        }
+                    }
+                }
+                Ok(0)
+            }
+            Expr::BinaryOp { op, left, right } => {
+                let l = self.eval_literal_i64(left)?;
+                let r = self.eval_literal_i64(right)?;
+                match op {
+                    BinOp::Add => Ok(l + r),
+                    BinOp::Sub => Ok(l - r),
+                    BinOp::Mul => Ok(l * r),
+                    BinOp::Div => Ok(if r != 0 { l / r } else { 0 }),
+                    _ => Ok(0),
+                }
+            }
+            _ => Ok(0),
+        }
+    }
+
+    // ── v1.0: Database validation ──
+
+    fn validate_database(&self, db: &DatabaseDef) -> Result<()> {
+        // Check table names are unique
+        let mut table_names = std::collections::HashSet::new();
+        for table in &db.tables {
+            if !table_names.insert(&table.name) {
+                return Err(anyhow!(
+                    "Duplicate table '{}' in database '{}'",
+                    table.name,
+                    db.name
+                ));
+            }
+        }
+        // Check query names are unique
+        let mut query_names = std::collections::HashSet::new();
+        for query in &db.queries {
+            if !query_names.insert(&query.name) {
+                return Err(anyhow!(
+                    "Duplicate query '{}' in database '{}'",
+                    query.name,
+                    db.name
+                ));
+            }
+            // Validate query references existing tables
+            match &query.kind {
+                QueryKind::Select { from_table, .. } => {
+                    if !db.tables.iter().any(|t| &t.name == from_table) {
+                        return Err(anyhow!(
+                            "Query '{}' references unknown table '{}' in database '{}'",
+                            query.name,
+                            from_table,
+                            db.name
+                        ));
+                    }
+                }
+                QueryKind::Insert { table, .. } => {
+                    if !db.tables.iter().any(|t| &t.name == table) {
+                        return Err(anyhow!(
+                            "Query '{}' references unknown table '{}' in database '{}'",
+                            query.name,
+                            table,
+                            db.name
+                        ));
+                    }
+                }
+                QueryKind::Update { table, .. } => {
+                    if !db.tables.iter().any(|t| &t.name == table) {
+                        return Err(anyhow!(
+                            "Query '{}' references unknown table '{}' in database '{}'",
+                            query.name,
+                            table,
+                            db.name
+                        ));
+                    }
+                }
+                QueryKind::Delete { table, .. } => {
+                    if !db.tables.iter().any(|t| &t.name == table) {
+                        return Err(anyhow!(
+                            "Query '{}' references unknown table '{}' in database '{}'",
+                            query.name,
+                            table,
+                            db.name
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-08-27
+
+### Added
+
+- **Standard Library** — Built-in `math`, `string`, `array` modules
+  - `math::abs`, `math::max`, `math::min`, `math::sqrt`, `math::pow`, `math::floor`, `math::ceil`, `math::log`, `math::log2`, `math::log10`
+  - `string::length`, `string::concat`, `string::substring`, `string::equals`
+  - `array::len`, `array::push`, `array::sort`
+- **Package Manager** — `sandbox.toml` manifest with `[dependencies]` section
+  - `sandbox add <pkg>` — Add dependency to sandbox.toml
+  - `sandbox install` — Install all dependencies (placeholder for registry)
+  - `sandbox tree` — Show dependency tree
+- **Formatter** — `sandbox fmt` and `sandbox fmt --check` for .sbx files
+- **String Concatenation** — `+` operator for strings generates `__sbx_str_concat`
+- **Improved For-Loops** — Inline unrolled codegen for array literals
+- **Variable Type Tracking** — CodeGen tracks variable C types for correct `printf` format
+- **stdlib C Runtime** — String helpers, math functions via C stdlib
+- **Type keyword module syntax** — `string::concat`, `math::sqrt` work with type keywords as module names
+- 8 new integration tests (24 total)
+- 4 new examples: math_demo, string_demo, sorting_v3, bank_transfer
+
+### Changed
+
+- Version bumped to 0.3.0
+- Type checker registers stdlib builtins automatically
+- Codegen uses `std::collections::HashMap` for variable type tracking
+- For-loop with array literals generates scoped blocks (no redefinition errors)
+
 ## [0.2.0] - 2026-08-27
 
 ### Added

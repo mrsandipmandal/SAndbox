@@ -1,4 +1,6 @@
 use crate::ast::*;
+use crate::stdlib;
+use std::collections::HashMap;
 use std::fmt::Write;
 
 const MONEY_SCALE: i64 = 10000;
@@ -6,6 +8,7 @@ const MONEY_SCALE: i64 = 10000;
 pub struct CodeGen {
     output: String,
     indent: usize,
+    var_types: HashMap<String, String>,
 }
 
 impl CodeGen {
@@ -13,6 +16,7 @@ impl CodeGen {
         Self {
             output: String::new(),
             indent: 0,
+            var_types: HashMap::new(),
         }
     }
 
@@ -22,24 +26,21 @@ impl CodeGen {
         writeln!(self.output, "#include <string.h>").unwrap();
         writeln!(self.output).unwrap();
 
-        self.gen_program_items(&program.items);
+        self.output.push_str(&stdlib::c_preamble());
+        writeln!(self.output).unwrap();
 
+        self.gen_program_items(&program.items);
         self.output.clone()
     }
 
     fn gen_program_items(&mut self, items: &[TopLevel]) {
-        // Structs first
         for item in items {
             if let TopLevel::StructDef { name, fields } = item {
                 self.gen_struct(name, fields);
             }
         }
-
-        // Forward declarations (flatten modules)
         self.gen_fn_decls(items);
         writeln!(self.output).unwrap();
-
-        // Function bodies (flatten modules)
         self.gen_fn_bodies(items);
     }
 
@@ -113,6 +114,7 @@ impl CodeGen {
             .collect::<Vec<_>>()
             .join(", ");
 
+        self.var_types.clear();
         writeln!(self.output, "{} {}({}) {{", ret_str, name, params_str).unwrap();
         self.indent += 1;
 
@@ -138,8 +140,21 @@ impl CodeGen {
                 let c_ty = ty
                     .as_ref()
                     .map_or_else(|| self.infer_c_type(value), |t| self.c_type(t));
+                self.var_types.insert(name.clone(), c_ty.clone());
                 self.write_indent();
-                writeln!(self.output, "{} {} = {};", c_ty, name, self.gen_expr(value)).unwrap();
+                if matches!(value, Expr::ArrayLiteral(_)) && c_ty.ends_with('*') {
+                    let arr_ty = c_ty.trim_end_matches('*');
+                    writeln!(
+                        self.output,
+                        "{} {}[] = {};",
+                        arr_ty,
+                        name,
+                        self.gen_expr(value)
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(self.output, "{} {} = {};", c_ty, name, self.gen_expr(value)).unwrap();
+                }
             }
             Stmt::Assign { name, value } => {
                 self.write_indent();
@@ -185,25 +200,46 @@ impl CodeGen {
                 iterable,
                 body,
             } => {
-                let iter_expr = self.gen_expr(iterable);
-                self.write_indent();
-                writeln!(self.output, "long __arr[] = {};", iter_expr).unwrap();
-                self.write_indent();
-                writeln!(self.output, "for (int __i = 0, __len = sizeof(__arr) / sizeof(__arr[0]); __i < __len; __i++) {{").unwrap();
-                self.indent += 1;
-                self.write_indent();
-                writeln!(self.output, "long {} = __arr[__i];", variable).unwrap();
-                for s in body {
-                    self.gen_stmt(s);
+                if let Expr::ArrayLiteral(elems) = iterable {
+                    // Inline unrolled for literal arrays — each in its own block
+                    for elem in elems {
+                        self.write_indent();
+                        writeln!(self.output, "{{").unwrap();
+                        self.indent += 1;
+                        self.write_indent();
+                        writeln!(self.output, "long {} = {};", variable, self.gen_expr(elem))
+                            .unwrap();
+                        for s in body {
+                            self.gen_stmt(s);
+                        }
+                        self.indent -= 1;
+                        self.write_indent();
+                        writeln!(self.output, "}}").unwrap();
+                    }
+                } else {
+                    let iter_expr = self.gen_expr(iterable);
+                    self.write_indent();
+                    writeln!(self.output, "long __arr[] = (long[]){};", iter_expr).unwrap();
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "for (long __i = 0, __len = sizeof(__arr) / sizeof(__arr[0]); __i < __len; __i++) {{"
+                    )
+                    .unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "long {} = __arr[__i];", variable).unwrap();
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
                 }
-                self.indent -= 1;
-                self.write_indent();
-                writeln!(self.output, "}}").unwrap();
             }
             Stmt::Return(expr) => {
                 self.write_indent();
                 if let Some(e) = expr {
-                    // Check if we're returning an ErrExpr — generate differently
                     if let Expr::ErrExpr(msg) = e {
                         let msg_val = self.gen_expr(msg);
                         writeln!(
@@ -238,7 +274,7 @@ impl CodeGen {
                 let val = self.gen_expr(expr);
                 writeln!(
                     self.output,
-                    "printf(\"%%ld.%%04ld\\n\", {} / {}, {} %% {});",
+                    "printf(\"%%ld.%%04ld\\n\", {} / {}, {} % {});",
                     val, MONEY_SCALE, val, MONEY_SCALE
                 )
                 .unwrap();
@@ -254,13 +290,20 @@ impl CodeGen {
                 )
                 .unwrap();
             }
-            Expr::Ident(_) => {
-                writeln!(
-                    self.output,
-                    "printf(\"%ld\\n\", (long){});",
-                    self.gen_expr(expr)
-                )
-                .unwrap();
+            Expr::Ident(name) => {
+                let var_type = self.var_types.get(name.as_str()).map(|s| s.as_str());
+                if var_type == Some("const char*") {
+                    writeln!(self.output, "printf(\"%s\\n\", {});", self.gen_expr(expr)).unwrap();
+                } else if var_type == Some("double") {
+                    writeln!(self.output, "printf(\"%f\\n\", {});", self.gen_expr(expr)).unwrap();
+                } else {
+                    writeln!(
+                        self.output,
+                        "printf(\"%ld\\n\", (long){});",
+                        self.gen_expr(expr)
+                    )
+                    .unwrap();
+                }
             }
             _ => {
                 writeln!(
@@ -284,7 +327,13 @@ impl CodeGen {
                 format!("{}*", self.infer_c_type(&elems[0]))
             }
             Expr::StructLiteral { name, .. } => name.clone(),
-            Expr::Call { .. } => "long".into(),
+            Expr::Call { name, .. } => {
+                if let Some(b) = stdlib::builtins().get(name.as_str()) {
+                    self.c_type(&b.ret)
+                } else {
+                    "long".into()
+                }
+            }
             Expr::OkExpr(val) => self.infer_c_type(val),
             Expr::ErrExpr(_) => "const char*".into(),
             _ => "long".into(),
@@ -328,6 +377,12 @@ impl CodeGen {
                     BinOp::Or => "||",
                 };
 
+                if matches!(op, BinOp::Add) {
+                    if let (Expr::Str(_), _) | (_, Expr::Str(_)) = (left.as_ref(), right.as_ref()) {
+                        return format!("__sbx_str_concat({}, {})", l, r);
+                    }
+                }
+
                 let needs_scale = self.is_money_binop(left, right);
                 if needs_scale {
                     match op {
@@ -349,9 +404,13 @@ impl CodeGen {
             }
             Expr::Call { name, args } => {
                 let args_str: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
-                // Flatten module::func to just func for C
-                let c_name = name.rfind("::").map_or(name.as_str(), |i| &name[i + 2..]);
-                format!("{}({})", c_name, args_str.join(", "))
+                if stdlib::is_builtin(name) {
+                    let c_fn = stdlib::c_name(name);
+                    format!("{}({})", c_fn, args_str.join(", "))
+                } else {
+                    let c_name = name.rfind("::").map_or(name.as_str(), |i| &name[i + 2..]);
+                    format!("{}({})", c_name, args_str.join(", "))
+                }
             }
             Expr::StructLiteral { name, fields } => {
                 let fields_str: Vec<String> = fields

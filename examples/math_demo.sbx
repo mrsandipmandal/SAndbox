@@ -1,0 +1,26 @@
+// math_demo.sbx — Standard library math functions
+
+fn main() {
+    let x: f64 = 25.0
+    let root = math::sqrt(x)
+    print(root)
+
+    let a: f64 = -3.7
+    let abs_a = math::abs(a)
+    print(abs_a)
+
+    let m = math::max(10.5, 20.3)
+    print(m)
+
+    let p = math::pow(2.0, 10.0)
+    print(p)
+
+    let fl = math::floor(3.14)
+    print(fl)
+
+    let cl = math::ceil(3.14)
+    print(cl)
+
+    let l2 = math::log10(1000.0)
+    print(l2)
+}

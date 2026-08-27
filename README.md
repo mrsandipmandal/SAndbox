@@ -9,8 +9,8 @@
 [![CI](https://github.com/mrsandipmandal/SAndbox/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/Release-v0.2.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
-[![Tests](https://img.shields.io/badge/Tests-16%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
+[![Release](https://img.shields.io/badge/Release-v0.3.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
+[![Tests](https://img.shields.io/badge/Tests-24%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 
 <br>
 
@@ -55,6 +55,9 @@ let bad = salary + 100 USD   // ❌ Compile error: Currency mismatch!
 - **🎯 Type Inference** — `let x = 5` infers `i64` automatically
 - **❌ Error Handling** — `Result<T, E>`, `Ok()`, `Err()`, `?` operator
 - **📦 Modules** — `mod name { ... }` for code organization
+- **📚 Standard Library** — Built-in `math`, `string`, `array` modules
+- **📦 Package Manager** — `sandbox add`, `sandbox install`, `sandbox tree`
+- **🎨 Formatter** — `sandbox fmt` for consistent code style
 
 ---
 
@@ -249,16 +252,44 @@ fn get_age() -> Result<i64, string> {
 }
 ```
 
+### Standard Library
+
+```sbx
+// Math functions
+let root = math::sqrt(25.0)    // 5.0
+let m = math::max(10.5, 20.3)  // 20.3
+let p = math::pow(2.0, 10.0)  // 1024.0
+
+// String functions
+let full = string::concat("Hello", "World")  // "HelloWorld"
+let len = string::length("Sandbox")          // 7
+let eq = string::equals("abc", "abc")        // true
+```
+
+### Package Management
+
+```bash
+sandbox init myproject        # Create project with sandbox.toml
+sandbox add serde --version ^1.0  # Add dependency
+sandbox install               # Install all dependencies
+sandbox tree                  # Show dependency tree
+```
+
 ---
 
 ## 🛠️ CLI Commands
 
 ```bash
-sandbox init myproject       # Initialize new project
-sandbox run file.sbx         # Compile and run
-sandbox build file.sbx       # Build native binary
+sandbox init myproject        # Initialize new project
+sandbox run file.sbx          # Compile and run
+sandbox build file.sbx        # Build native binary
 sandbox build file.sbx -o myapp  # Build with custom name
-sandbox check file.sbx       # Type-check only
+sandbox check file.sbx        # Type-check only
+sandbox fmt file.sbx          # Format source file
+sandbox fmt --check file.sbx  # Check formatting
+sandbox add <pkg>             # Add dependency
+sandbox install               # Install dependencies
+sandbox tree                  # Show dependency tree
 ```
 
 ---
@@ -266,7 +297,7 @@ sandbox check file.sbx       # Type-check only
 ## 🧪 Testing
 
 ```bash
-cargo test                   # Run all 16 tests
+cargo test                   # Run all 24 tests
 cargo clippy                 # Lint (zero warnings)
 cargo fmt --check            # Check formatting
 ```
@@ -282,18 +313,22 @@ src/
 ├── lexer.rs          # Source → Tokens
 ├── ast.rs            # AST node definitions
 ├── parser.rs         # Tokens → AST (recursive descent)
-├── typechecker.rs    # Type checking + currency validation
+├── typechecker.rs    # Type checking + stdlib registration
 ├── codegen.rs        # AST → C code
+├── stdlib.rs         # Standard library (math, string, array)
 └── compiler.rs       # Pipeline orchestration
 
 examples/
 ├── hello.sbx         # Hello World
 ├── fibonacci.sbx     # Recursive fibonacci
 ├── struct_demo.sbx   # Structs + functions
-└── money.sbx         # Money type demo
+├── money.sbx         # Money type demo
+├── math_demo.sbx     # Math stdlib functions
+├── string_demo.sbx   # String stdlib functions
+└── sorting_v3.sbx    # Array operations
 
 tests/
-└── integration.rs    # 16 end-to-end tests
+└── integration.rs    # 24 end-to-end tests
 ```
 
 ---
@@ -312,13 +347,18 @@ tests/
 - [x] Module system (`mod`, `::`)
 - [x] Project init (`sandbox init`)
 
-### v0.3 — Package Ecosystem
-- [ ] Package manager (`sandbox add`)
-- [ ] Standard library (math, http, json)
+### v0.3 ✅ — Standard Library & Package Manager
+- [x] Standard library: `math`, `string`, `array` modules
+- [x] Package manager: `sandbox add`, `sandbox install`, `sandbox tree`
+- [x] Formatter: `sandbox fmt`, `sandbox fmt --check`
+- [x] String concatenation with `+` operator
 - [ ] LLVM backend for native optimization
-- [ ] WebAssembly target
+
+### v0.4 — Type System
 - [ ] Decimal type with exact arithmetic
 - [ ] Unit system (`10 kg`, `5 meter`)
+- [ ] WebAssembly target
+- [ ] HTTP / JSON standard library
 
 ### v1.0 — Production Ready
 - [ ] Self-hosting compiler

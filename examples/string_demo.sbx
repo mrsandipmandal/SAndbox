@@ -1,0 +1,20 @@
+// string_demo.sbx — Standard library string functions
+
+fn main() {
+    let greeting = "Hello"
+    let target = "World"
+    let full = string::concat(greeting, target)
+    print(full)
+
+    let len = string::length("Sandbox")
+    print(len)
+
+    let sub = string::substring("Hello, World!", 7, 5)
+    print(sub)
+
+    let eq = string::equals("abc", "abc")
+    print(eq)
+
+    let neq = string::equals("abc", "xyz")
+    print(neq)
+}

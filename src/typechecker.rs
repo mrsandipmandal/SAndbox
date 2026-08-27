@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::stdlib;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
@@ -18,6 +19,12 @@ impl TypeChecker {
     }
 
     pub fn check(&mut self, program: &Program) -> Result<()> {
+        // Register stdlib builtins
+        for (name, sig) in stdlib::builtins() {
+            let param_tys: Vec<Type> = sig.params.iter().map(|p| p.1.clone()).collect();
+            self.functions.insert(name, (param_tys, Some(sig.ret)));
+        }
+
         // First pass: register all struct definitions
         for item in &program.items {
             self.register_structs(item, "");
@@ -187,17 +194,23 @@ impl TypeChecker {
                 }
             }
             Expr::Call { name, args } => {
-                // Try full name first, then just the function name (for module::func)
-                let (param_tys, ret_ty) = self
-                    .functions
-                    .get(name)
-                    .or_else(|| {
-                        // Strip module prefix: "math::add" -> "add"
+                // Try user-defined first, then stdlib builtins
+                let (param_tys, ret_ty): (Vec<Type>, Option<Type>) = if let Some(sig) =
+                    self.functions.get(name).or_else(|| {
                         name.rfind("::")
                             .map(|i| &name[i + 2..])
                             .and_then(|short| self.functions.get(short))
-                    })
-                    .ok_or_else(|| anyhow!("Unknown function '{}'", name))?;
+                    }) {
+                    sig.clone()
+                } else if let Some(b) = stdlib::builtins().get(name.as_str()) {
+                    (
+                        b.params.iter().map(|p| p.1.clone()).collect(),
+                        Some(b.ret.clone()),
+                    )
+                } else {
+                    return Err(anyhow!("Unknown function '{}'", name));
+                };
+
                 if args.len() != param_tys.len() {
                     return Err(anyhow!(
                         "Function '{}' expects {} args, got {}",
@@ -206,9 +219,9 @@ impl TypeChecker {
                         args.len()
                     ));
                 }
-                for (i, (arg, expected)) in args.iter().zip(param_tys).enumerate() {
+                for (i, (arg, expected)) in args.iter().zip(&param_tys).enumerate() {
                     let arg_ty = self.check_expr(arg)?;
-                    if &arg_ty != expected {
+                    if arg_ty != *expected {
                         return Err(anyhow!(
                             "Arg {} of '{}': expected '{}', got '{}'",
                             i + 1,
@@ -218,7 +231,7 @@ impl TypeChecker {
                         ));
                     }
                 }
-                Ok(ret_ty.clone().unwrap_or(Type::Void))
+                Ok(ret_ty.unwrap_or(Type::Void))
             }
             Expr::StructLiteral { name, fields } => {
                 let struct_fields = self
@@ -271,19 +284,14 @@ impl TypeChecker {
                     _ => Err(anyhow!("Cannot index into '{}'", target_ty)),
                 }
             }
-            // v0.2: Ok(value)
             Expr::OkExpr(value) => {
                 let val_ty = self.check_expr(value)?;
-                // Wrap in Result<T, string> for now
                 Ok(Type::Result(Box::new(val_ty), Box::new(Type::String)))
             }
-            // v0.2: Err(error)
             Expr::ErrExpr(error) => {
                 let err_ty = self.check_expr(error)?;
-                // Wrap in Result<something, E>
                 Ok(Type::Result(Box::new(Type::Void), Box::new(err_ty)))
             }
-            // v0.2: panic!("message")
             Expr::PanicExpr(msg) => {
                 let msg_ty = self.check_expr(msg)?;
                 if msg_ty != Type::String {
@@ -291,7 +299,6 @@ impl TypeChecker {
                 }
                 Ok(Type::Void)
             }
-            // v0.2: expr?
             Expr::TryExpr(expr) => {
                 let ty = self.check_expr(expr)?;
                 match &ty {
@@ -313,6 +320,10 @@ impl TypeChecker {
                         return Err(anyhow!("Currency mismatch: Money<{}> + Money<{}>", lc, rc));
                     }
                     return Ok(Type::Money(lc.clone()));
+                }
+                // String concatenation
+                if let (Type::String, Type::String) = (lt, rt) {
+                    return Ok(Type::String);
                 }
                 Err(anyhow!("Cannot apply {:?} to '{}' and '{}'", op, lt, rt))
             }
@@ -390,7 +401,6 @@ impl TypeChecker {
                 name, params, ret, ..
             } => {
                 let param_tys: Vec<Type> = params.iter().map(|p| p.ty.clone()).collect();
-                // Register with prefix for module::func
                 let full_name = if prefix.is_empty() {
                     name.clone()
                 } else {

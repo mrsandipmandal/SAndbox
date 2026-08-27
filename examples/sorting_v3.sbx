@@ -1,0 +1,15 @@
+// sorting_v3.sbx — Array demo
+
+fn main() {
+    for item in [30, 10, 50, 20, 40] {
+        print(item)
+    }
+
+    print("---")
+
+    let arr = [30, 10, 50, 20, 40]
+    let first = arr[0]
+    let second = arr[1]
+    let sum = first + second
+    print(sum)
+}

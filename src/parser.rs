@@ -522,6 +522,31 @@ impl Parser {
                     Ok(Expr::Ident(full_name))
                 }
             }
+            // Type keywords used as module names (e.g. string::concat)
+            Token::TypeString
+            | Token::TypeI64
+            | Token::TypeF64
+            | Token::TypeBool
+            | Token::TypeMoney
+            | Token::TypeDecimal
+                if self.peek_token_at(1, &Token::Colon) && self.peek_token_at(2, &Token::Colon) =>
+            {
+                let module_name = match self.current_token() {
+                    Token::TypeString => "string".to_string(),
+                    Token::TypeI64 => "int".to_string(),
+                    Token::TypeF64 => "float".to_string(),
+                    Token::TypeBool => "bool".to_string(),
+                    Token::TypeMoney => "money".to_string(),
+                    Token::TypeDecimal => "decimal".to_string(),
+                    _ => unreachable!(),
+                };
+                self.advance(); // skip type keyword
+                self.advance(); // first :
+                self.advance(); // second :
+                let fn_name = self.expect_ident()?;
+                let full_name = format!("{}::{}", module_name, fn_name);
+                Ok(Expr::Ident(full_name))
+            }
             Token::LBracket => {
                 self.advance();
                 let mut elems = Vec::new();

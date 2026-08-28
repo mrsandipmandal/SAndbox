@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![Release](https://img.shields.io/badge/Release-v1.0.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
-[![Tests](https://img.shields.io/badge/Tests-35%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
+[![Tests](https://img.shields.io/badge/Tests-60%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 
 <br>
 
@@ -59,6 +59,7 @@ let bad = salary + 100 USD   // ❌ Compile error: Currency mismatch!
 - **🔄 Control Flow** — `if/else`, `while`, `for...in` loops
 - **🎯 Type Inference** — `let x = 5` infers `i64` automatically
 - **❌ Error Handling** — `Result<T, E>`, `Ok()`, `Err()`, `?` operator
+- **🧩 Enums & Pattern Matching** — Algebraic data types with `match` expressions
 - **📦 Modules** — `mod name { ... }` for code organization
 - **📚 Standard Library** — Built-in `math`, `string`, `array` modules
 - **📦 Package Manager** — `sandbox add`, `sandbox install`, `sandbox tree`
@@ -271,6 +272,82 @@ let len = string::length("Sandbox")          // 7
 let eq = string::equals("abc", "abc")        // true
 ```
 
+### JSON Module
+
+```sbx
+// Stringify values
+let i = json::stringify(12345)           // "12345"
+let f = json::stringify_float(99.5)     // "99.500000"
+let s = json::stringify_string("hello") // "\"hello\""
+let b = json::stringify_bool(true)       // "true"
+
+// Parse JSON
+let num = json::parse("{\"x\":42}")         // 42
+let pi = json::parse_float("{\"v\":3.14}")   // 3.14
+let str = json::parse_string("[\"a\",\"b\"]") // "a"
+
+// Query JSON objects
+let obj = "{\"name\":\"Alice\",\"age\":30}"
+let name = json::get(obj, "name")   // "Alice"
+let ok = json::has_key(obj, "name") // true
+let len = json::array_len("[1,2,3]") // 3
+
+// Parse object into key-value map
+let user = json::parse_object("{\"name\":\"Alice\",\"age\":30}")
+let name = json::map_get(user, "name")   // "Alice"
+let keys = json::map_keys(user)           // "name,age"
+let n = json::map_len(user)               // 2
+```
+
+### HTTP Module
+
+```sbx
+let resp = http::get("http://example.com")
+let post = http::post("http://api.example.com", "{\"key\":\"val\"}")
+let del = http::delete("http://api.example.com/resource")
+let upd = http::put("http://api.example.com/resource", "{\"updated\":true}")
+let patch = http::patch("http://api.example.com/resource", "{\"field\":1}")
+let ct = http::headers(resp, "Content-Type")
+let code = http::status_code(resp) // 200
+
+// Multi-request server (handles connections in a loop)
+fn handler(path: string) -> string { return json::stringify_string(path) }
+http::serve(8080, "handler", 0) // listens forever
+
+// One-shot server (handles one request then exits)
+http::serve_once(8080, "handler", 0)
+```
+
+### Enums & Pattern Matching
+
+```sbx
+enum Color { Red, Green, Blue }
+enum Shape { Circle(f64), Square(f64), Point }
+
+fn describe(c: Color) -> string {
+    match c {
+        Color::Red => "red",
+        Color::Green => "green",
+        Color::Blue => "blue",
+        _ => "unknown",
+    }
+}
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle(r) => r * r * 3.14,
+        Shape::Square(s) => s * s,
+        Shape::Point => 0.0,
+    }
+}
+
+fn main() {
+    print(describe(Color::Red))            // red
+    print(area(Shape::Circle(5.0)))        // 78.5
+    print(area(Shape::Point))              // 0
+}
+```
+
 ### Unit System
 
 ```sbx
@@ -321,7 +398,7 @@ sandbox wasm file.sbx         # Generate .wat file
 ## 🧪 Testing
 
 ```bash
-cargo test                   # Run all 35 tests
+cargo test                   # Run all 60 tests
 cargo clippy                 # Lint (zero warnings)
 cargo fmt --check            # Check formatting
 ```
@@ -359,7 +436,7 @@ examples/
 └── selfhost_compiler.sbx  # Self-hosting mini-compiler
 
 tests/
-└── integration.rs    # 35 end-to-end tests
+└── integration.rs    # 60 end-to-end tests
 ```
 
 ---

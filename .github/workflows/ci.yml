@@ -20,6 +20,11 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install GCC (needed for integration tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
+
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:
@@ -47,6 +52,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - name: Install GCC (needed for compilation)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
 
       - name: Cache cargo
         uses: actions/cache@v4

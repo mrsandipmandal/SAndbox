@@ -230,7 +230,63 @@ s.field
 
 ---
 
-## 8. Error Handling
+## 8. Enums & Pattern Matching
+
+### Enum Definition
+
+```
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+enum Shape {
+    Circle(f64),
+    Square(f64),
+    Point,
+}
+```
+
+### Enum Variants
+
+```
+let c = Color::Red          // unit variant
+let s = Shape::Circle(5.0)  // payload variant
+```
+
+### Pattern Matching
+
+```
+match c {
+    Color::Red => 1,
+    Color::Green => 2,
+    Color::Blue => 3,
+    _ => 0,
+}
+
+match s {
+    Shape::Circle(r) => r * r * 3.14,
+    Shape::Square(s) => s * s,
+    Shape::Point => 0.0,
+}
+```
+
+### Pattern Types
+
+| Pattern | Example | Description |
+|---------|---------|-------------|
+| Enum variant | `Color::Red` | Matches a specific variant |
+| Enum + binding | `Shape::Circle(r)` | Matches variant and binds payload |
+| Integer literal | `42` | Matches a specific integer |
+| Bool literal | `true` | Matches a specific bool |
+| String literal | `"hello"` | Matches a specific string |
+| Variable | `x` | Binds any value to `x` |
+| Wildcard | `_` | Matches anything (no binding) |
+
+---
+
+## 10. Error Handling
 
 ### Result Type
 

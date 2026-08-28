@@ -16,6 +16,7 @@ pub enum Type {
     Void,
     Custom(String),
     Result(Box<Type>, Box<Type>),
+    Fn(Vec<Type>, Box<Type>),
 }
 
 impl fmt::Display for Type {
@@ -32,6 +33,10 @@ impl fmt::Display for Type {
             Type::Void => write!(f, "void"),
             Type::Custom(n) => write!(f, "{}", n),
             Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            Type::Fn(params, ret) => {
+                let params_str: Vec<String> = params.iter().map(|p| format!("{}", p)).collect();
+                write!(f, "Fn({}) -> {}", params_str.join(", "), ret)
+            }
         }
     }
 }
@@ -84,6 +89,26 @@ pub enum Expr {
     ErrExpr(Box<Expr>),
     PanicExpr(Box<Expr>),
     TryExpr(Box<Expr>),
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        payload: Option<Box<Expr>>,
+    },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+    Lambda {
+        params: Vec<Param>,
+        ret: Option<Type>,
+        body: Vec<Stmt>,
+    },
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
+    },
+    FString(Vec<FStringPart>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -236,6 +261,42 @@ pub struct DatabaseDef {
     pub queries: Vec<QueryDef>,
 }
 
+// ── Enums + pattern matching ──
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantDef {
+    pub name: String,
+    pub payload: Option<Type>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        binding: Option<String>,
+    },
+    IntLiteral(i64),
+    BoolLiteral(bool),
+    StrLiteral(String),
+    Wildcard,
+    Variable(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+}
+
+// ── FString parts ──
+
+#[derive(Debug, Clone)]
+pub enum FStringPart {
+    Literal(String),
+    Expr(Box<Expr>),
+}
+
 // ── Top-level items ──
 
 #[derive(Debug, Clone)]
@@ -258,6 +319,16 @@ pub enum TopLevel {
     LedgerDef(LedgerDef),
     // v1.0: Database
     DatabaseDef(DatabaseDef),
+    // v2.0: Use imports
+    Use {
+        path: Vec<String>,
+        wildcard: bool,
+    },
+    // v1.1: Enums
+    EnumDef {
+        name: String,
+        variants: Vec<EnumVariantDef>,
+    },
 }
 
 // ── Program ──

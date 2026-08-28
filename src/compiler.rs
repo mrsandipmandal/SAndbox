@@ -46,6 +46,19 @@ impl Compiler {
         Ok(c_code)
     }
 
+    /// Compile without printing progress messages (for REPL)
+    pub fn compile_quiet(&self) -> Result<String> {
+        let mut lexer = Lexer::new(&self.source);
+        let tokens = lexer.tokenize()?;
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse()?;
+        let mut checker = TypeChecker::new();
+        checker.check(&program)?;
+        let mut codegen = CodeGen::new();
+        let c_code = codegen.generate(&program);
+        Ok(c_code)
+    }
+
     fn parse_for_codegen(&self) -> Result<Program> {
         println!("[sandbox] Compiling {}", self.filename);
 
@@ -77,6 +90,7 @@ impl Compiler {
             .arg(output)
             .arg(&c_path)
             .arg("-lm")
+            .arg("-Wno-incompatible-pointer-types")
             .status()?;
         if !status.success() {
             return Err(anyhow!("gcc compilation failed"));
@@ -143,10 +157,13 @@ impl Compiler {
             .arg(&bin)
             .arg(&tmp)
             .arg("-lm")
+            .arg("-Wno-incompatible-pointer-types")
             .status()?;
         if !status.success() {
+            let debug_path = std::env::temp_dir().join("sandbox_debug.c");
+            let _ = fs::copy(&tmp, &debug_path);
             let _ = fs::remove_file(&tmp);
-            return Err(anyhow!("gcc compilation failed"));
+            return Err(anyhow!("gcc compilation failed — C saved to {}", debug_path.display()));
         }
 
         let status = Command::new(&bin).status()?;
@@ -190,6 +207,44 @@ impl Compiler {
 
         fs::write(output, &wat)?;
         println!("  ✓ {} lines of WAT → {}", wat.lines().count(), output);
+        Ok(())
+    }
+
+    pub fn llvm(&self, output: &str) -> Result<()> {
+        let program = self.parse_for_codegen()?;
+
+        println!("  Generating LLVM IR...");
+        let mut llvmgen = crate::llvmgen::LlvmGen::new();
+        let ir = llvmgen.generate(&program);
+
+        fs::write(output, &ir)?;
+        println!("  {} lines of LLVM IR -> {}", ir.lines().count(), output);
+        println!("  Compile with: clang {} -o output", output);
+        Ok(())
+    }
+
+    pub fn build_llvm(&self, output: &str) -> Result<()> {
+        let program = self.parse_for_codegen()?;
+
+        println!("  Generating LLVM IR...");
+        let mut llvmgen = crate::llvmgen::LlvmGen::new();
+        let ir = llvmgen.generate(&program);
+
+        let ll_path = format!("{}.ll", output);
+        fs::write(&ll_path, &ir)?;
+        println!("  {} lines of LLVM IR -> {}", ir.lines().count(), ll_path);
+
+        println!("  Compiling with clang...");
+        let status = Command::new("clang")
+            .arg(&ll_path)
+            .arg("-o")
+            .arg(output)
+            .arg("-lm")
+            .status()?;
+        if !status.success() {
+            return Err(anyhow!("clang compilation failed"));
+        }
+        println!("  Built: {}", output);
         Ok(())
     }
 }

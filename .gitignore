@@ -22,3 +22,6 @@ Thumbs.db
 
 # Sandbox build artifacts
 *.sbx.bin
+
+# Runtime databases
+kv.db

@@ -43,9 +43,15 @@ impl Lexer {
         match ch {
             '"' => self.read_string().map(|s| Spanned::new(s, line, col)),
             '0'..='9' => self.read_number().map(|t| Spanned::new(t, line, col)),
-            'a'..='z' | 'A'..='Z' | '_' => self
-                .read_ident_or_keyword()
-                .map(|t| Spanned::new(t, line, col)),
+            'a'..='z' | 'A'..='Z' | '_' => {
+                // Check for f-string prefix
+                if ch == 'f' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '"' {
+                    self.advance(); // skip 'f'
+                    return self.read_fstring().map(|s| Spanned::new(s, line, col));
+                }
+                self.read_ident_or_keyword()
+                    .map(|t| Spanned::new(t, line, col))
+            }
             '+' => {
                 self.advance();
                 Ok(Spanned::new(Token::Plus, line, col))
@@ -76,6 +82,9 @@ impl Lexer {
                 if self.peek() == Some('=') {
                     self.advance();
                     Ok(Spanned::new(Token::Eq, line, col))
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    Ok(Spanned::new(Token::FatArrow, line, col))
                 } else {
                     Ok(Spanned::new(Token::Assign, line, col))
                 }
@@ -111,9 +120,23 @@ impl Lexer {
                 self.advance();
                 Ok(Spanned::new(Token::QuestionMark, line, col))
             }
+            '|' => {
+                self.advance();
+                Ok(Spanned::new(Token::Pipe, line, col))
+            }
             '.' => {
                 self.advance();
-                Ok(Spanned::new(Token::Dot, line, col))
+                if self.peek() == Some('.') {
+                    self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Ok(Spanned::new(Token::DotDotEq, line, col))
+                    } else {
+                        Ok(Spanned::new(Token::DotDot, line, col))
+                    }
+                } else {
+                    Ok(Spanned::new(Token::Dot, line, col))
+                }
             }
             ',' => {
                 self.advance();
@@ -176,6 +199,7 @@ impl Lexer {
                 match esc {
                     'n' => s.push('\n'),
                     't' => s.push('\t'),
+                    'r' => s.push('\r'),
                     '\\' => s.push('\\'),
                     '"' => s.push('"'),
                     _ => {
@@ -191,6 +215,77 @@ impl Lexer {
                 s.push(ch);
             }
             self.advance();
+        }
+    }
+
+    fn read_fstring(&mut self) -> Result<Token> {
+        self.advance(); // skip opening '"'
+        let mut s = String::new();
+        let mut depth: i32 = 0;
+        loop {
+            if self.pos >= self.input.len() {
+                return Err(anyhow!("Unterminated f-string at {}:{}", self.line, self.col));
+            }
+            let ch = self.input[self.pos];
+            if depth == 0 && ch == '"' {
+                self.advance();
+                return Ok(Token::FString(s));
+            }
+            if ch == '{' {
+                if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '{' {
+                    // Escaped {{
+                    self.advance();
+                    self.advance();
+                    s.push('{');
+                    s.push('{');
+                } else {
+                    depth += 1;
+                    s.push('{');
+                    self.advance();
+                }
+            } else if ch == '}' {
+                if depth > 0 {
+                    depth -= 1;
+                    s.push('}');
+                    self.advance();
+                } else if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '}' {
+                    // Escaped }}
+                    self.advance();
+                    self.advance();
+                    s.push('}');
+                    s.push('}');
+                } else {
+                    s.push('}');
+                    self.advance();
+                }
+            } else if ch == '\\' {
+                self.advance();
+                if self.pos >= self.input.len() {
+                    return Err(anyhow!("Unterminated escape in f-string at {}:{}", self.line, self.col));
+                }
+                let esc = self.input[self.pos];
+                match esc {
+                    'n' => s.push('\n'),
+                    't' => s.push('\t'),
+                    'r' => s.push('\r'),
+                    '\\' => s.push('\\'),
+                    '"' => s.push('"'),
+                    '{' => s.push('{'),
+                    '}' => s.push('}'),
+                    _ => {
+                        s.push('\\');
+                        s.push(esc);
+                    }
+                }
+                self.advance();
+            } else {
+                if ch == '\n' {
+                    self.line += 1;
+                    self.col = 0;
+                }
+                s.push(ch);
+                self.advance();
+            }
         }
     }
 
@@ -271,6 +366,8 @@ impl Lexer {
             "into" | "INTO" => Token::Into,
             "values" | "VALUES" => Token::Values,
             "set" | "SET" => Token::Set,
+            "enum" => Token::Enum,
+            "match" => Token::Match,
             // Currencies
             "INR" | "USD" | "EUR" | "GBP" | "JPY" | "CNY" | "BDT" => Token::Currency(text),
             _ => Token::Ident(text),

@@ -35,6 +35,10 @@ pub enum Token {
     Mod,
     Use,
 
+    // v1.1: Enums + pattern matching
+    Enum,
+    Match,
+
     // v0.3: Types
     TypeI64,
     TypeF64,
@@ -62,6 +66,13 @@ pub enum Token {
     Values,
     Set,
 
+    // Lambda
+    Pipe,
+
+    // Ranges
+    DotDot,
+    DotDotEq,
+
     // Operators
     Plus,
     Minus,
@@ -76,6 +87,7 @@ pub enum Token {
     Ge,
     Assign,
     Arrow,
+    FatArrow,
     Dot,
     Comma,
     Colon,
@@ -86,6 +98,9 @@ pub enum Token {
     RBrace,
     LBracket,
     RBracket,
+
+    // FString
+    FString(String),
 
     // Money
     Currency(String),
@@ -103,6 +118,7 @@ impl fmt::Display for Token {
             Token::Bool(b) => write!(f, "{}", b),
             Token::Ident(s) => write!(f, "{}", s),
             Token::Currency(s) => write!(f, "{}", s),
+            Token::FString(s) => write!(f, "f\"{}\"", s),
             _ => write!(f, "{:?}", self),
         }
     }

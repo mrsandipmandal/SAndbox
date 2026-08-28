@@ -1,0 +1,49 @@
+{
+  "name": "sandbox-language",
+  "displayName": "Sandbox Language",
+  "description": "Sandbox — the financially-safe general-purpose programming language. LSP integration + syntax highlighting.",
+  "version": "2.0.0",
+  "publisher": "sandbox-lang",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Linters"],
+  "keywords": ["sandbox", "language", "financial", "ledger", "wasm"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onLanguage:sandbox"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "sandbox",
+        "aliases": ["Sandbox", "sandbox"],
+        "extensions": [".sbx"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sandbox",
+        "scopeName": "source.sandbox",
+        "path": "./syntaxes/sandbox.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "sandbox.restartLsp",
+        "title": "Sandbox: Restart Language Server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "tsc -p ./",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

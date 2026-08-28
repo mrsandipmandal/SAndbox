@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Sandbox",
+  "scopeName": "source.sandbox",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#stdlib" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#money-units" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.sandbox", "match": "//.*$" },
+        { "name": "comment.block.sandbox", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        { "name": "string.quoted.double.sandbox", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.sandbox", "match": "\\\\(n|t|r|\\\\\"|\\\\)" }] }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.decimal.sandbox", "match": "\\b\\d+(\\.\\d+)?\\b" }
+      ]
+    },
+    "stdlib": {
+      "patterns": [
+        { "name": "support.function.sandbox", "match": "\\b(math|string|array|json|http|db|chan|time)::[a-z_]+\\b" },
+        { "name": "support.function.sandbox", "match": "\\b(spawn|sleep|print|panic)\\b" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.sandbox", "match": "\\b(if|else|while|for|in|return|break|continue|match|try|import|mod|use|pub)\\b" },
+        { "name": "storage.type.sandbox", "match": "\\b(fn|let|mut|const|struct|impl|enum)\\b" },
+        { "name": "keyword.other.sandbox", "match": "\\b(ledger|database|table|query|debit|credit|select|from|where|insert|into|values|update|set|delete|account|entry|balance|check|currency)\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.sandbox", "match": "\\b(i8|i16|i32|i64|f32|f64|bool|string|void|decimal|byte|Money|Rate|Percentage|Quantity|Decimal)\\b" }
+      ]
+    },
+    "money-units": {
+      "patterns": [
+        { "name": "constant.other.unit.sandbox", "match": "\\b(INR|USD|EUR|GBP|JPY|kg|meter|second|watt|celsius|byte|ms|MB|GB)\\b" }
+      ]
+    }
+  }
+}

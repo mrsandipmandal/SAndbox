@@ -9,8 +9,8 @@
 [![CI](https://github.com/mrsandipmandal/SAndbox/actions/workflows/ci.yml/badge.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Release](https://img.shields.io/badge/Release-v1.0.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
-[![Tests](https://img.shields.io/badge/Tests-60%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
+[![Release](https://img.shields.io/badge/Release-v1.1.0-green.svg)](https://github.com/mrsandipmandal/SAndbox/releases)
+[![Tests](https://img.shields.io/badge/Tests-70%20passing-brightgreen.svg)](https://github.com/mrsandipmandal/SAndbox/actions)
 
 <br>
 

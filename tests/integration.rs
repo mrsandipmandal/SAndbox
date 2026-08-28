@@ -1416,7 +1416,9 @@ fn main() {
     assert!(output.contains("4"), "Expected 4, got: {}", output);
     assert!(output.contains("5"), "Expected 5, got: {}", output);
     assert!(output.contains("6"), "Expected 6, got: {}", output);
-    assert!(!output.contains("7"), "Should not contain 7 (exclusive), got: {}", output);
+    // Check for standalone "7" on its own line (not in temp file paths or warnings)
+    let has_standalone_7 = output.lines().any(|l| l.trim() == "7");
+    assert!(!has_standalone_7, "Should not contain 7 (exclusive), got: {}", output);
 }
 
 #[test]

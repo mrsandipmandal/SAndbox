@@ -1,0 +1,26 @@
+// concurrency_demo.sbx — threads, channels, and timing
+// Run: sandbox run examples/concurrency_demo.sbx
+
+fn worker(ch: i64) {
+    chan::send(ch, 42)
+}
+
+fn consumer(ch: i64) {
+    let value = chan::recv(ch)
+    print(value)
+}
+
+fn main() {
+    let ch = chan::create()
+
+    spawn("worker", ch)
+    spawn("consumer", ch)
+
+    sleep(200)
+
+    let start = time::ms()
+    sleep(50)
+    let elapsed = time::ms() - start
+    print(elapsed)
+    print("done")
+}

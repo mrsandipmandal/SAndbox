@@ -1,0 +1,24 @@
+// kvstore_demo.sbx — file-backed persistent key-value store
+// Run: sandbox run examples/kvstore_demo.sbx
+// Data persists across runs in ./kv.db
+
+fn main() {
+    let db = db::open("kv.db")
+
+    db::put(db, "alice", 500)
+    db::put(db, "bob", 250)
+    db::put(db, "carol", 1000)
+
+    let count = db::count(db)
+    print(count)
+
+    let alice_balance = db::get(db, "alice")
+    print(alice_balance)
+
+    db::delete(db, "bob")
+
+    let count_after = db::count(db)
+    print(count_after)
+
+    db::close(db)
+}

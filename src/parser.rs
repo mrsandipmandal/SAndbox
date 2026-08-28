@@ -82,11 +82,9 @@ impl Parser {
         match self.current_token() {
             Token::Fn => self.parse_fn_def(),
             Token::Struct => self.parse_struct_def(),
+            Token::Enum => self.parse_enum_def(),
             Token::Mod => self.parse_module_def(),
-            Token::Use => {
-                self.skip_use_statement();
-                self.parse_top_level()
-            }
+            Token::Use => self.parse_use_statement(),
             Token::Ledger => self.parse_ledger_def(),
             Token::Database => self.parse_database_def(),
             t => Err(self.error(format!(
@@ -96,14 +94,23 @@ impl Parser {
         }
     }
 
-    fn skip_use_statement(&mut self) {
-        self.advance();
-        while !self.is_at_end() && !self.peek_token(&Token::Semicolon) {
-            self.advance();
+    fn parse_use_statement(&mut self) -> Result<TopLevel> {
+        self.expect_token(&Token::Use)?;
+        let mut path = Vec::new();
+        path.push(self.expect_ident()?);
+        while self.peek_token(&Token::Colon) && self.peek_token_at(1, &Token::Colon) {
+            self.advance(); // skip first :
+            self.advance(); // skip second :
+            if self.peek_token(&Token::Star) {
+                self.advance();
+                let wildcard = true;
+                self.expect_token(&Token::Semicolon)?;
+                return Ok(TopLevel::Use { path, wildcard });
+            }
+            path.push(self.expect_ident()?);
         }
-        if self.peek_token(&Token::Semicolon) {
-            self.advance();
-        }
+        self.expect_token(&Token::Semicolon)?;
+        Ok(TopLevel::Use { path, wildcard: false })
     }
 
     // ── Function / Struct / Module (unchanged) ──
@@ -148,6 +155,33 @@ impl Parser {
         }
         self.expect_token(&Token::RBrace)?;
         Ok(TopLevel::StructDef { name, fields })
+    }
+
+    fn parse_enum_def(&mut self) -> Result<TopLevel> {
+        self.expect_token(&Token::Enum)?;
+        let name = self.expect_ident()?;
+        self.expect_token(&Token::LBrace)?;
+        let mut variants = Vec::new();
+        while !self.peek_token(&Token::RBrace) {
+            let vname = self.expect_ident()?;
+            let payload = if self.peek_token(&Token::LParen) {
+                self.advance();
+                let ty = self.parse_type()?;
+                self.expect_token(&Token::RParen)?;
+                Some(ty)
+            } else {
+                None
+            };
+            variants.push(EnumVariantDef {
+                name: vname,
+                payload,
+            });
+            if !self.peek_token(&Token::RBrace) {
+                self.expect_token(&Token::Comma)?;
+            }
+        }
+        self.expect_token(&Token::RBrace)?;
+        Ok(TopLevel::EnumDef { name, variants })
     }
 
     fn parse_module_def(&mut self) -> Result<TopLevel> {
@@ -452,6 +486,26 @@ impl Parser {
                 self.expect_token(&Token::Gt)?;
                 Ok(Type::Result(Box::new(ok_ty), Box::new(err_ty)))
             }
+            ref tok if matches!(tok, Token::Fn) || matches!(tok, Token::Ident(n) if n == "Fn") => {
+                self.advance();
+                self.expect_token(&Token::LParen)?;
+                let mut param_tys = Vec::new();
+                if !self.peek_token(&Token::RParen) {
+                    param_tys.push(self.parse_type()?);
+                    while self.peek_token(&Token::Comma) {
+                        self.advance();
+                        param_tys.push(self.parse_type()?);
+                    }
+                }
+                self.expect_token(&Token::RParen)?;
+                let ret = if self.peek_token(&Token::Arrow) {
+                    self.advance();
+                    self.parse_type()?
+                } else {
+                    Type::Void
+                };
+                Ok(Type::Fn(param_tys, Box::new(ret)))
+            }
             Token::Ident(ref name) if is_unit_name(name) => {
                 let unit = name.clone();
                 self.advance();
@@ -592,7 +646,22 @@ impl Parser {
     // ── Expressions ──
 
     fn parse_expr(&mut self) -> Result<Expr> {
-        self.parse_addition()
+        self.parse_range()
+    }
+
+    fn parse_range(&mut self) -> Result<Expr> {
+        let mut left = self.parse_addition()?;
+        if self.peek_token(&Token::DotDot) || self.peek_token(&Token::DotDotEq) {
+            let inclusive = self.peek_token(&Token::DotDotEq);
+            self.advance();
+            let right = self.parse_addition()?;
+            left = Expr::Range {
+                start: Box::new(left),
+                end: Box::new(right),
+                inclusive,
+            };
+        }
+        Ok(left)
     }
 
     fn parse_addition(&mut self) -> Result<Expr> {
@@ -711,6 +780,31 @@ impl Parser {
         Ok(expr)
     }
 
+    /// Returns an identifier that names a module function; some keyword tokens
+    /// (e.g. `delete` in db::delete, `get` in http::get) are lexed as keywords.
+    fn take_module_fn_name(&mut self) -> Result<String> {
+        match self.current_token().clone() {
+            Token::Ident(name) => {
+                self.advance();
+                Ok(name)
+            }
+            Token::Delete => {
+                self.advance();
+                Ok("delete".to_string())
+            }
+            Token::Select | Token::Insert | Token::Update | Token::Set
+            | Token::Where | Token::From | Token::Into | Token::Values => {
+                let s = format!("{:?}", self.current_token());
+                self.advance();
+                Ok(s.to_lowercase())
+            }
+            ref t => Err(self.error(format!(
+                "Expected function name after '::', got {:?}",
+                t
+            ))),
+        }
+    }
+
     fn parse_primary(&mut self) -> Result<Expr> {
         match self.current_token().clone() {
             Token::Int(n) => {
@@ -787,17 +881,36 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                let full_name =
-                    if self.peek_token(&Token::Colon) && self.peek_token_at(1, &Token::Colon) {
-                        self.advance();
-                        self.advance();
-                        let fn_name = self.expect_ident()?;
-                        format!("{}::{}", name, fn_name)
+                if self.peek_token(&Token::Colon) && self.peek_token_at(1, &Token::Colon) {
+                    self.advance();
+                    self.advance();
+                    // Could be enum variant or module::function — handle keyword names
+                    let variant_name = self.take_module_fn_name()?;
+                    if name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                        // Enum variant — check for payload
+                        if self.peek_token(&Token::LParen) {
+                            self.advance();
+                            let payload = self.parse_expr()?;
+                            self.expect_token(&Token::RParen)?;
+                            Ok(Expr::EnumVariant {
+                                enum_name: name,
+                                variant: variant_name,
+                                payload: Some(Box::new(payload)),
+                            })
+                        } else {
+                            Ok(Expr::EnumVariant {
+                                enum_name: name,
+                                variant: variant_name,
+                                payload: None,
+                            })
+                        }
                     } else {
-                        name.clone()
-                    };
-                if self.peek_token(&Token::LBrace)
-                    && full_name.chars().next().is_some_and(|c| c.is_uppercase())
+                        // Module function call
+                        let full_name = format!("{}::{}", name, variant_name);
+                        Ok(Expr::Ident(full_name))
+                    }
+                } else if self.peek_token(&Token::LBrace)
+                    && name.chars().next().is_some_and(|c| c.is_uppercase())
                 {
                     self.advance();
                     let mut fields = Vec::new();
@@ -812,11 +925,11 @@ impl Parser {
                     }
                     self.expect_token(&Token::RBrace)?;
                     Ok(Expr::StructLiteral {
-                        name: full_name,
+                        name,
                         fields,
                     })
                 } else {
-                    Ok(Expr::Ident(full_name))
+                    Ok(Expr::Ident(name))
                 }
             }
             Token::TypeString
@@ -855,6 +968,13 @@ impl Parser {
                 self.expect_token(&Token::RBracket)?;
                 Ok(Expr::ArrayLiteral(elems))
             }
+            Token::FString(raw) => {
+                self.advance();
+                let parts = self.parse_fstring_parts(&raw)?;
+                Ok(Expr::FString(parts))
+            }
+            Token::Pipe => self.parse_lambda(),
+            Token::Match => self.parse_match_expr(),
             Token::LParen => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -862,6 +982,175 @@ impl Parser {
                 Ok(expr)
             }
             ref t => Err(self.error(format!("Unexpected token {:?}", t))),
+        }
+    }
+
+    fn parse_lambda(&mut self) -> Result<Expr> {
+        self.expect_token(&Token::Pipe)?;
+        let mut params = Vec::new();
+        while !self.peek_token(&Token::Pipe) {
+            let name = self.expect_ident()?;
+            let ty = if self.peek_token(&Token::Colon) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            params.push(Param {
+                name,
+                ty: ty.unwrap_or(Type::I64),
+            });
+            if !self.peek_token(&Token::Pipe) {
+                self.expect_token(&Token::Comma)?;
+            }
+        }
+        self.expect_token(&Token::Pipe)?;
+
+        // Optional return type: -> Type
+        let ret = if self.peek_token(&Token::Arrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Body
+        self.expect_token(&Token::LBrace)?;
+        let mut body = Vec::new();
+        while !self.peek_token(&Token::RBrace) {
+            body.push(self.parse_stmt()?);
+        }
+        self.expect_token(&Token::RBrace)?;
+
+        Ok(Expr::Lambda { params, ret, body })
+    }
+
+    fn parse_fstring_parts(&self, raw: &str) -> Result<Vec<crate::ast::FStringPart>> {
+        let mut parts = Vec::new();
+        let chars: Vec<char> = raw.chars().collect();
+        let mut i = 0;
+        let mut current_literal = String::new();
+
+        while i < chars.len() {
+            if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] != '{' {
+                // Flush literal
+                if !current_literal.is_empty() {
+                    parts.push(crate::ast::FStringPart::Literal(current_literal.clone()));
+                    current_literal.clear();
+                }
+                // Find matching closing brace
+                let start = i + 1;
+                let mut depth = 1;
+                i += 1;
+                while i < chars.len() && depth > 0 {
+                    if chars[i] == '{' {
+                        depth += 1;
+                    } else if chars[i] == '}' {
+                        depth -= 1;
+                    }
+                    if depth > 0 {
+                        i += 1;
+                    }
+                }
+                if depth != 0 {
+                    return Err(anyhow::anyhow!("Unclosed {{ in f-string expression"));
+                }
+                let expr_str: String = chars[start..i].iter().collect();
+                i += 1; // skip closing }
+
+                // Tokenize and parse the expression
+                let mut lexer = crate::lexer::Lexer::new(&expr_str);
+                let tokens = lexer.tokenize()?;
+                let mut parser = Parser::new(tokens);
+                let expr = parser.parse_expr()?;
+                parts.push(crate::ast::FStringPart::Expr(Box::new(expr)));
+            } else if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '{' {
+                current_literal.push('{');
+                i += 2;
+            } else if chars[i] == '}' && i + 1 < chars.len() && chars[i + 1] == '}' {
+                current_literal.push('}');
+                i += 2;
+            } else {
+                current_literal.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        if !current_literal.is_empty() {
+            parts.push(crate::ast::FStringPart::Literal(current_literal));
+        }
+
+        Ok(parts)
+    }
+
+    fn parse_match_expr(&mut self) -> Result<Expr> {
+        self.expect_token(&Token::Match)?;
+        let scrutinee = self.parse_expr()?;
+        self.expect_token(&Token::LBrace)?;
+        let mut arms = Vec::new();
+        while !self.peek_token(&Token::RBrace) {
+            let pattern = self.parse_pattern()?;
+            self.expect_token(&Token::FatArrow)?;
+            // Arm body: single expression or block
+            let body = if self.peek_token(&Token::LBrace) {
+                self.parse_block()?
+            } else {
+                let expr = self.parse_expr()?;
+                vec![Stmt::ExprStmt(expr)]
+            };
+            arms.push(MatchArm { pattern, body });
+            if !self.peek_token(&Token::RBrace) {
+                self.expect_token(&Token::Comma)?;
+            }
+        }
+        self.expect_token(&Token::RBrace)?;
+        Ok(Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern> {
+        match self.current_token().clone() {
+            Token::Int(n) => {
+                self.advance();
+                Ok(Pattern::IntLiteral(n))
+            }
+            Token::Bool(b) => {
+                self.advance();
+                Ok(Pattern::BoolLiteral(b))
+            }
+            Token::Str(s) => {
+                self.advance();
+                Ok(Pattern::StrLiteral(s))
+            }
+            Token::Ident(name) => {
+                self.advance();
+                if self.peek_token(&Token::Colon) && self.peek_token_at(1, &Token::Colon) {
+                    // EnumVariant pattern: EnumName::Variant or EnumName::Variant(x)
+                    self.advance();
+                    self.advance();
+                    let variant = self.expect_ident()?;
+                    let binding = if self.peek_token(&Token::LParen) {
+                        self.advance();
+                        let b = self.expect_ident()?;
+                        self.expect_token(&Token::RParen)?;
+                        Some(b)
+                    } else {
+                        None
+                    };
+                    Ok(Pattern::EnumVariant {
+                        enum_name: name,
+                        variant,
+                        binding,
+                    })
+                } else if name == "_" {
+                    Ok(Pattern::Wildcard)
+                } else {
+                    Ok(Pattern::Variable(name))
+                }
+            }
+            _ => Err(self.error(format!("Expected pattern, got {:?}", self.current_token()))),
         }
     }
 

@@ -1,0 +1,58 @@
+// json_demo.sbx — JSON builtin module
+// Run: sandbox run examples/json_demo.sbx
+
+fn main() {
+    // Integer stringify
+    let payload = json::stringify(12345)
+    print(payload)
+
+    // Float stringify
+    let price = json::stringify_float(99.5)
+    print(price)
+
+    // String stringify (wraps in JSON quotes)
+    let sname = json::stringify_string("Alice")
+    print(sname)
+
+    // Bool stringify
+    let flag = json::stringify_bool(true)
+    print(flag)
+
+    // Parse float from JSON
+    let pi = json::parse_float("{\"value\":3.14159}")
+    print(pi)
+
+    // Parse string from JSON
+    let first = json::parse_string("[\"hello\",\"world\"]")
+    print(first)
+
+    // Get value by key
+    let obj = "{\"name\":\"Bob\",\"balance\":500}"
+    let uname = json::get(obj, "name")
+    print(uname)
+
+    let bal = json::get(obj, "balance")
+    print(bal)
+
+    // Check if key exists
+    let has_name = json::has_key(obj, "name")
+    print(has_name)
+
+    let has_missing = json::has_key(obj, "phone")
+    print(has_missing)
+
+    // Array length
+    let alen = json::array_len("[10,20,30,40]")
+    print(alen)
+
+    // Parse object into key-value map
+    let user = json::parse_object("{\"name\":\"Bob\",\"age\":25}")
+    let uname2 = json::map_get(user, "name")
+    print(uname2)
+    let uage = json::map_get(user, "age")
+    print(uage)
+    let keys = json::map_keys(user)
+    print(keys)
+    let mpair = json::map_len(user)
+    print(mpair)
+}

@@ -1,0 +1,14 @@
+// http_server_demo.sbx — multi-request HTTP server
+// Run: sandbox run examples/http_server_demo.sbx
+// Then: curl http://localhost:8080/hello
+//       curl http://localhost:8080/world
+
+fn handler(path: string) -> string {
+    let body = json::stringify_string(path)
+    return body
+}
+
+fn main() {
+    print("Starting Sandbox HTTP server on :8080 (handles multiple requests)")
+    http::serve(8080, "handler", 0)
+}

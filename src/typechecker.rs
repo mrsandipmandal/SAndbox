@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 pub struct TypeChecker {
     structs: HashMap<String, Vec<Field>>,
+    enums: HashMap<String, Vec<EnumVariantDef>>,
     functions: HashMap<String, (Vec<Type>, Option<Type>)>,
     scopes: Vec<HashMap<String, Type>>,
 }
@@ -13,6 +14,7 @@ impl TypeChecker {
     pub fn new() -> Self {
         Self {
             structs: HashMap::new(),
+            enums: HashMap::new(),
             functions: HashMap::new(),
             scopes: vec![HashMap::new()],
         }
@@ -29,7 +31,18 @@ impl TypeChecker {
         }
 
         for item in &program.items {
+            self.register_enums(item, "");
+        }
+
+        for item in &program.items {
             self.register_functions(item, "");
+        }
+
+        // Process use imports
+        for item in &program.items {
+            if let TopLevel::Use { path, wildcard } = item {
+                self.process_use(path, *wildcard)?;
+            }
         }
 
         // v1.0: Register ledger validate functions
@@ -181,7 +194,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn check_expr(&self, expr: &Expr) -> Result<Type> {
+    fn check_expr(&mut self, expr: &Expr) -> Result<Type> {
         match expr {
             Expr::Int(_) => Ok(Type::I64),
             Expr::Float(_) => Ok(Type::F64),
@@ -239,6 +252,13 @@ impl TypeChecker {
                         b.params.iter().map(|p| p.1.clone()).collect(),
                         Some(b.ret.clone()),
                     )
+                } else if let Some(ty) = self.resolve_variable_type(name) {
+                    // Check if the variable is a function type
+                    if let Type::Fn(params, ret) = ty {
+                        (params, Some(*ret))
+                    } else {
+                        return Err(anyhow!("'{}' is not callable (type '{}')", name, ty));
+                    }
                 } else {
                     return Err(anyhow!("Unknown function '{}'", name));
                 };
@@ -269,12 +289,13 @@ impl TypeChecker {
                 let struct_fields = self
                     .structs
                     .get(name)
+                    .cloned()
                     .ok_or_else(|| anyhow!("Unknown struct '{}'", name))?;
                 for (fname, fval) in fields {
                     let sf = struct_fields
                         .iter()
                         .find(|f| &f.name == fname)
-                        .ok_or_else(|| anyhow!("Unknown field '{}' in struct '{}'", fname, name))?;
+                        .ok_or_else(|| anyhow!("Unknown field '{}' in '{}'", fname, name))?;
                     let val_ty = self.check_expr(fval)?;
                     if !self.types_compatible(&sf.ty, &val_ty) {
                         return Err(anyhow!(
@@ -338,10 +359,131 @@ impl TypeChecker {
                     _ => Err(anyhow!("? operator requires Result type, got '{}'", ty)),
                 }
             }
+            Expr::EnumVariant {
+                enum_name,
+                variant,
+                payload,
+            } => {
+                let (has_payload, expected_payload) = {
+                    let ev = self
+                        .enums
+                        .get(enum_name)
+                        .ok_or_else(|| anyhow!("Unknown enum '{}'", enum_name))?;
+                    let v = ev
+                        .iter()
+                        .find(|v| v.name == *variant)
+                        .ok_or_else(|| anyhow!("Unknown variant '{}' in enum '{}'", variant, enum_name))?;
+                    (v.payload.is_some(), v.payload.clone())
+                };
+                match (has_payload, expected_payload, payload) {
+                    (false, _, None) => Ok(Type::Custom(enum_name.clone())),
+                    (true, Some(expected), Some(expr)) => {
+                        let arg_ty = self.check_expr(expr)?;
+                        if !self.types_compatible(&expected, &arg_ty) {
+                            return Err(anyhow!(
+                                "Enum variant '{}::{}': expected payload '{}', got '{}'",
+                                enum_name, variant, expected, arg_ty
+                            ));
+                        }
+                        Ok(Type::Custom(enum_name.clone()))
+                    }
+                    (false, _, Some(_)) => {
+                        Err(anyhow!("Variant '{}' does not take a payload", variant))
+                    }
+                    (true, _, None) => {
+                        Err(anyhow!("Variant '{}' requires a payload", variant))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            Expr::Match { scrutinee, arms } => {
+                let scrutinee_ty = self.check_expr(scrutinee)?;
+                let mut result_ty: Option<Type> = None;
+                for arm in arms {
+                    self.scopes.push(HashMap::new());
+                    // Bind pattern variables into scope
+                    match &arm.pattern {
+                        Pattern::Variable(name) => {
+                            self.scopes.last_mut().unwrap().insert(name.clone(), scrutinee_ty.clone());
+                        }
+                        Pattern::EnumVariant { enum_name, variant, binding: Some(b) } => {
+                            let payload_ty = self.enums.get(enum_name)
+                                .cloned()
+                                .and_then(|variants| {
+                                    variants.iter().find(|v| v.name == *variant)?.payload.clone()
+                                });
+                            if let Some(ty) = payload_ty {
+                                self.scopes.last_mut().unwrap().insert(b.clone(), ty);
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.check_block(&arm.body)?;
+                    if let Some(last) = arm.body.last() {
+                        let arm_ty = match last {
+                            Stmt::ExprStmt(e) => self.check_expr(e)?,
+                            Stmt::Return(Some(e)) => self.check_expr(e)?,
+                            _ => Type::Void,
+                        };
+                        match &result_ty {
+                            None => result_ty = Some(arm_ty),
+                            Some(prev) => {
+                                if !self.types_compatible(prev, &arm_ty) {
+                                    return Err(anyhow!("Match arm type mismatch: '{}' vs '{}'", prev, arm_ty));
+                                }
+                            }
+                        }
+                    }
+                    self.scopes.pop();
+                }
+                Ok(result_ty.unwrap_or(Type::Void))
+            }
+            Expr::Lambda { params, ret, body } => {
+                self.scopes.push(HashMap::new());
+                let mut param_tys = Vec::new();
+                for p in params {
+                    self.scopes.last_mut().unwrap().insert(p.name.clone(), p.ty.clone());
+                    param_tys.push(p.ty.clone());
+                }
+                for stmt in body {
+                    self.check_stmt(stmt)?;
+                }
+                let ret_ty = ret.clone().unwrap_or(Type::I64);
+                self.scopes.pop();
+                Ok(Type::Fn(param_tys, Box::new(ret_ty)))
+            }
+            Expr::Range { start, end, .. } => {
+                let start_ty = self.check_expr(start)?;
+                let end_ty = self.check_expr(end)?;
+                if !matches!(start_ty, Type::I64) {
+                    return Err(anyhow!("Range start must be i64, got '{}'", start_ty));
+                }
+                if !matches!(end_ty, Type::I64) {
+                    return Err(anyhow!("Range end must be i64, got '{}'", end_ty));
+                }
+                Ok(Type::Array(Box::new(Type::I64)))
+            }
+            Expr::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FStringPart::Expr(expr) = part {
+                        self.check_expr(expr)?;
+                    }
+                }
+                Ok(Type::String)
+            }
         }
     }
 
     /// Check if two types are compatible (same type or auto-coercion)
+    fn resolve_variable_type(&self, name: &str) -> Option<Type> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(ty.clone());
+            }
+        }
+        None
+    }
+
     fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
         if expected == actual {
             return true;
@@ -450,6 +592,11 @@ impl TypeChecker {
                 return Ok(ty.clone());
             }
         }
+        // Check if it's a known function (function reference)
+        if let Some((param_tys, ret_ty)) = self.functions.get(name) {
+            let ret = ret_ty.clone().unwrap_or(Type::Void);
+            return Ok(Type::Fn(param_tys.clone(), Box::new(ret)));
+        }
         Err(anyhow!("Undefined variable '{}'", name))
     }
 
@@ -471,6 +618,30 @@ impl TypeChecker {
                 };
                 for item in items {
                     self.register_structs(item, &new_prefix);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn register_enums(&mut self, item: &TopLevel, prefix: &str) {
+        match item {
+            TopLevel::EnumDef { name, variants } => {
+                let full_name = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}::{}", prefix, name)
+                };
+                self.enums.insert(full_name, variants.clone());
+            }
+            TopLevel::ModuleDef { name, items } => {
+                let new_prefix = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}::{}", prefix, name)
+                };
+                for item in items {
+                    self.register_enums(item, &new_prefix);
                 }
             }
             _ => {}
@@ -560,6 +731,61 @@ impl TypeChecker {
             }
             _ => Ok(0),
         }
+    }
+
+    // ── v2.0: use imports ──
+
+    fn process_use(&mut self, path: &[String], wildcard: bool) -> Result<()> {
+        let prefix = path.join("::");
+        if wildcard {
+            // Import all functions from the module
+            let module_prefix = format!("{}::", prefix);
+            let names: Vec<String> = self.functions.keys()
+                .filter(|k| k.starts_with(&module_prefix))
+                .cloned()
+                .collect();
+            for full_name in names {
+                if let Some(sig) = self.functions.get(&full_name).cloned() {
+                    let short_name = full_name[module_prefix.len()..].to_string();
+                    self.functions.insert(short_name, sig);
+                }
+            }
+            // Import structs
+            let struct_names: Vec<String> = self.structs.keys()
+                .filter(|k| k.starts_with(&module_prefix))
+                .cloned()
+                .collect();
+            for full_name in struct_names {
+                if let Some(fields) = self.structs.get(&full_name).cloned() {
+                    let short_name = full_name[module_prefix.len()..].to_string();
+                    self.structs.insert(short_name, fields);
+                }
+            }
+            // Import enums
+            let enum_names: Vec<String> = self.enums.keys()
+                .filter(|k| k.starts_with(&module_prefix))
+                .cloned()
+                .collect();
+            for full_name in enum_names {
+                if let Some(variants) = self.enums.get(&full_name).cloned() {
+                    let short_name = full_name[module_prefix.len()..].to_string();
+                    self.enums.insert(short_name, variants);
+                }
+            }
+        } else {
+            // Import a specific name
+            let short_name = path.last().ok_or_else(|| anyhow!("Empty use path"))?.clone();
+            if let Some(sig) = self.functions.get(&prefix).cloned() {
+                self.functions.insert(short_name.clone(), sig);
+            } else if let Some(fields) = self.structs.get(&prefix).cloned() {
+                self.structs.insert(short_name.clone(), fields);
+            } else if let Some(variants) = self.enums.get(&prefix).cloned() {
+                self.enums.insert(short_name.clone(), variants);
+            } else {
+                return Err(anyhow!("Cannot import '{}' — not found in any module", prefix));
+            }
+        }
+        Ok(())
     }
 
     // ── v1.0: Database validation ──

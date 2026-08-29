@@ -15,6 +15,7 @@ pub struct LlvmGen {
     variables: HashMap<String, (String, String)>,
     block_terminated: bool,
     lambda_counter: usize,
+    #[allow(clippy::type_complexity)]
     pending_lambdas: Vec<(String, Vec<Param>, Option<Type>, Vec<Stmt>)>,
 }
 
@@ -66,9 +67,14 @@ impl LlvmGen {
 
         // Register function signatures
         for item in &program.items {
-            if let TopLevel::FnDef { name, params, ret, .. } = item {
+            if let TopLevel::FnDef {
+                name, params, ret, ..
+            } = item
+            {
                 let param_tys: Vec<String> = params.iter().map(|p| self.llvm_type(&p.ty)).collect();
-                let ret_ty = ret.as_ref().map_or("void".to_string(), |t| self.llvm_type(t));
+                let ret_ty = ret
+                    .as_ref()
+                    .map_or("void".to_string(), |t| self.llvm_type(t));
                 self.fn_sigs.insert(name.clone(), (param_tys, ret_ty));
             }
         }
@@ -89,7 +95,13 @@ impl LlvmGen {
         // Generate struct type definitions
         for (name, fields) in &self.struct_defs {
             let field_tys: Vec<String> = fields.iter().map(|(_, ty)| ty.clone()).collect();
-            writeln!(self.output, "%{} = type {{ {} }}", name, field_tys.join(", ")).unwrap();
+            writeln!(
+                self.output,
+                "%{} = type {{ {} }}",
+                name,
+                field_tys.join(", ")
+            )
+            .unwrap();
         }
         if !self.struct_defs.is_empty() {
             writeln!(self.output).unwrap();
@@ -98,7 +110,12 @@ impl LlvmGen {
         // Generate functions
         for item in &program.items {
             match item {
-                TopLevel::FnDef { name, params, ret, body } => {
+                TopLevel::FnDef {
+                    name,
+                    params,
+                    ret,
+                    body,
+                } => {
                     self.gen_fn(name, params, ret, body);
                 }
                 TopLevel::EnumDef { name, variants } => {
@@ -131,11 +148,14 @@ impl LlvmGen {
                 name,
                 content.len() + 1,
                 byte_str
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         // Combine: preamble first, then string constants, then functions
-        let preamble_end = self.output.find("; enum ")
+        let preamble_end = self
+            .output
+            .find("; enum ")
             .or_else(|| self.output.find("define "))
             .unwrap_or(self.output.len());
         let mut result = String::new();
@@ -157,7 +177,14 @@ impl LlvmGen {
             .zip(&param_tys)
             .map(|(p, ty)| format!("{} %{}", ty, p.name))
             .collect();
-        writeln!(self.output, "define {} @{}({}) {{", ret_ty, name, params_str.join(", ")).unwrap();
+        writeln!(
+            self.output,
+            "define {} @{}({}) {{",
+            ret_ty,
+            name,
+            params_str.join(", ")
+        )
+        .unwrap();
         writeln!(self.output, "entry:").unwrap();
 
         // Allocate and store parameters
@@ -165,7 +192,12 @@ impl LlvmGen {
             let ty = &param_tys[i];
             let alloca = self.fresh_var();
             writeln!(self.output, "  {} = alloca {}", alloca, ty).unwrap();
-            writeln!(self.output, "  store {} %{}, {}* {}", ty, p.name, ty, alloca).unwrap();
+            writeln!(
+                self.output,
+                "  store {} %{}, {}* {}",
+                ty, p.name, ty, alloca
+            )
+            .unwrap();
             self.variables.insert(p.name.clone(), (alloca, ty.clone()));
         }
 
@@ -201,8 +233,12 @@ impl LlvmGen {
 
     fn gen_stmt(&mut self, stmt: &Stmt) -> String {
         match stmt {
-            Stmt::Let { name, ty, value, .. } => {
-                let llvm_ty = ty.as_ref().map_or_else(|| self.infer_llvm_type(value), |t| self.llvm_type(t));
+            Stmt::Let {
+                name, ty, value, ..
+            } => {
+                let llvm_ty = ty
+                    .as_ref()
+                    .map_or_else(|| self.infer_llvm_type(value), |t| self.llvm_type(t));
                 if is_struct_type(&llvm_ty) {
                     // For struct types, StructLiteral already allocs + stores fields.
                     // Just alias the variable name to the same alloca.
@@ -213,7 +249,12 @@ impl LlvmGen {
                     let val = self.gen_expr(value);
                     let alloca = self.fresh_var();
                     writeln!(self.output, "  {} = alloca {}", alloca, llvm_ty).unwrap();
-                    writeln!(self.output, "  store {} {}, {}* {}", llvm_ty, val, llvm_ty, alloca).unwrap();
+                    writeln!(
+                        self.output,
+                        "  store {} {}, {}* {}",
+                        llvm_ty, val, llvm_ty, alloca
+                    )
+                    .unwrap();
                     self.variables.insert(name.clone(), (alloca, llvm_ty));
                     val
                 }
@@ -227,13 +268,22 @@ impl LlvmGen {
                 }
                 val
             }
-            Stmt::If { condition, then, else_ } => {
+            Stmt::If {
+                condition,
+                then,
+                else_,
+            } => {
                 let cond_val = self.gen_expr(condition);
                 let then_label = self.fresh_label("if.then");
                 let else_label = self.fresh_label("if.else");
                 let end_label = self.fresh_label("if.end");
 
-                writeln!(self.output, "  br i1 {}, label %{}, label %{}", cond_val, then_label, else_label).unwrap();
+                writeln!(
+                    self.output,
+                    "  br i1 {}, label %{}, label %{}",
+                    cond_val, then_label, else_label
+                )
+                .unwrap();
                 self.block_terminated = true;
 
                 writeln!(self.output, "{}:", then_label).unwrap();
@@ -274,7 +324,12 @@ impl LlvmGen {
                 self.block_terminated = true;
                 writeln!(self.output, "{}:", cond_label).unwrap();
                 let cond_val = self.gen_expr(condition);
-                writeln!(self.output, "  br i1 {}, label %{}, label %{}", cond_val, body_label, end_label).unwrap();
+                writeln!(
+                    self.output,
+                    "  br i1 {}, label %{}, label %{}",
+                    cond_val, body_label, end_label
+                )
+                .unwrap();
                 self.block_terminated = true;
 
                 writeln!(self.output, "{}:", body_label).unwrap();
@@ -309,11 +364,18 @@ impl LlvmGen {
                 self.gen_print_call(&val, &ty);
                 "void".to_string()
             }
-            Stmt::ExprStmt(expr) => {
-                self.gen_expr(expr)
-            }
-            Stmt::For { variable, iterable, body } => {
-                if let Expr::Range { start, end, inclusive } = iterable {
+            Stmt::ExprStmt(expr) => self.gen_expr(expr),
+            Stmt::For {
+                variable,
+                iterable,
+                body,
+            } => {
+                if let Expr::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = iterable
+                {
                     let start_val = self.gen_expr(start);
                     let end_val = self.gen_expr(end);
                     let loop_var = variable.clone();
@@ -326,7 +388,8 @@ impl LlvmGen {
                     let alloca = self.fresh_var();
                     writeln!(self.output, "  {} = alloca i64", alloca).unwrap();
                     writeln!(self.output, "  store i64 {}, i64* {}", start_val, alloca).unwrap();
-                    self.variables.insert(loop_var.clone(), (alloca.clone(), "i64".to_string()));
+                    self.variables
+                        .insert(loop_var.clone(), (alloca.clone(), "i64".to_string()));
 
                     // Branch to condition
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
@@ -339,11 +402,26 @@ impl LlvmGen {
                     writeln!(self.output, "  {} = load i64, i64* {}", loaded, alloca).unwrap();
                     let cmp = self.fresh_var();
                     if *inclusive {
-                        writeln!(self.output, "  {} = icmp sle i64 {}, {}", cmp, loaded, end_val).unwrap();
+                        writeln!(
+                            self.output,
+                            "  {} = icmp sle i64 {}, {}",
+                            cmp, loaded, end_val
+                        )
+                        .unwrap();
                     } else {
-                        writeln!(self.output, "  {} = icmp slt i64 {}, {}", cmp, loaded, end_val).unwrap();
+                        writeln!(
+                            self.output,
+                            "  {} = icmp slt i64 {}, {}",
+                            cmp, loaded, end_val
+                        )
+                        .unwrap();
                     }
-                    writeln!(self.output, "  br i1 {}, label %{}, label %{}", cmp, body_label, end_label).unwrap();
+                    writeln!(
+                        self.output,
+                        "  br i1 {}, label %{}, label %{}",
+                        cmp, body_label, end_label
+                    )
+                    .unwrap();
                     self.block_terminated = true;
 
                     // Body block
@@ -386,7 +464,13 @@ impl LlvmGen {
         match expr {
             Expr::Int(n) => format!("{}", n),
             Expr::Float(n) => format!("{}", n),
-            Expr::Bool(b) => if *b { "1".to_string() } else { "0".to_string() },
+            Expr::Bool(b) => {
+                if *b {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
             Expr::Str(s) => {
                 let name = self.fresh_str(s);
                 let len = s.len() + 1;
@@ -401,7 +485,12 @@ impl LlvmGen {
                         alloca
                     } else {
                         let loaded = self.fresh_var();
-                        writeln!(self.output, "  {} = load {}, {}* {}", loaded, ty, ty, alloca).unwrap();
+                        writeln!(
+                            self.output,
+                            "  {} = load {}, {}* {}",
+                            loaded, ty, ty, alloca
+                        )
+                        .unwrap();
                         loaded
                     }
                 } else {
@@ -435,22 +524,26 @@ impl LlvmGen {
                     }
                     BinOp::Eq => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp eq {} {}, {}", result, lt, l, r).unwrap();
+                        writeln!(self.output, "  {} = icmp eq {} {}, {}", result, lt, l, r)
+                            .unwrap();
                         result
                     }
                     BinOp::Neq => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp ne {} {}, {}", result, lt, l, r).unwrap();
+                        writeln!(self.output, "  {} = icmp ne {} {}, {}", result, lt, l, r)
+                            .unwrap();
                         result
                     }
                     BinOp::Lt => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp slt {} {}, {}", result, lt, l, r).unwrap();
+                        writeln!(self.output, "  {} = icmp slt {} {}, {}", result, lt, l, r)
+                            .unwrap();
                         result
                     }
                     BinOp::Gt => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp sgt {} {}, {}", result, lt, l, r).unwrap();
+                        writeln!(self.output, "  {} = icmp sgt {} {}, {}", result, lt, l, r)
+                            .unwrap();
                         result
                     }
                     _ => format!("; unsupported op: {:?}", op),
@@ -473,41 +566,66 @@ impl LlvmGen {
                 }
             }
             Expr::Call { name, args } => {
-                let (param_tys, ret_ty) = self.fn_sigs.get(name).cloned()
-                    .unwrap_or_else(|| {
-                        let arg_tys: Vec<String> = args.iter().map(|a| self.infer_llvm_type(a)).collect();
-                        (arg_tys, "i64".to_string())
-                    });
+                let (param_tys, ret_ty) = self.fn_sigs.get(name).cloned().unwrap_or_else(|| {
+                    let arg_tys: Vec<String> =
+                        args.iter().map(|a| self.infer_llvm_type(a)).collect();
+                    (arg_tys, "i64".to_string())
+                });
                 // Generate arg values, loading struct types from their allocas
                 let mut arg_vals = Vec::new();
                 for (i, a) in args.iter().enumerate() {
                     let val = self.gen_expr(a);
-                    let ty = if i < param_tys.len() { &param_tys[i] } else { &"i64".to_string() };
+                    let ty = if i < param_tys.len() {
+                        &param_tys[i]
+                    } else {
+                        &"i64".to_string()
+                    };
                     if is_struct_type(ty) && is_struct_type(&self.infer_llvm_type(a)) {
                         // val is an alloca pointer but we need the struct value — load it
                         let loaded = self.fresh_var();
-                        writeln!(self.output, "  {} = load {}, {}* {}", loaded, ty, ty, val).unwrap();
+                        writeln!(self.output, "  {} = load {}, {}* {}", loaded, ty, ty, val)
+                            .unwrap();
                         arg_vals.push(loaded);
                     } else {
                         arg_vals.push(val);
                     }
                 }
                 if ret_ty == "void" {
-                    let args_str: Vec<String> = param_tys.iter().zip(&arg_vals)
+                    let args_str: Vec<String> = param_tys
+                        .iter()
+                        .zip(&arg_vals)
                         .map(|(ty, val)| format!("{} {}", ty, val))
                         .collect();
-                    writeln!(self.output, "  call void @{}({})", name, args_str.join(", ")).unwrap();
+                    writeln!(
+                        self.output,
+                        "  call void @{}({})",
+                        name,
+                        args_str.join(", ")
+                    )
+                    .unwrap();
                     "void".to_string()
                 } else {
                     let result = self.fresh_var();
-                    let args_str: Vec<String> = param_tys.iter().zip(&arg_vals)
+                    let args_str: Vec<String> = param_tys
+                        .iter()
+                        .zip(&arg_vals)
                         .map(|(ty, val)| format!("{} {}", ty, val))
                         .collect();
-                    writeln!(self.output, "  {} = call {} @{}({})", result, ret_ty, name, args_str.join(", ")).unwrap();
+                    writeln!(
+                        self.output,
+                        "  {} = call {} @{}({})",
+                        result,
+                        ret_ty,
+                        name,
+                        args_str.join(", ")
+                    )
+                    .unwrap();
                     result
                 }
             }
-            Expr::EnumVariant { enum_name, variant, .. } => {
+            Expr::EnumVariant {
+                enum_name, variant, ..
+            } => {
                 if let Some(tags) = self.enum_tags.get(enum_name) {
                     if let Some((_, tag)) = tags.iter().find(|(v, _)| v == variant) {
                         return format!("{}", tag);
@@ -523,9 +641,8 @@ impl LlvmGen {
                 writeln!(self.output, "  store i64 0, i64* {}", result).unwrap();
 
                 let num_arms = arms.len();
-                let skip_labels: Vec<String> = (0..num_arms)
-                    .map(|_| self.fresh_label("skip"))
-                    .collect();
+                let skip_labels: Vec<String> =
+                    (0..num_arms).map(|_| self.fresh_label("skip")).collect();
 
                 // Terminate the current basic block by branching to the first skip label
                 writeln!(self.output, "  br label %{}", skip_labels[0]).unwrap();
@@ -537,12 +654,16 @@ impl LlvmGen {
 
                     let arm_label = self.fresh_label("match.arm");
                     let cond = match &arm.pattern {
-                        Pattern::EnumVariant { enum_name, variant, .. } => {
-                            let tag_val = self.enum_tags.get(enum_name)
-                                .and_then(|tags| tags.iter().find(|(v, _)| v == variant).map(|(_, t)| *t));
+                        Pattern::EnumVariant {
+                            enum_name, variant, ..
+                        } => {
+                            let tag_val = self.enum_tags.get(enum_name).and_then(|tags| {
+                                tags.iter().find(|(v, _)| v == variant).map(|(_, t)| *t)
+                            });
                             if let Some(tag) = tag_val {
                                 let cmp = self.fresh_var();
-                                writeln!(self.output, "  {} = icmp eq i64 {}, {}", cmp, sc, tag).unwrap();
+                                writeln!(self.output, "  {} = icmp eq i64 {}, {}", cmp, sc, tag)
+                                    .unwrap();
                                 cmp
                             } else {
                                 "true".to_string()
@@ -560,7 +681,12 @@ impl LlvmGen {
                     } else {
                         &end_label
                     };
-                    writeln!(self.output, "  br i1 {}, label %{}, label %{}", cond, arm_label, next_label).unwrap();
+                    writeln!(
+                        self.output,
+                        "  br i1 {}, label %{}, label %{}",
+                        cond, arm_label, next_label
+                    )
+                    .unwrap();
                     self.block_terminated = true;
                     writeln!(self.output, "{}:", arm_label).unwrap();
                     self.block_terminated = false;
@@ -588,14 +714,24 @@ impl LlvmGen {
                 let field_defs = self.struct_defs.get(name).cloned().unwrap_or_default();
                 for (i, (_fname, field_val)) in fields.iter().enumerate() {
                     let val = self.gen_expr(field_val);
-                    let field_ty = if i < field_defs.len() { field_defs[i].1.clone() } else { "i64".to_string() };
+                    let field_ty = if i < field_defs.len() {
+                        field_defs[i].1.clone()
+                    } else {
+                        "i64".to_string()
+                    };
                     let gep = self.fresh_var();
                     writeln!(
                         self.output,
                         "  {} = getelementptr {}, {}* {}, i32 0, i32 {}",
                         gep, struct_ty, struct_ty, alloca, i
-                    ).unwrap();
-                    writeln!(self.output, "  store {} {}, {}* {}", field_ty, val, field_ty, gep).unwrap();
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.output,
+                        "  store {} {}, {}* {}",
+                        field_ty, val, field_ty, gep
+                    )
+                    .unwrap();
                 }
                 alloca
             }
@@ -613,15 +749,23 @@ impl LlvmGen {
                 };
                 let fields_info = self.infer_struct_fields(target);
                 if let Some(fields) = fields_info {
-                    if let Some((idx, (_n, field_ty))) = fields.iter().enumerate().find(|(_i, (n, _ty))| n == field) {
+                    if let Some((idx, (_n, field_ty))) =
+                        fields.iter().enumerate().find(|(_i, (n, _ty))| n == field)
+                    {
                         let gep = self.fresh_var();
                         writeln!(
                             self.output,
                             "  {} = getelementptr {}, {}* {}, i32 0, i32 {}",
                             gep, struct_ty, struct_ty, target_val, idx
-                        ).unwrap();
+                        )
+                        .unwrap();
                         let loaded = self.fresh_var();
-                        writeln!(self.output, "  {} = load {}, {}* {}", loaded, field_ty, field_ty, gep).unwrap();
+                        writeln!(
+                            self.output,
+                            "  {} = load {}, {}* {}",
+                            loaded, field_ty, field_ty, gep
+                        )
+                        .unwrap();
                         return loaded;
                     }
                 }
@@ -638,12 +782,21 @@ impl LlvmGen {
                 ));
                 lambda_name
             }
-            Expr::Range { start, end, inclusive } => {
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 let s = self.gen_expr(start);
                 let e = self.gen_expr(end);
                 let inc = if *inclusive { 1 } else { 0 };
                 let result = self.fresh_var();
-                writeln!(self.output, "  {} = call {{ i64, i64, i32 }} @sbx_range_create(i64 {}, i64 {}, i32 {})", result, s, e, inc).unwrap();
+                writeln!(
+                    self.output,
+                    "  {} = call {{ i64, i64, i32 }} @sbx_range_create(i64 {}, i64 {}, i32 {})",
+                    result, s, e, inc
+                )
+                .unwrap();
                 result
             }
             Expr::FString(parts) => {
@@ -656,8 +809,13 @@ impl LlvmGen {
                         crate::ast::FStringPart::Literal(s) => {
                             let name = self.fresh_str(s);
                             let len = s.len() + 1;
-                            if count > 0 { concat_args.push_str(", "); }
-                            concat_args.push_str(&format!("i8* bitcast ([{} x i8]* @{} to i8*)", len, name));
+                            if count > 0 {
+                                concat_args.push_str(", ");
+                            }
+                            concat_args.push_str(&format!(
+                                "i8* bitcast ([{} x i8]* @{} to i8*)",
+                                len, name
+                            ));
                             count += 1;
                         }
                         crate::ast::FStringPart::Expr(expr) => {
@@ -667,11 +825,20 @@ impl LlvmGen {
                             // For now, call __sbx_to_string
                             if ty == "i64" {
                                 let str_val = self.fresh_var();
-                                writeln!(self.output, "  {} = call i8* @__sbx_to_string(i64 {})", str_val, val).unwrap();
-                                if count > 0 { concat_args.push_str(", "); }
+                                writeln!(
+                                    self.output,
+                                    "  {} = call i8* @__sbx_to_string(i64 {})",
+                                    str_val, val
+                                )
+                                .unwrap();
+                                if count > 0 {
+                                    concat_args.push_str(", ");
+                                }
                                 concat_args.push_str(&format!("i8* {}", str_val));
                             } else {
-                                if count > 0 { concat_args.push_str(", "); }
+                                if count > 0 {
+                                    concat_args.push_str(", ");
+                                }
                                 concat_args.push_str(&format!("i8* {}", val));
                             }
                             count += 1;
@@ -679,7 +846,12 @@ impl LlvmGen {
                     }
                 }
                 let result = self.fresh_var();
-                writeln!(self.output, "  {} = call i8* @__sbx_str_concat_multi(i32 {}, {})", result, count, concat_args).unwrap();
+                writeln!(
+                    self.output,
+                    "  {} = call i8* @__sbx_str_concat_multi(i32 {}, {})",
+                    result, count, concat_args
+                )
+                .unwrap();
                 result
             }
             _ => "0".to_string(),
@@ -707,9 +879,7 @@ impl LlvmGen {
                 }
                 None
             }
-            Expr::StructLiteral { name, .. } => {
-                self.struct_defs.get(name).cloned()
-            }
+            Expr::StructLiteral { name, .. } => self.struct_defs.get(name).cloned(),
             _ => None,
         }
     }
@@ -723,7 +893,8 @@ impl LlvmGen {
                     self.output,
                     "  call i64 (i8*, ...) @printf(i8* bitcast ([{} x i8]* @{} to i8*), i64 {})",
                     len, fmt, val
-                ).unwrap();
+                )
+                .unwrap();
             }
             "double" => {
                 let fmt = self.fresh_str("%f\n");
@@ -732,7 +903,8 @@ impl LlvmGen {
                     self.output,
                     "  call i64 (i8*, ...) @printf(i8* bitcast ([{} x i8]* @{} to i8*), double {})",
                     len, fmt, val
-                ).unwrap();
+                )
+                .unwrap();
             }
             "i8*" => {
                 let fmt = self.fresh_str("%s\n");
@@ -741,7 +913,8 @@ impl LlvmGen {
                     self.output,
                     "  call i64 (i8*, ...) @printf(i8* bitcast ([{} x i8]* @{} to i8*), i8* {})",
                     len, fmt, val
-                ).unwrap();
+                )
+                .unwrap();
             }
             "i1" => {
                 let fmt = self.fresh_str("%d\n");
@@ -750,7 +923,8 @@ impl LlvmGen {
                     self.output,
                     "  call i64 (i8*, ...) @printf(i8* bitcast ([{} x i8]* @{} to i8*), i1 {})",
                     len, fmt, val
-                ).unwrap();
+                )
+                .unwrap();
             }
             _ => {
                 let fmt = self.fresh_str("%ld\n");
@@ -759,7 +933,8 @@ impl LlvmGen {
                     self.output,
                     "  call i64 (i8*, ...) @printf(i8* bitcast ([{} x i8]* @{} to i8*), i64 {})",
                     len, fmt, val
-                ).unwrap();
+                )
+                .unwrap();
             }
         }
     }
@@ -812,7 +987,18 @@ impl LlvmGen {
                     "i64".to_string()
                 }
             }
-            Expr::BinaryOp { op: BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::And | BinOp::Or, .. } => "i1".to_string(),
+            Expr::BinaryOp {
+                op:
+                    BinOp::Eq
+                    | BinOp::Neq
+                    | BinOp::Lt
+                    | BinOp::Gt
+                    | BinOp::Le
+                    | BinOp::Ge
+                    | BinOp::And
+                    | BinOp::Or,
+                ..
+            } => "i1".to_string(),
             Expr::BinaryOp { .. } => "i64".to_string(),
             Expr::StructLiteral { name, .. } => format!("%{}", name),
             Expr::FieldAccess { target, field, .. } => {

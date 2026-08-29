@@ -224,7 +224,11 @@ impl Lexer {
         let mut depth: i32 = 0;
         loop {
             if self.pos >= self.input.len() {
-                return Err(anyhow!("Unterminated f-string at {}:{}", self.line, self.col));
+                return Err(anyhow!(
+                    "Unterminated f-string at {}:{}",
+                    self.line,
+                    self.col
+                ));
             }
             let ch = self.input[self.pos];
             if depth == 0 && ch == '"' {
@@ -261,7 +265,11 @@ impl Lexer {
             } else if ch == '\\' {
                 self.advance();
                 if self.pos >= self.input.len() {
-                    return Err(anyhow!("Unterminated escape in f-string at {}:{}", self.line, self.col));
+                    return Err(anyhow!(
+                        "Unterminated escape in f-string at {}:{}",
+                        self.line,
+                        self.col
+                    ));
                 }
                 let esc = self.input[self.pos];
                 match esc {

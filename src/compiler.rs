@@ -163,7 +163,10 @@ impl Compiler {
             let debug_path = std::env::temp_dir().join("sandbox_debug.c");
             let _ = fs::copy(&tmp, &debug_path);
             let _ = fs::remove_file(&tmp);
-            return Err(anyhow!("gcc compilation failed — C saved to {}", debug_path.display()));
+            return Err(anyhow!(
+                "gcc compilation failed — C saved to {}",
+                debug_path.display()
+            ));
         }
 
         let status = Command::new(&bin).status()?;

@@ -16,6 +16,7 @@ pub struct CodeGen {
     fn_returns: HashMap<String, String>,
     fn_sigs: HashMap<String, (Vec<String>, String)>, // (param C types, return C type)
     lambda_counter: Cell<usize>,
+    #[allow(clippy::type_complexity)]
     pending_lambdas: RefCell<Vec<(String, Vec<Param>, Option<Type>, Vec<Stmt>)>>,
     lambda_return_idx: Cell<usize>,
 }
@@ -101,11 +102,15 @@ impl CodeGen {
         }
         // Register function signatures for type inference and function references
         for item in items {
-            if let TopLevel::FnDef { name, params, ret, .. } = item {
+            if let TopLevel::FnDef {
+                name, params, ret, ..
+            } = item
+            {
                 let c_ret = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
                 let c_params: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
                 self.fn_returns.insert(name.clone(), c_ret.clone());
-                self.fn_sigs.insert(name.clone(), (c_params.clone(), c_ret.clone()));
+                self.fn_sigs
+                    .insert(name.clone(), (c_params.clone(), c_ret.clone()));
                 // Also register with mangled name
                 let c_name = Self::c_mangle(name);
                 if c_name != *name {
@@ -141,10 +146,16 @@ impl CodeGen {
             match stmt {
                 Stmt::Let { value, .. } => self.prescan_lambdas_in_expr(value),
                 Stmt::Assign { value, .. } => self.prescan_lambdas_in_expr(value),
-                Stmt::If { condition, then, else_ } => {
+                Stmt::If {
+                    condition,
+                    then,
+                    else_,
+                } => {
                     self.prescan_lambdas_in_expr(condition);
                     self.prescan_lambdas_in_stmts(then);
-                    if let Some(e) = else_ { self.prescan_lambdas_in_stmts(e); }
+                    if let Some(e) = else_ {
+                        self.prescan_lambdas_in_stmts(e);
+                    }
                 }
                 Stmt::While { condition, body } => {
                     self.prescan_lambdas_in_expr(condition);
@@ -164,7 +175,10 @@ impl CodeGen {
                 let lambda_name = format!("__lambda_{}", self.lambda_counter.get());
                 self.lambda_counter.set(self.lambda_counter.get() + 1);
                 self.pending_lambdas.borrow_mut().push((
-                    lambda_name, params.clone(), ret.clone(), body.clone(),
+                    lambda_name,
+                    params.clone(),
+                    ret.clone(),
+                    body.clone(),
                 ));
             }
             Expr::BinaryOp { left, right, .. } => {
@@ -173,11 +187,15 @@ impl CodeGen {
             }
             Expr::UnaryOp { expr, .. } => self.prescan_lambdas_in_expr(expr),
             Expr::Call { args, .. } => {
-                for a in args { self.prescan_lambdas_in_expr(a); }
+                for a in args {
+                    self.prescan_lambdas_in_expr(a);
+                }
             }
             Expr::Match { scrutinee, arms } => {
                 self.prescan_lambdas_in_expr(scrutinee);
-                for arm in arms { self.prescan_lambdas_in_stmts(&arm.body); }
+                for arm in arms {
+                    self.prescan_lambdas_in_stmts(&arm.body);
+                }
             }
             _ => {}
         }
@@ -578,7 +596,12 @@ impl CodeGen {
                         self.write_indent();
                         writeln!(self.output, "}}").unwrap();
                     }
-                } else if let Expr::Range { start, end, inclusive } = iterable {
+                } else if let Expr::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = iterable
+                {
                     let start_val = self.gen_expr(start);
                     let end_val = self.gen_expr(end);
                     self.write_indent();
@@ -735,13 +758,18 @@ impl CodeGen {
             }
             Expr::Ident(name) => {
                 // Check if this is a function reference (check both original and mangled names)
-                if let Some((params, ret)) = self.fn_sigs.get(name.as_str())
+                if let Some((params, ret)) = self
+                    .fn_sigs
+                    .get(name.as_str())
                     .or_else(|| self.fn_sigs.get(&Self::c_mangle(name)))
                 {
                     let params_str = params.join(", ");
                     format!("{} (*)({})", ret, params_str)
                 } else {
-                    self.var_types.get(name.as_str()).cloned().unwrap_or_else(|| "long".to_string())
+                    self.var_types
+                        .get(name.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| "long".to_string())
                 }
             }
             Expr::EnumVariant { enum_name, .. } => {
@@ -777,7 +805,7 @@ impl CodeGen {
                     .replace("\r", "\\r")
                     .replace("\t", "\\t");
                 format!("\"{}\"", escaped)
-            },
+            }
             Expr::Bool(b) => {
                 if *b {
                     "1".into()
@@ -787,7 +815,9 @@ impl CodeGen {
             }
             Expr::Ident(name) => {
                 // If this is a function reference, mangle the name
-                if self.fn_sigs.contains_key(name.as_str()) || self.fn_returns.contains_key(name.as_str()) {
+                if self.fn_sigs.contains_key(name.as_str())
+                    || self.fn_returns.contains_key(name.as_str())
+                {
                     Self::c_mangle(name)
                 } else {
                     name.clone()
@@ -866,35 +896,33 @@ impl CodeGen {
                     let c_fn = stdlib::c_name(name);
                     // v2.0: spawn / serve_once take a *function name* — emit it as a
                     // C function pointer (dropping the string quotes) instead of a literal.
-                    let args_joined =                    if matches!(name.as_str(), "spawn" | "http::serve_once" | "http::serve") {
-                        let first = args_str
-                            .first()
-                            .cloned()
-                            .unwrap_or_default()
-                            .trim_matches('"')
-                            .to_string();
-                        if name == "http::serve_once" || name == "http::serve" {
-                            let handler = args_str
-                                .get(1)
+                    let args_joined =
+                        if matches!(name.as_str(), "spawn" | "http::serve_once" | "http::serve") {
+                            let first = args_str
+                                .first()
                                 .cloned()
                                 .unwrap_or_default()
                                 .trim_matches('"')
                                 .to_string();
-                            format!(
-                                "{}, (const char* (*)(const char*)){}",
-                                first, handler
-                            )
-                        } else {
-                            let rest: Vec<String> = args_str.iter().skip(1).cloned().collect();
-                            if rest.is_empty() {
-                                first
+                            if name == "http::serve_once" || name == "http::serve" {
+                                let handler = args_str
+                                    .get(1)
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .trim_matches('"')
+                                    .to_string();
+                                format!("{}, (const char* (*)(const char*)){}", first, handler)
                             } else {
-                                format!("{first}, {}", rest.join(", "))
+                                let rest: Vec<String> = args_str.iter().skip(1).cloned().collect();
+                                if rest.is_empty() {
+                                    first
+                                } else {
+                                    format!("{first}, {}", rest.join(", "))
+                                }
                             }
-                        }
-                    } else {
-                        args_str.join(", ")
-                    };
+                        } else {
+                            args_str.join(", ")
+                        };
                     format!("{}({})", c_fn, args_joined)
                 } else {
                     let c_name = name.rfind("::").map_or(name.as_str(), |i| &name[i + 2..]);
@@ -939,7 +967,10 @@ impl CodeGen {
                     Some(expr) => {
                         let val = self.gen_expr(expr);
                         // Store as double — works for both int and float payloads
-                        format!("((sbx_enum){{.tag = {}, .payload = {{.d = {}}}}})", tag, val)
+                        format!(
+                            "((sbx_enum){{.tag = {}, .payload = {{.d = {}}}}})",
+                            tag, val
+                        )
                     }
                     None => format!("((sbx_enum){{.tag = {}, .payload = {{.d = 0}}}})", tag),
                 }
@@ -957,7 +988,9 @@ impl CodeGen {
                 let mut first = true;
                 for arm in arms {
                     let cond = match &arm.pattern {
-                        Pattern::EnumVariant { enum_name, variant, .. } => {
+                        Pattern::EnumVariant {
+                            enum_name, variant, ..
+                        } => {
                             format!("{tmp} == {enum_name}_{variant}")
                         }
                         Pattern::IntLiteral(n) => format!("{tmp} == {n}"),
@@ -968,7 +1001,9 @@ impl CodeGen {
                     first = false;
                     // Check if pattern has a binding variable
                     let binding_decl = match &arm.pattern {
-                        Pattern::EnumVariant { binding: Some(b), .. } => {
+                        Pattern::EnumVariant {
+                            binding: Some(b), ..
+                        } => {
                             // Extract payload from the matched enum — cast double to long
                             format!("long {b} = (long){sc}.payload.d; ")
                         }
@@ -983,7 +1018,9 @@ impl CodeGen {
                         Some(Stmt::Return(Some(e))) => self.gen_expr(e),
                         _ => "0".to_string(),
                     };
-                    c.push_str(&format!("{kw} ({cond}) {{ {binding_decl}{res} = {body_val}; }} "));
+                    c.push_str(&format!(
+                        "{kw} ({cond}) {{ {binding_decl}{res} = {body_val}; }} "
+                    ));
                 }
                 c.push_str(&format!("{res}; }})"));
                 c
@@ -994,7 +1031,11 @@ impl CodeGen {
                 self.lambda_return_idx.set(idx + 1);
                 format!("__lambda_{}", idx)
             }
-            Expr::Range { start, end, inclusive } => {
+            Expr::Range {
+                start,
+                end,
+                inclusive,
+            } => {
                 let s = self.gen_expr(start);
                 let e = self.gen_expr(end);
                 if *inclusive {
@@ -1013,7 +1054,10 @@ impl CodeGen {
                             if !first {
                                 result.push_str(", ");
                             }
-                            result.push_str(&format!("\"{}\"", s.replace('"', "\\\"").replace('\n', "\\n")));
+                            result.push_str(&format!(
+                                "\"{}\"",
+                                s.replace('"', "\\\"").replace('\n', "\\n")
+                            ));
                             first = false;
                             count += 1;
                         }
@@ -1037,9 +1081,13 @@ impl CodeGen {
                     }
                 }
                 // Replace the placeholder with actual count and add comma after it
-                result = result.replacen("__sbx_str_concat_multi(", &format!("__sbx_str_concat_multi({}, ", count), 1);
+                result = result.replacen(
+                    "__sbx_str_concat_multi(",
+                    &format!("__sbx_str_concat_multi({}, ", count),
+                    1,
+                );
                 // The result already has the parts with commas between them, close the call
-                result.push_str(")");
+                result.push(')');
                 result
             }
         }
@@ -1065,7 +1113,7 @@ impl CodeGen {
                 } else {
                     name.clone()
                 }
-            },
+            }
             Type::Result(ok, _) => self.c_type(ok),
             Type::Fn(params, ret) => {
                 let params_str: Vec<String> = params.iter().map(|p| self.c_type(p)).collect();
@@ -1078,7 +1126,12 @@ impl CodeGen {
     fn c_param(&self, ty: &Type, name: &str) -> String {
         if let Type::Fn(params, ret) = ty {
             let params_str: Vec<String> = params.iter().map(|p| self.c_type(p)).collect();
-            format!("{} (*{})({})", self.c_type(ret), name, params_str.join(", "))
+            format!(
+                "{} (*{})({})",
+                self.c_type(ret),
+                name,
+                params_str.join(", ")
+            )
         } else {
             format!("{} {}", self.c_type(ty), name)
         }
@@ -1094,13 +1147,11 @@ impl CodeGen {
     fn c_mangle(name: &str) -> String {
         match name {
             // C keywords and common type names that conflict
-            "double" | "float" | "int" | "long" | "short" | "char" | "void"
-            | "if" | "else" | "for" | "while" | "do" | "switch" | "case"
-            | "return" | "break" | "continue" | "struct" | "enum" | "union"
-            | "typedef" | "sizeof" | "static" | "extern" | "const" | "volatile"
-            | "auto" | "register" | "signed" | "unsigned" | "inline"
-            | "asm" | "goto" | "default" | "NULL"
-            | "stdin" | "stdout" | "stderr" => {
+            "double" | "float" | "int" | "long" | "short" | "char" | "void" | "if" | "else"
+            | "for" | "while" | "do" | "switch" | "case" | "return" | "break" | "continue"
+            | "struct" | "enum" | "union" | "typedef" | "sizeof" | "static" | "extern"
+            | "const" | "volatile" | "auto" | "register" | "signed" | "unsigned" | "inline"
+            | "asm" | "goto" | "default" | "NULL" | "stdin" | "stdout" | "stderr" => {
                 format!("sbx_{}", name)
             }
             _ => name.to_string(),

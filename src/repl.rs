@@ -13,7 +13,7 @@ pub fn run_repl() -> Result<()> {
     println!();
 
     let mut definitions = String::new(); // fn, enum, struct definitions
-    let mut eval_body = String::new();   // accumulated eval statements
+    let mut eval_body = String::new(); // accumulated eval statements
     let mut input_buffer = String::new();
     let mut brace_depth: i32 = 0;
     let mut history: Vec<String> = Vec::new();

@@ -12,74 +12,358 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
     let mut m = HashMap::new();
 
     // ── math module ──
-    register(&mut m, "math::abs", vec![("x".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::max", vec![("a".into(), Type::F64), ("b".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::min", vec![("a".into(), Type::F64), ("b".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::sqrt", vec![("x".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::pow", vec![("base".into(), Type::F64), ("exp".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::floor", vec![("x".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::ceil", vec![("x".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::log", vec![("x".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::log2", vec![("x".into(), Type::F64)], Type::F64);
-    register(&mut m, "math::log10", vec![("x".into(), Type::F64)], Type::F64);
+    register(
+        &mut m,
+        "math::abs",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::max",
+        vec![("a".into(), Type::F64), ("b".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::min",
+        vec![("a".into(), Type::F64), ("b".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::sqrt",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::pow",
+        vec![("base".into(), Type::F64), ("exp".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::floor",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::ceil",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::log",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::log2",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "math::log10",
+        vec![("x".into(), Type::F64)],
+        Type::F64,
+    );
 
     // ── string module ──
-    register(&mut m, "string::length", vec![("s".into(), Type::String)], Type::I64);
-    register(&mut m, "string::concat", vec![("a".into(), Type::String), ("b".into(), Type::String)], Type::String);
-    register(&mut m, "string::substring", vec![("s".into(), Type::String), ("start".into(), Type::I64), ("len".into(), Type::I64)], Type::String);
-    register(&mut m, "string::equals", vec![("a".into(), Type::String), ("b".into(), Type::String)], Type::Bool);
-    register(&mut m, "string::trim", vec![("s".into(), Type::String)], Type::String);
-    register(&mut m, "string::starts_with", vec![("s".into(), Type::String), ("prefix".into(), Type::String)], Type::Bool);
-    register(&mut m, "string::contains", vec![("s".into(), Type::String), ("sub".into(), Type::String)], Type::Bool);
-    register(&mut m, "string::find", vec![("s".into(), Type::String), ("sub".into(), Type::String)], Type::I64);
+    register(
+        &mut m,
+        "string::length",
+        vec![("s".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "string::concat",
+        vec![("a".into(), Type::String), ("b".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::substring",
+        vec![
+            ("s".into(), Type::String),
+            ("start".into(), Type::I64),
+            ("len".into(), Type::I64),
+        ],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::equals",
+        vec![("a".into(), Type::String), ("b".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "string::trim",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::starts_with",
+        vec![("s".into(), Type::String), ("prefix".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "string::contains",
+        vec![("s".into(), Type::String), ("sub".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "string::find",
+        vec![("s".into(), Type::String), ("sub".into(), Type::String)],
+        Type::I64,
+    );
 
     // ── array module ──
-    register(&mut m, "array::len", vec![("arr".into(), Type::Array(Box::new(Type::I64)))], Type::I64);
-    register(&mut m, "array::push", vec![("arr".into(), Type::Array(Box::new(Type::I64))), ("elem".into(), Type::I64)], Type::Void);
-    register(&mut m, "array::sort", vec![("arr".into(), Type::Array(Box::new(Type::I64)))], Type::Void);
+    register(
+        &mut m,
+        "array::len",
+        vec![("arr".into(), Type::Array(Box::new(Type::I64)))],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "array::push",
+        vec![
+            ("arr".into(), Type::Array(Box::new(Type::I64))),
+            ("elem".into(), Type::I64),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "array::sort",
+        vec![("arr".into(), Type::Array(Box::new(Type::I64)))],
+        Type::Void,
+    );
 
     // ── v2.0: json module ──
-    register(&mut m, "json::stringify", vec![("v".into(), Type::I64)], Type::String);
-    register(&mut m, "json::stringify_float", vec![("v".into(), Type::F64)], Type::String);
-    register(&mut m, "json::parse", vec![("s".into(), Type::String)], Type::I64);
-    register(&mut m, "json::get", vec![("s".into(), Type::String), ("key".into(), Type::String)], Type::String);
-    register(&mut m, "json::stringify_string", vec![("s".into(), Type::String)], Type::String);
-    register(&mut m, "json::stringify_bool", vec![("b".into(), Type::Bool)], Type::String);
-    register(&mut m, "json::parse_float", vec![("s".into(), Type::String)], Type::F64);
-    register(&mut m, "json::parse_string", vec![("s".into(), Type::String)], Type::String);
-    register(&mut m, "json::has_key", vec![("s".into(), Type::String), ("key".into(), Type::String)], Type::Bool);
-    register(&mut m, "json::array_len", vec![("s".into(), Type::String)], Type::I64);
-    register(&mut m, "json::parse_object", vec![("s".into(), Type::String)], Type::String);
-    register(&mut m, "json::map_get", vec![("s".into(), Type::String), ("key".into(), Type::String)], Type::String);
-    register(&mut m, "json::map_keys", vec![("s".into(), Type::String)], Type::String);
-    register(&mut m, "json::map_len", vec![("s".into(), Type::String)], Type::I64);
+    register(
+        &mut m,
+        "json::stringify",
+        vec![("v".into(), Type::I64)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::stringify_float",
+        vec![("v".into(), Type::F64)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::parse",
+        vec![("s".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "json::get",
+        vec![("s".into(), Type::String), ("key".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::stringify_string",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::stringify_bool",
+        vec![("b".into(), Type::Bool)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::parse_float",
+        vec![("s".into(), Type::String)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "json::parse_string",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::has_key",
+        vec![("s".into(), Type::String), ("key".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "json::array_len",
+        vec![("s".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "json::parse_object",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::map_get",
+        vec![("s".into(), Type::String), ("key".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::map_keys",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::map_len",
+        vec![("s".into(), Type::String)],
+        Type::I64,
+    );
 
     // ── v2.0: http module ──
-    register(&mut m, "http::get", vec![("url".into(), Type::String)], Type::String);
-    register(&mut m, "http::post", vec![("url".into(), Type::String), ("body".into(), Type::String)], Type::String);
-    register(&mut m, "http::serve_once", vec![("port".into(), Type::I64), ("handler".into(), Type::String), ("arg".into(), Type::I64)], Type::Void);
-    register(&mut m, "http::serve", vec![("port".into(), Type::I64), ("handler".into(), Type::String), ("arg".into(), Type::I64)], Type::Void);
-    register(&mut m, "http::status_code", vec![("s".into(), Type::String)], Type::I64);
-    register(&mut m, "http::delete", vec![("url".into(), Type::String)], Type::String);
-    register(&mut m, "http::put", vec![("url".into(), Type::String), ("body".into(), Type::String)], Type::String);
-    register(&mut m, "http::patch", vec![("url".into(), Type::String), ("body".into(), Type::String)], Type::String);
-    register(&mut m, "http::headers", vec![("s".into(), Type::String), ("name".into(), Type::String)], Type::String);
+    register(
+        &mut m,
+        "http::get",
+        vec![("url".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::post",
+        vec![("url".into(), Type::String), ("body".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::serve_once",
+        vec![
+            ("port".into(), Type::I64),
+            ("handler".into(), Type::String),
+            ("arg".into(), Type::I64),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "http::serve",
+        vec![
+            ("port".into(), Type::I64),
+            ("handler".into(), Type::String),
+            ("arg".into(), Type::I64),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "http::status_code",
+        vec![("s".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "http::delete",
+        vec![("url".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::put",
+        vec![("url".into(), Type::String), ("body".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::patch",
+        vec![("url".into(), Type::String), ("body".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::headers",
+        vec![("s".into(), Type::String), ("name".into(), Type::String)],
+        Type::String,
+    );
 
     // ── v2.0: concurrency ──
-    register(&mut m, "spawn", vec![("fn_name".into(), Type::String), ("arg".into(), Type::I64)], Type::Void);
+    register(
+        &mut m,
+        "spawn",
+        vec![("fn_name".into(), Type::String), ("arg".into(), Type::I64)],
+        Type::Void,
+    );
     register(&mut m, "chan::create", vec![], Type::I64);
-    register(&mut m, "chan::send", vec![("ch".into(), Type::I64), ("val".into(), Type::I64)], Type::Void);
-    register(&mut m, "chan::recv", vec![("ch".into(), Type::I64)], Type::I64);
+    register(
+        &mut m,
+        "chan::send",
+        vec![("ch".into(), Type::I64), ("val".into(), Type::I64)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "chan::recv",
+        vec![("ch".into(), Type::I64)],
+        Type::I64,
+    );
     register(&mut m, "sleep", vec![("ms".into(), Type::I64)], Type::Void);
     register(&mut m, "time::ms", vec![], Type::I64);
 
     // ── v2.0: database (file-backed persistence) ──
-    register(&mut m, "db::open", vec![("path".into(), Type::String)], Type::I64);
-    register(&mut m, "db::close", vec![("handle".into(), Type::I64)], Type::Void);
-    register(&mut m, "db::put", vec![("handle".into(), Type::I64), ("key".into(), Type::String), ("val".into(), Type::I64)], Type::Void);
-    register(&mut m, "db::get", vec![("handle".into(), Type::I64), ("key".into(), Type::String)], Type::I64);
-    register(&mut m, "db::delete", vec![("handle".into(), Type::I64), ("key".into(), Type::String)], Type::Void);
-    register(&mut m, "db::count", vec![("handle".into(), Type::I64)], Type::I64);
+    register(
+        &mut m,
+        "db::open",
+        vec![("path".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "db::close",
+        vec![("handle".into(), Type::I64)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "db::put",
+        vec![
+            ("handle".into(), Type::I64),
+            ("key".into(), Type::String),
+            ("val".into(), Type::I64),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "db::get",
+        vec![("handle".into(), Type::I64), ("key".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "db::delete",
+        vec![("handle".into(), Type::I64), ("key".into(), Type::String)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "db::count",
+        vec![("handle".into(), Type::I64)],
+        Type::I64,
+    );
 
     m
 }

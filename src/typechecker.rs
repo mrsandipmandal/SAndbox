@@ -369,10 +369,9 @@ impl TypeChecker {
                         .enums
                         .get(enum_name)
                         .ok_or_else(|| anyhow!("Unknown enum '{}'", enum_name))?;
-                    let v = ev
-                        .iter()
-                        .find(|v| v.name == *variant)
-                        .ok_or_else(|| anyhow!("Unknown variant '{}' in enum '{}'", variant, enum_name))?;
+                    let v = ev.iter().find(|v| v.name == *variant).ok_or_else(|| {
+                        anyhow!("Unknown variant '{}' in enum '{}'", variant, enum_name)
+                    })?;
                     (v.payload.is_some(), v.payload.clone())
                 };
                 match (has_payload, expected_payload, payload) {
@@ -382,7 +381,10 @@ impl TypeChecker {
                         if !self.types_compatible(&expected, &arg_ty) {
                             return Err(anyhow!(
                                 "Enum variant '{}::{}': expected payload '{}', got '{}'",
-                                enum_name, variant, expected, arg_ty
+                                enum_name,
+                                variant,
+                                expected,
+                                arg_ty
                             ));
                         }
                         Ok(Type::Custom(enum_name.clone()))
@@ -390,9 +392,7 @@ impl TypeChecker {
                     (false, _, Some(_)) => {
                         Err(anyhow!("Variant '{}' does not take a payload", variant))
                     }
-                    (true, _, None) => {
-                        Err(anyhow!("Variant '{}' requires a payload", variant))
-                    }
+                    (true, _, None) => Err(anyhow!("Variant '{}' requires a payload", variant)),
                     _ => unreachable!(),
                 }
             }
@@ -404,13 +404,23 @@ impl TypeChecker {
                     // Bind pattern variables into scope
                     match &arm.pattern {
                         Pattern::Variable(name) => {
-                            self.scopes.last_mut().unwrap().insert(name.clone(), scrutinee_ty.clone());
+                            self.scopes
+                                .last_mut()
+                                .unwrap()
+                                .insert(name.clone(), scrutinee_ty.clone());
                         }
-                        Pattern::EnumVariant { enum_name, variant, binding: Some(b) } => {
-                            let payload_ty = self.enums.get(enum_name)
-                                .cloned()
-                                .and_then(|variants| {
-                                    variants.iter().find(|v| v.name == *variant)?.payload.clone()
+                        Pattern::EnumVariant {
+                            enum_name,
+                            variant,
+                            binding: Some(b),
+                        } => {
+                            let payload_ty =
+                                self.enums.get(enum_name).cloned().and_then(|variants| {
+                                    variants
+                                        .iter()
+                                        .find(|v| v.name == *variant)?
+                                        .payload
+                                        .clone()
                                 });
                             if let Some(ty) = payload_ty {
                                 self.scopes.last_mut().unwrap().insert(b.clone(), ty);
@@ -429,7 +439,11 @@ impl TypeChecker {
                             None => result_ty = Some(arm_ty),
                             Some(prev) => {
                                 if !self.types_compatible(prev, &arm_ty) {
-                                    return Err(anyhow!("Match arm type mismatch: '{}' vs '{}'", prev, arm_ty));
+                                    return Err(anyhow!(
+                                        "Match arm type mismatch: '{}' vs '{}'",
+                                        prev,
+                                        arm_ty
+                                    ));
                                 }
                             }
                         }
@@ -442,7 +456,10 @@ impl TypeChecker {
                 self.scopes.push(HashMap::new());
                 let mut param_tys = Vec::new();
                 for p in params {
-                    self.scopes.last_mut().unwrap().insert(p.name.clone(), p.ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(p.name.clone(), p.ty.clone());
                     param_tys.push(p.ty.clone());
                 }
                 for stmt in body {
@@ -740,7 +757,9 @@ impl TypeChecker {
         if wildcard {
             // Import all functions from the module
             let module_prefix = format!("{}::", prefix);
-            let names: Vec<String> = self.functions.keys()
+            let names: Vec<String> = self
+                .functions
+                .keys()
                 .filter(|k| k.starts_with(&module_prefix))
                 .cloned()
                 .collect();
@@ -751,7 +770,9 @@ impl TypeChecker {
                 }
             }
             // Import structs
-            let struct_names: Vec<String> = self.structs.keys()
+            let struct_names: Vec<String> = self
+                .structs
+                .keys()
                 .filter(|k| k.starts_with(&module_prefix))
                 .cloned()
                 .collect();
@@ -762,7 +783,9 @@ impl TypeChecker {
                 }
             }
             // Import enums
-            let enum_names: Vec<String> = self.enums.keys()
+            let enum_names: Vec<String> = self
+                .enums
+                .keys()
                 .filter(|k| k.starts_with(&module_prefix))
                 .cloned()
                 .collect();
@@ -774,7 +797,10 @@ impl TypeChecker {
             }
         } else {
             // Import a specific name
-            let short_name = path.last().ok_or_else(|| anyhow!("Empty use path"))?.clone();
+            let short_name = path
+                .last()
+                .ok_or_else(|| anyhow!("Empty use path"))?
+                .clone();
             if let Some(sig) = self.functions.get(&prefix).cloned() {
                 self.functions.insert(short_name.clone(), sig);
             } else if let Some(fields) = self.structs.get(&prefix).cloned() {
@@ -782,7 +808,10 @@ impl TypeChecker {
             } else if let Some(variants) = self.enums.get(&prefix).cloned() {
                 self.enums.insert(short_name.clone(), variants);
             } else {
-                return Err(anyhow!("Cannot import '{}' — not found in any module", prefix));
+                return Err(anyhow!(
+                    "Cannot import '{}' — not found in any module",
+                    prefix
+                ));
             }
         }
         Ok(())

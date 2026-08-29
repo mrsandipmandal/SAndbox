@@ -2,6 +2,7 @@ mod ast;
 mod codegen;
 mod compiler;
 mod lexer;
+mod llvmgen;
 mod lsp;
 mod parser;
 mod repl;
@@ -9,7 +10,6 @@ mod stdlib;
 mod token;
 mod typechecker;
 mod wasmgen;
-mod llvmgen;
 
 use clap::{Parser as ClapParser, Subcommand};
 use std::fs;
@@ -186,9 +186,8 @@ fn main() -> anyhow::Result<()> {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
             let out_name = output.unwrap_or_else(|| {
-                file.file_stem().map_or("output".to_string(), |s| {
-                    s.to_string_lossy().to_string()
-                })
+                file.file_stem()
+                    .map_or("output".to_string(), |s| s.to_string_lossy().to_string())
             });
             let compiler = compiler::Compiler::new(&source, &filename);
             compiler.build_llvm(&out_name)?;

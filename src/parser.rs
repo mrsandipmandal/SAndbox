@@ -110,7 +110,10 @@ impl Parser {
             path.push(self.expect_ident()?);
         }
         self.expect_token(&Token::Semicolon)?;
-        Ok(TopLevel::Use { path, wildcard: false })
+        Ok(TopLevel::Use {
+            path,
+            wildcard: false,
+        })
     }
 
     // ── Function / Struct / Module (unchanged) ──
@@ -792,16 +795,19 @@ impl Parser {
                 self.advance();
                 Ok("delete".to_string())
             }
-            Token::Select | Token::Insert | Token::Update | Token::Set
-            | Token::Where | Token::From | Token::Into | Token::Values => {
+            Token::Select
+            | Token::Insert
+            | Token::Update
+            | Token::Set
+            | Token::Where
+            | Token::From
+            | Token::Into
+            | Token::Values => {
                 let s = format!("{:?}", self.current_token());
                 self.advance();
                 Ok(s.to_lowercase())
             }
-            ref t => Err(self.error(format!(
-                "Expected function name after '::', got {:?}",
-                t
-            ))),
+            ref t => Err(self.error(format!("Expected function name after '::', got {:?}", t))),
         }
     }
 
@@ -924,10 +930,7 @@ impl Parser {
                         }
                     }
                     self.expect_token(&Token::RBrace)?;
-                    Ok(Expr::StructLiteral {
-                        name,
-                        fields,
-                    })
+                    Ok(Expr::StructLiteral { name, fields })
                 } else {
                     Ok(Expr::Ident(name))
                 }

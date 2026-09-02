@@ -154,11 +154,15 @@ struct Formatter<'a> {
     pos: usize,
     output: String,
     indent: usize,
+    /// Nesting depth of match blocks (> 0 means inside a match body)
+    match_depth: usize,
+    /// Set when the previous non-whitespace token was the `match` keyword
+    prev_was_match: bool,
 }
 
 impl<'a> Formatter<'a> {
     fn new(tokens: &'a [Spanned]) -> Self {
-        Self { tokens, pos: 0, output: String::new(), indent: 0 }
+        Self { tokens, pos: 0, output: String::new(), indent: 0, match_depth: 0, prev_was_match: false }
     }
 
     fn peek(&self) -> &Token {
@@ -259,6 +263,11 @@ impl<'a> Formatter<'a> {
                     }
                     self.output.push_str("{\n");
                     self.indent += 1;
+                    // Track match block depth for arm formatting
+                    if self.prev_was_match {
+                        self.match_depth += 1;
+                        self.prev_was_match = false;
+                    }
                     just_wrote_newline = true;
                     self.advance();
 
@@ -273,6 +282,10 @@ impl<'a> Formatter<'a> {
                 // Closing brace — dedent, then }
                 Token::RBrace => {
                     self.indent = self.indent.saturating_sub(1);
+                    // Decrement match depth if closing a match block
+                    if self.match_depth > 0 {
+                        self.match_depth -= 1;
+                    }
                     // Remove trailing spaces and content on current line
                     while self.output.ends_with(' ') {
                         self.output.pop();
@@ -313,13 +326,22 @@ impl<'a> Formatter<'a> {
                     }
                 }
 
-                // Comma — emit , then space (unless next is } or ) or ])
+                // Comma — emit , then space or newline
                 Token::Comma => {
                     self.output.push(',');
                     self.advance();
                     match self.peek() {
                         Token::RBrace | Token::RBracket | Token::RParen | Token::Eof => {}
-                        _ => self.output.push(' '),
+                        _ => {
+                            // Inside a match block: each arm on its own line
+                            if self.match_depth > 0 {
+                                self.output.push('\n');
+                                self.write_indent();
+                                just_wrote_newline = true;
+                            } else {
+                                self.output.push(' ');
+                            }
+                        }
                     }
                 }
 
@@ -478,6 +500,12 @@ impl<'a> Formatter<'a> {
                 // Keywords — emit with trailing space
                 t if is_keyword(t) => {
                     self.emit(&tok_str(&tok));
+                    // Track match keyword for arm formatting
+                    if matches!(t, Token::Match) {
+                        self.prev_was_match = true;
+                    } else {
+                        self.prev_was_match = false;
+                    }
                     // Ensure space after keyword
                     if !self.output.ends_with(' ') && !matches!(self.peek(), Token::LBrace) {
                         self.output.push(' ');

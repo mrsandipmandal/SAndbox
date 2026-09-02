@@ -75,6 +75,12 @@ enum Commands {
         /// Check formatting without modifying files
         #[arg(long)]
         check: bool,
+        /// Show diff of what would change without modifying files
+        #[arg(long)]
+        diff: bool,
+        /// Verify that formatting is idempotent (format twice, compare)
+        #[arg(long)]
+        verify: bool,
     },
     /// Add a dependency to sandbox.toml
     Add {
@@ -241,8 +247,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Init { name } => {
             init_project(&name)?;
         }
-        Commands::Fmt { path, check } => {
-            run_fmt(&path, check)?;
+        Commands::Fmt { path, check, diff, verify } => {
+            run_fmt(&path, check, diff, verify)?;
         }
         Commands::Add { package, version } => {
             add_dependency(&package, &version)?;
@@ -387,7 +393,7 @@ fn main() {{
 
 // ── Format ──
 
-fn run_fmt(path: &PathBuf, check_only: bool) -> anyhow::Result<()> {
+fn run_fmt(path: &PathBuf, check_only: bool, show_diff: bool, verify: bool) -> anyhow::Result<()> {
     if path.is_dir() {
         let mut files = Vec::new();
         for entry in fs::read_dir(path)? {
@@ -401,21 +407,25 @@ fn run_fmt(path: &PathBuf, check_only: bool) -> anyhow::Result<()> {
 
         let mut all_ok = true;
         for f in &files {
-            let ok = fmt_single_file(f, check_only)?;
+            let ok = fmt_single_file(f, check_only, show_diff, verify)?;
             if !ok {
                 all_ok = false;
             }
         }
 
-        if check_only && !all_ok {
-            println!("❌ Some files need formatting");
+        if (check_only || show_diff || verify) && !all_ok {
+            if show_diff {
+                // Already printed diffs
+            } else {
+                println!("❌ Some files need formatting");
+            }
             std::process::exit(1);
-        } else if check_only {
+        } else if check_only || show_diff || verify {
             println!("✅ All files formatted correctly");
         }
     } else {
-        let ok = fmt_single_file(path, check_only)?;
-        if check_only && !ok {
+        let ok = fmt_single_file(path, check_only, show_diff, verify)?;
+        if (check_only || show_diff || verify) && !ok {
             std::process::exit(1);
         }
     }
@@ -423,12 +433,12 @@ fn run_fmt(path: &PathBuf, check_only: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fmt_single_file(path: &PathBuf, check_only: bool) -> anyhow::Result<bool> {
+fn fmt_single_file(path: &PathBuf, check_only: bool, show_diff: bool, verify: bool) -> anyhow::Result<bool> {
     let source = fs::read_to_string(path)?;
     let formatted = simple_fmt(&source);
 
     if source == formatted {
-        if !check_only {
+        if !check_only && !show_diff && !verify {
             println!("  ✓ {}", path.display());
         }
         return Ok(true);
@@ -439,9 +449,81 @@ fn fmt_single_file(path: &PathBuf, check_only: bool) -> anyhow::Result<bool> {
         return Ok(false);
     }
 
+    if show_diff {
+        println!("--- a/{}", path.display());
+        println!("+++ b/{}", path.display());
+        print_unified_diff(&source, &formatted);
+        return Ok(false);
+    }
+
+    if verify {
+        // Check idempotency: format the formatted output and compare
+        let reformatted = simple_fmt(&formatted);
+        if reformatted != formatted {
+            println!("  ✗ {} (idempotency broken)", path.display());
+            println!("    First format:");
+            for line in formatted.lines().take(5) {
+                println!("      {}", line);
+            }
+            println!("    Second format:");
+            for line in reformatted.lines().take(5) {
+                println!("      {}", line);
+            }
+            return Ok(false);
+        }
+        fs::write(path, &formatted)?;
+        println!("  ✓ {} (formatted, idempotent)", path.display());
+        return Ok(true);
+    }
+
     fs::write(path, &formatted)?;
     println!("  ✓ {} (formatted)", path.display());
     Ok(true)
+}
+
+/// Print a unified diff between original and formatted source.
+fn print_unified_diff(original: &str, formatted: &str) {
+    let orig_lines: Vec<&str> = original.lines().collect();
+    let fmt_lines: Vec<&str> = formatted.lines().collect();
+
+    // Simple line-by-line diff
+    let max_lines = orig_lines.len().max(fmt_lines.len());
+    let mut i = 0;
+    while i < max_lines {
+        let orig = orig_lines.get(i).copied().unwrap_or("");
+        let fmt = fmt_lines.get(i).copied().unwrap_or("");
+
+        if orig != fmt {
+            // Find the extent of this change
+            let mut j = i;
+            while j < max_lines {
+                let o = orig_lines.get(j).copied().unwrap_or("");
+                let f = fmt_lines.get(j).copied().unwrap_or("");
+                if o == f { break; }
+                j += 1;
+            }
+            // Print context (1 line before if possible)
+            if i > 0 {
+                println!(" {}", orig_lines[i - 1]);
+            }
+            // Print removed lines
+            for k in i..j.min(orig_lines.len()) {
+                println!("-{}", orig_lines[k]);
+            }
+            // Print added lines
+            for k in i..j.min(fmt_lines.len()) {
+                println!("+{}", fmt_lines[k]);
+            }
+            // Print context (1 line after if possible)
+            if j < max_lines {
+                let after = orig_lines.get(j).or(fmt_lines.get(j)).copied().unwrap_or("");
+                println!(" {}", after);
+            }
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
 }
 
 fn simple_fmt(source: &str) -> String {

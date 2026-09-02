@@ -351,6 +351,7 @@ pub enum Pattern {
 #[derive(Debug, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Box<Expr>>,
     pub body: Vec<Stmt>,
 }
 
@@ -362,13 +363,20 @@ pub enum FStringPart {
     Expr(Box<Expr>),
 }
 
+/// A type parameter with optional trait bounds
+#[derive(Debug, Clone)]
+pub struct TypeParamDef {
+    pub name: String,
+    pub bounds: Vec<String>,  // e.g., ["Ord"] for T: Ord
+}
+
 // ── Top-level items ──
 
 #[derive(Debug, Clone)]
 pub enum TopLevel {
     FnDef {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParamDef>,
         params: Vec<Param>,
         ret: Option<Type>,
         body: Vec<Stmt>,
@@ -376,7 +384,7 @@ pub enum TopLevel {
     },
     AsyncFnDef {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParamDef>,
         params: Vec<Param>,
         ret: Option<Type>,
         body: Vec<Stmt>,
@@ -384,7 +392,7 @@ pub enum TopLevel {
     },
     StructDef {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParamDef>,
         fields: Vec<Field>,
         doc: Option<String>,
     },
@@ -411,7 +419,7 @@ pub enum TopLevel {
     // v1.1: Enums
     EnumDef {
         name: String,
-        type_params: Vec<String>,
+        type_params: Vec<TypeParamDef>,
         variants: Vec<EnumVariantDef>,
         doc: Option<String>,
     },
@@ -427,6 +435,12 @@ pub enum TopLevel {
         name: String,
         body: Vec<Stmt>,
         doc: Option<String>,
+    },
+    // v3.0: Compile-time constants
+    ConstDef {
+        name: String,
+        ty: Option<Type>,
+        value: Expr,
     },
 }
 

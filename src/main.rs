@@ -1,6 +1,7 @@
 mod ast;
 mod codegen;
 mod compiler;
+mod fmt;
 mod lexer;
 mod llvmgen;
 mod lsp;
@@ -33,6 +34,9 @@ enum Commands {
     Run {
         /// Path to .sbx file
         file: PathBuf,
+        /// Print the parsed AST without compiling
+        #[arg(long)]
+        ast: bool,
     },
     /// Compile a .sbx file to native binary or WebAssembly
     Build {
@@ -174,17 +178,34 @@ enum PkgCommands {
         /// Package version
         version: String,
     },
+    /// Install a specific package by name
+    Install {
+        /// Package name (and optional version: name@version)
+        package: String,
+    },
+    /// List installed vendored packages
+    List,
+    /// Update all vendored packages to latest versions
+    Update,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file } => {
+        Commands::Run { file, ast } => {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
-            let compiler = compiler::Compiler::new(&source, &filename);
-            compiler.run()?;
+            if ast {
+                let mut lex = lexer::Lexer::new(&source);
+                let tokens = lex.tokenize()?;
+                let mut pars = parser::Parser::new(tokens);
+                let program = pars.parse()?;
+                println!("{:#?}", program);
+            } else {
+                let compiler = compiler::Compiler::new(&source, &filename);
+                compiler.run()?;
+            }
         }
         Commands::Build {
             file,
@@ -262,6 +283,16 @@ fn main() -> anyhow::Result<()> {
             }
             PkgCommands::Verify { name, version } => {
                 registry_client::pkg_verify(&name, &version)?;
+            }
+            PkgCommands::Install { package } => {
+                pkg_install_single(&package)?;
+            }
+            PkgCommands::List => {
+                pkg_list_vendored()?;
+            }
+            PkgCommands::Update => {
+                install_dependencies(false)?;
+                println!("✓ All packages updated");
             }
         },
         Commands::Wasm { file, output } => {
@@ -414,42 +445,7 @@ fn fmt_single_file(path: &PathBuf, check_only: bool) -> anyhow::Result<bool> {
 }
 
 fn simple_fmt(source: &str) -> String {
-    let mut output = String::new();
-    let mut indent: usize = 0;
-    let mut prev_blank = false;
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() {
-            if !prev_blank {
-                output.push('\n');
-                prev_blank = true;
-            }
-            continue;
-        }
-        prev_blank = false;
-
-        if trimmed.starts_with('}') || trimmed.starts_with(']') {
-            indent = indent.saturating_sub(1);
-        }
-
-        for _ in 0..indent {
-            output.push_str("    ");
-        }
-        output.push_str(trimmed);
-        output.push('\n');
-
-        if trimmed.ends_with('{') || trimmed.ends_with('[') {
-            indent += 1;
-        }
-    }
-
-    if !output.ends_with('\n') {
-        output.push('\n');
-    }
-
-    output
+    fmt::format_source(source)
 }
 
 // ── Package Manager ──
@@ -532,6 +528,89 @@ fn rebuild_toml(config: &SandboxToml) -> String {
     }
 
     out
+}
+
+/// Install a single package by name (and optional version)
+fn pkg_install_single(package: &str) -> anyhow::Result<()> {
+    let (name, version) = if let Some((n, v)) = package.split_once('@') {
+        (n.to_string(), Some(v.to_string()))
+    } else {
+        (package.to_string(), None)
+    };
+
+    // Resolve from registry
+    let mut deps = std::collections::HashMap::new();
+    if let Some(v) = &version {
+        deps.insert(name.clone(), v.clone());
+    } else {
+        deps.insert(name.clone(), "*".to_string());
+    }
+
+    let resolved = registry_client::resolve_all_dependencies(&deps)?;
+    if resolved.is_empty() {
+        anyhow::bail!("Package '{}' not found in registry", name);
+    }
+
+    fs::create_dir_all(".sandbox/vendor")?;
+    for (dep_name, dep_version, _checksum) in &resolved {
+        print!("  → {} v{}... ", dep_name, dep_version);
+        let data = registry_client::download_package_bytes(dep_name, dep_version)?;
+        let path = format!(".sandbox/vendor/{}-{}.sbx", dep_name, dep_version);
+        fs::write(&path, &data)?;
+        println!("✓");
+    }
+
+    // Update sandbox.toml
+    let toml_path = std::path::Path::new("sandbox.toml");
+    if toml_path.exists() {
+        let mut content = fs::read_to_string(toml_path)?;
+        let dep_line = if let Some(v) = &version {
+            format!("{} = \"{}\"", name, v)
+        } else {
+            format!("{} = \"*\"", name)
+        };
+        if content.contains(&format!("[dependencies]")) {
+            content.push_str(&format!("\n{}", dep_line));
+        } else {
+            content.push_str(&format!("\n[dependencies]\n{}\n", dep_line));
+        }
+        fs::write(toml_path, content)?;
+    }
+
+    println!("✓ Package '{}' installed", name);
+    Ok(())
+}
+
+/// List vendored packages
+fn pkg_list_vendored() -> anyhow::Result<()> {
+    let vendor_dir = std::path::Path::new(".sandbox/vendor");
+    if !vendor_dir.exists() {
+        println!("No packages installed (no .sandbox/vendor directory)");
+        return Ok(());
+    }
+
+    let mut packages: Vec<(String, String)> = Vec::new();
+    for entry in fs::read_dir(vendor_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".sbx") {
+            let without_ext = name.strip_suffix(".sbx").unwrap_or(&name);
+            if let Some((pkg_name, version)) = without_ext.rsplit_once('-') {
+                packages.push((pkg_name.to_string(), version.to_string()));
+            }
+        }
+    }
+
+    if packages.is_empty() {
+        println!("No packages installed");
+    } else {
+        packages.sort();
+        println!("Installed packages:");
+        for (name, version) in &packages {
+            println!("  {} v{}", name, version);
+        }
+    }
+    Ok(())
 }
 
 fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {

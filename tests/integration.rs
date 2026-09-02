@@ -4097,3 +4097,124 @@ fn main() {
     assert!(ok, "Generic enum multiple type params failed: {}", output);
     assert!(output.contains("100"), "Expected 100, got: {}", output);
 }
+
+#[test]
+fn test_match_guard_basic() {
+    let source = r#"fn classify(n: i64) -> i64 {
+    return match n {
+        0 => 0,
+        n if n > 0 => 1,
+        _ => 2,
+    }
+}
+
+fn main() {
+    print(classify(0))
+    print(classify(5))
+    print(classify(-3))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Match guard basic failed: {}", output);
+    assert!(output.contains("0"), "Expected 0 for zero, got: {}", output);
+    assert!(output.contains("1"), "Expected 1 for positive, got: {}", output);
+    assert!(output.contains("2"), "Expected 2 for negative, got: {}", output);
+}
+
+#[test]
+fn test_match_guard_with_binding() {
+    let source = r#"fn abs_val(n: i64) -> i64 {
+    return match n {
+        0 => 0,
+        v if v < 0 => 0 - v,
+        v => v,
+    }
+}
+
+fn main() {
+    print(abs_val(-5))
+    print(abs_val(3))
+    print(abs_val(0))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Match guard with binding failed: {}", output);
+    assert!(output.contains("5"), "Expected 5 for abs(-5), got: {}", output);
+    assert!(output.contains("3"), "Expected 3 for abs(3), got: {}", output);
+    assert!(output.contains("0"), "Expected 0 for abs(0), got: {}", output);
+}
+
+#[test]
+fn test_match_guard_enum() {
+    let source = r#"enum Tagged {
+    Val(i64),
+    Empty,
+}
+
+fn main() {
+    let x = Tagged::Val(42)
+    let v = match x {
+        Tagged::Val(n) if n > 100 => 1,
+        Tagged::Val(n) => 2,
+        Tagged::Empty => 3,
+    }
+    print(v)
+    
+    let y = Tagged::Val(200)
+    let v2 = match y {
+        Tagged::Val(n) if n > 100 => 1,
+        Tagged::Val(n) => 2,
+        Tagged::Empty => 3,
+    }
+    print(v2)
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Match guard enum failed: {}", output);
+    assert!(output.contains("2"), "Expected 2 for Val(42), got: {}", output);
+    assert!(output.contains("1"), "Expected 1 for Val(200), got: {}", output);
+}
+
+#[test]
+fn test_match_string_literal() {
+    let source = r#"fn greet(name: string) -> string {
+    return match name {
+        "Alice" => "Hello, Alice!",
+        "Bob" => "Hello, Bob!",
+        _ => "Hello, stranger!",
+    }
+}
+
+fn main() {
+    print(greet("Alice"))
+    print(greet("Bob"))
+    print(greet("Charlie"))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Match string literal failed: {}", output);
+    assert!(output.contains("Hello, Alice!"), "Expected greeting for Alice, got: {}", output);
+    assert!(output.contains("Hello, Bob!"), "Expected greeting for Bob, got: {}", output);
+    assert!(output.contains("Hello, stranger!"), "Expected greeting for stranger, got: {}", output);
+}
+
+#[test]
+fn test_match_string_literal_int_result() {
+    let source = r#"fn describe(cmd: string) -> i64 {
+    return match cmd {
+        "quit" => 0,
+        "help" => 1,
+        "start" => 2,
+        _ => -1,
+    }
+}
+
+fn main() {
+    print(describe("quit"))
+    print(describe("help"))
+    print(describe("start"))
+    print(describe("unknown"))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Match string literal int result failed: {}", output);
+    assert!(output.contains("0"), "Expected 0 for quit, got: {}", output);
+    assert!(output.contains("1"), "Expected 1 for help, got: {}", output);
+    assert!(output.contains("2"), "Expected 2 for start, got: {}", output);
+    assert!(output.contains("-1"), "Expected -1 for unknown, got: {}", output);
+}

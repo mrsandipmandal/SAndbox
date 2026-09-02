@@ -401,6 +401,7 @@ impl Lexer {
             // v2.1: Impl blocks + tests
             "impl" => Token::Impl,
             "trait" => Token::Trait,
+            "const" => Token::Const,
             "Self" => Token::Self_,
             "test" => Token::Test,
             "assert" => Token::Assert,

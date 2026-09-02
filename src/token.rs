@@ -82,6 +82,9 @@ pub enum Token {
     Values,
     Set,
 
+    // v3.0: Compile-time constants
+    Const,
+
     // Lambda
     Pipe,
 

@@ -93,6 +93,7 @@ impl Parser {
             Token::Impl => self.parse_impl_def_with_doc(doc),
             Token::Trait => self.parse_trait_def_with_doc(doc),
             Token::Test => self.parse_test_def_with_doc(doc),
+            Token::Const => self.parse_const_def(),
             t => Err(self.error(format!(
                 "Expected 'fn', 'async', 'struct', 'mod', 'impl', 'trait', 'test', 'ledger', or 'database', got {:?}",
                 t
@@ -124,17 +125,37 @@ impl Parser {
 
     // ── Function / Struct / Module ──
 
-    /// Parse optional <T> or <T, U> after a name
-    fn parse_type_params(&mut self) -> Result<Vec<String>> {
+    /// Parse optional <T> or <T: Ord, U> after a name
+    fn parse_type_params(&mut self) -> Result<Vec<TypeParamDef>> {
         if self.peek_token(&Token::Lt) {
             self.advance();
-            let mut params = vec![self.expect_ident()?];
+            let mut params = Vec::new();
+            let name = self.expect_ident()?;
+            let bounds = self.parse_trait_bounds()?;
+            params.push(TypeParamDef { name, bounds });
             while self.peek_token(&Token::Comma) {
                 self.advance();
-                params.push(self.expect_ident()?);
+                let name = self.expect_ident()?;
+                let bounds = self.parse_trait_bounds()?;
+                params.push(TypeParamDef { name, bounds });
             }
             self.expect_token(&Token::Gt)?;
             Ok(params)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Parse optional : Trait1, Trait2 bounds
+    fn parse_trait_bounds(&mut self) -> Result<Vec<String>> {
+        if self.peek_token(&Token::Colon) && !self.peek_token_at(1, &Token::Colon) {
+            self.advance(); // skip :
+            let mut bounds = vec![self.expect_ident()?];
+            while self.peek_token(&Token::Comma) {
+                self.advance();
+                bounds.push(self.expect_ident()?);
+            }
+            Ok(bounds)
         } else {
             Ok(Vec::new())
         }
@@ -1187,7 +1208,18 @@ impl Parser {
                     }
                 } else if name.chars().next().is_some_and(|c| c.is_uppercase()) {
                     // type_args already parsed above; check for struct literal
-                    if self.peek_token(&Token::LBrace) {
+                    // Lookahead: only consume { if it looks like `Ident : expr` (struct literal)
+                    // not `Ident { ... }` (identifier followed by block/statement)
+                    let is_struct_literal = self.peek_token(&Token::LBrace) && {
+                        // Peek inside: after {, next should be ident followed by :
+                        if self.pos + 2 < self.tokens.len() {
+                            matches!(&self.tokens[self.pos + 1].token, Token::Ident(_))
+                            && matches!(&self.tokens[self.pos + 2].token, Token::Colon)
+                        } else {
+                            false
+                        }
+                    };
+                    if is_struct_literal {
                     self.expect_token(&Token::LBrace)?;
                     let mut fields = Vec::new();
                     while !self.peek_token(&Token::RBrace) {
@@ -1420,6 +1452,13 @@ impl Parser {
         let mut arms = Vec::new();
         while !self.peek_token(&Token::RBrace) {
             let pattern = self.parse_pattern()?;
+            // Optional guard: Pattern if expr =>
+            let guard = if self.peek_token(&Token::If) {
+                self.advance();
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
             self.expect_token(&Token::FatArrow)?;
             // Arm body: single expression or block
             let body = if self.peek_token(&Token::LBrace) {
@@ -1428,7 +1467,7 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 vec![Stmt::ExprStmt(expr)]
             };
-            arms.push(MatchArm { pattern, body });
+            arms.push(MatchArm { pattern, guard, body });
             if !self.peek_token(&Token::RBrace) {
                 self.expect_token(&Token::Comma)?;
             }
@@ -1728,7 +1767,7 @@ impl Parser {
 
     // ── v2.1: Test functions ──
 
-    fn parse_test_def_with_doc(&mut self, doc: Option<String>) -> Result<TopLevel> {
+    fn parse_test_def_with_doc(&mut self, _doc: Option<String>) -> Result<TopLevel> {
         self.expect_token(&Token::Test)?;
         // Optional 'fn' keyword for readability: `test fn name { }` or `test name { }`
         if self.peek_token(&Token::Fn) {
@@ -1736,6 +1775,20 @@ impl Parser {
         }
         let name = self.expect_ident()?;
         let body = self.parse_block()?;
-        Ok(TopLevel::TestDef { name, body, doc })
+        Ok(TopLevel::TestDef { name, body, doc: _doc })
+    }
+
+    fn parse_const_def(&mut self) -> Result<TopLevel> {
+        self.expect_token(&Token::Const)?;
+        let name = self.expect_ident()?;
+        let ty = if self.peek_token(&Token::Colon) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect_token(&Token::Assign)?;
+        let value = self.parse_expr()?;
+        Ok(TopLevel::ConstDef { name, ty, value })
     }
 }

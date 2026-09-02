@@ -2,11 +2,12 @@ use crate::compiler::Compiler;
 use anyhow::Result;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
-
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::history::History;
 use rustyline::{CompletionType, Config, Context, DefaultEditor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ── Tab completion ──
 
@@ -38,8 +39,28 @@ const REPL_COMMANDS: &[&str] = &[
     ":q", ":quit", ":history", ":reset", ":show", ":defs", ":help",
 ];
 
+/// Shared state for user-defined names (fns, structs, enums)
+#[derive(Default, Clone)]
+struct SharedState {
+    user_names: Rc<RefCell<Vec<String>>>,
+}
+
 #[derive(Default)]
-struct SandboxCompleter;
+struct SandboxCompleter {
+    state: SharedState,
+}
+
+impl SandboxCompleter {
+    fn new() -> Self {
+        Self {
+            state: SharedState::default(),
+        }
+    }
+
+    fn update_names(&self, names: &[String]) {
+        *self.state.user_names.borrow_mut() = names.to_vec();
+    }
+}
 
 impl Completer for SandboxCompleter {
     type Candidate = Pair;
@@ -70,6 +91,18 @@ impl Completer for SandboxCompleter {
                 }
             }
         }
+
+        // Complete user-defined names (highest priority)
+        let user_names = self.state.user_names.borrow();
+        for name in user_names.iter() {
+            if name.to_lowercase().starts_with(&prefix) {
+                candidates.push(Pair {
+                    display: format!("{} (defined)", name),
+                    replacement: name.to_string(),
+                });
+            }
+        }
+        drop(user_names);
 
         // Complete keywords
         for kw in SANDBOX_KEYWORDS {
@@ -109,6 +142,40 @@ impl Hinter for SandboxCompleter {
 
 impl Validator for SandboxCompleter {}
 
+/// Extract user-defined names (fn, struct, enum) from definitions and eval body
+fn extract_user_names(definitions: &str, eval_body: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let combined = format!("{}\n{}", definitions, eval_body);
+    for line in combined.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("fn ") {
+            // fn name(...)  or  fn name<T>(...)
+            if let Some(rest) = trimmed.strip_prefix("fn ") {
+                if let Some(name) = rest.split_whitespace().next() {
+                    // Remove generic params: name<T> -> name
+                    let name = name.split('<').next().unwrap_or(name);
+                    names.push(name.to_string());
+                }
+            }
+        } else if trimmed.starts_with("struct ") {
+            if let Some(rest) = trimmed.strip_prefix("struct ") {
+                if let Some(name) = rest.split_whitespace().next() {
+                    let name = name.split('<').next().unwrap_or(name);
+                    names.push(name.to_string());
+                }
+            }
+        } else if trimmed.starts_with("enum ") {
+            if let Some(rest) = trimmed.strip_prefix("enum ") {
+                if let Some(name) = rest.split_whitespace().next() {
+                    let name = name.split('<').next().unwrap_or(name);
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
 fn find_word_at_cursor(line: &str, pos: usize) -> (usize, &str) {
     let before = &line[..pos];
     let start = before.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
@@ -125,13 +192,15 @@ fn find_word_at_cursor(line: &str, pos: usize) -> (usize, &str) {
 pub fn run_repl() -> Result<()> {
     println!("Sandbox REPL v0.5.0");
     println!("Type expressions to evaluate, or define functions/enums/structs.");
-    println!("Tab completion: keywords, built-in functions");
+    println!("Tab completion: keywords, built-ins, and user-defined names");
+    println!("Ctrl+R: reverse incremental history search");
     println!("Commands: :q (quit), :history, :reset, :show, :defs, :help");
     println!();
 
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .auto_add_history(true)
+        .keyseq_timeout(Some(1))
         .build();
 
     let mut rl = DefaultEditor::with_config(config)?;
@@ -142,7 +211,7 @@ pub fn run_repl() -> Result<()> {
         .join(".sandbox_history");
     let _ = rl.load_history(&history_path);
 
-    let completer = SandboxCompleter;
+    let completer = SandboxCompleter::new();
 
     let mut definitions = String::new(); // fn, enum, struct definitions
     let mut eval_body = String::new(); // accumulated eval statements
@@ -181,6 +250,12 @@ pub fn run_repl() -> Result<()> {
                             println!("    :show         Show accumulated code");
                             println!("    :defs         Show only definitions");
                             println!("    :help         Show this help");
+                        println!();
+                        println!("  Shortcuts:");
+                        println!("    Tab           Complete keywords, built-ins, and defined names");
+                        println!("    Ctrl+R        Reverse search through history");
+                        println!("    Ctrl+C        Cancel current input (or exit if idle)");
+                        println!("    Ctrl+D        Exit");
                             println!();
                             println!("  Multiline: open a block with {{ and press Enter to continue.");
                             println!("  Tab: complete keywords and built-in functions.");
@@ -278,6 +353,9 @@ pub fn run_repl() -> Result<()> {
                         Ok(_) => {
                             definitions.push_str(&format!("\n{}\n", input));
                             println!("  ✓ defined");
+                            // Update completer with new user-defined names
+                            let names = extract_user_names(&definitions, &eval_body);
+                            completer.update_names(&names);
                         }
                         Err(e) => {
                             println!("  Error: {}", e);
@@ -324,6 +402,9 @@ pub fn run_repl() -> Result<()> {
                             if !output.trim().is_empty() {
                                 print!("{}", output);
                             }
+                            // Update completer with new user-defined names
+                            let names = extract_user_names(&definitions, &eval_body);
+                            completer.update_names(&names);
                         }
                         Err(e) => {
                             // If auto-print failed as expression, try as statement
@@ -333,11 +414,14 @@ pub fn run_repl() -> Result<()> {
                                     definitions, test_body
                                 );
                                 match execute_source(&source2) {
-                                    Ok(output) => {
+                                    Ok(source2_result) => {
                                         eval_body.push_str(&format!("\n{}\n", input));
-                                        if !output.trim().is_empty() {
-                                            print!("{}", output);
+                                        if !source2_result.trim().is_empty() {
+                                            print!("{}", source2_result);
                                         }
+                                        // Update completer with new user-defined names
+                                        let names = extract_user_names(&definitions, &eval_body);
+                                        completer.update_names(&names);
                                     }
                                     Err(e2) => {
                                         println!("  Error: {} / {}", e, e2);

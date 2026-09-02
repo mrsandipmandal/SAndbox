@@ -32,7 +32,7 @@ pub struct CodeGen {
     /// Pending monomorphizations to emit after main generation
     pending_mono: RefCell<Vec<(String, crate::ast::TopLevel, Vec<crate::ast::Type>)>>,
     /// Generic struct definitions: name -> (type_params, fields)
-    generic_structs: HashMap<String, (Vec<String>, Vec<Field>)>,
+    generic_structs: HashMap<String, (Vec<crate::ast::TypeParamDef>, Vec<Field>)>,
     /// Monomorphized struct typedefs already generated
     mono_structs: std::collections::HashSet<String>,
     /// Pending struct monomorphizations: (mono_name, original_name, type_args)
@@ -109,8 +109,8 @@ impl CodeGen {
             if let TopLevel::FnDef { params, ret, .. } = fn_def {
                 let sub: std::collections::HashMap<String, crate::ast::Type> = 
                     if let TopLevel::FnDef { type_params, .. } = &fn_def {
-                        type_params.iter().zip(type_args.iter())
-                            .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
+                        type_params.iter().map(|tp| tp.name.clone()).zip(type_args.iter())
+                            .map(|(tp, concrete)| (tp, concrete.clone()))
                             .collect()
                     } else { std::collections::HashMap::new() };
                 let sub_params: Vec<crate::ast::Param> = params.iter().map(|p| crate::ast::Param {
@@ -148,7 +148,18 @@ impl CodeGen {
                 for cap in &captures {
                     all_params.push(Param { name: cap.clone(), ty: Type::I64, default: None });
                 }
-                self.gen_fn(&name, &all_params, &ret, &body);
+                // Infer return type from body if not specified
+                let effective_ret = if ret.is_some() {
+                    ret
+                } else {
+                    // Infer from last statement
+                    body.last().and_then(|s| match s {
+                        Stmt::Return(Some(e)) => Some(Type::custom(&self.infer_c_type(e))),
+                        Stmt::ExprStmt(e) => Some(Type::custom(&self.infer_c_type(e))),
+                        _ => None,
+                    })
+                };
+                self.gen_fn(&name, &all_params, &effective_ret, &body);
             }
         }
         self.output.clone()
@@ -292,9 +303,9 @@ impl CodeGen {
             if self.mono_structs.contains(&key) { return; }
             self.mono_structs.insert(key);
 
-            let sub: std::collections::HashMap<String, Type> = type_params.iter()
+            let sub: std::collections::HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone())
                 .zip(type_args.iter())
-                .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
+                .map(|(tp, concrete)| (tp, concrete.clone()))
                 .collect();
 
             writeln!(self.output, "typedef struct {{").unwrap();
@@ -374,6 +385,18 @@ impl CodeGen {
     }
 
     fn gen_program_items(&mut self, items: &[TopLevel]) {
+        // Emit compile-time constants as #define macros
+        for item in items {
+            if let TopLevel::ConstDef { name, value, .. } = item {
+                if let Some(val) = Self::eval_const_expr_static(value) {
+                    writeln!(self.output, "#define {} {}L", name, val).unwrap();
+                } else {
+                    // Non-compile-time-evaluable: emit as const variable
+                    let val = self.gen_expr(value);
+                    writeln!(self.output, "const long {} = {};", name, val).unwrap();
+                }
+            }
+        }
         // Forward-declare test jmp_buf if there are test functions
         let has_tests = items.iter().any(|item| matches!(item, TopLevel::TestDef { .. }));
         if has_tests {
@@ -472,13 +495,23 @@ impl CodeGen {
         // Emit lambda forward declarations before function declarations
         if !self.pending_lambdas.borrow().is_empty() {
             let lambdas: Vec<_> = self.pending_lambdas.borrow().clone();
-            for (name, params, ret, _, captures) in &lambdas {
+            for (name, params, ret, body, captures) in &lambdas {
                 // Lambda params = original params + capture params (long type)
                 let mut all_params = params.clone();
                 for cap in captures {
                     all_params.push(Param { name: cap.clone(), ty: Type::I64, default: None });
                 }
-                self.gen_fn_decl(name, &all_params, ret);
+                // Infer return type from body if not specified
+                let effective_ret = if ret.is_some() {
+                    ret.clone()
+                } else {
+                    body.last().and_then(|s| match s {
+                        Stmt::Return(Some(e)) => Some(Type::custom(&self.infer_c_type(e))),
+                        Stmt::ExprStmt(e) => Some(Type::custom(&self.infer_c_type(e))),
+                        _ => None,
+                    })
+                };
+                self.gen_fn_decl(name, &all_params, &effective_ret);
             }
         }
         self.gen_fn_decls(items);
@@ -520,13 +553,33 @@ impl CodeGen {
         for stmt in stmts {
             match stmt {
                 Stmt::Let { name, value, .. } => {
-                    // If value is a lambda, map variable name to lambda name
-                    if let Expr::Lambda { .. } = value {
-                        let lambda_idx = self.lambda_counter.get();
-                        let lambda_name = format!("__lambda_{}", lambda_idx);
-                        self.var_to_lambda.insert(name.clone(), lambda_name);
+                    // If value is a lambda, register it with the variable name
+                    if let Expr::Lambda { params, ret, body } = value {
+                        let lambda_name = name.clone();
+                        // Find free variables (captures) in the lambda body
+                        let param_names: std::collections::HashSet<String> =
+                            params.iter().map(|p| p.name.clone()).collect();
+                        let mut captures = Vec::new();
+                        Self::find_captures_in_stmts(body, &param_names, &mut captures);
+                        captures.sort();
+                        captures.dedup();
+                        self.lambda_captures.insert(lambda_name.clone(), captures.clone());
+                        self.var_to_lambda.insert(name.clone(), lambda_name.clone());
+                        self.pending_lambdas.borrow_mut().push((
+                            lambda_name.clone(),
+                            params.clone(),
+                            ret.clone(),
+                            body.clone(),
+                            captures,
+                        ));
+                        // Register fn signature for call-site lookup
+                        let ret_c = ret.as_ref().map_or("long".into(), |t| self.c_type(t));
+                        let param_tys: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
+                        self.fn_sigs.insert(name.clone(), (param_tys, ret_c.clone()));
+                        self.fn_returns.insert(name.clone(), ret_c);
+                    } else {
+                        self.prescan_lambdas_in_expr(value);
                     }
-                    self.prescan_lambdas_in_expr(value);
                 }
                 Stmt::Assign { value, .. } => self.prescan_lambdas_in_expr(value),
                 Stmt::If {
@@ -1174,6 +1227,10 @@ impl CodeGen {
             .join(", ");
 
         self.var_types.clear();
+        // Register parameter types for infer_c_type
+        for p in params {
+            self.var_types.insert(p.name.clone(), self.c_type(&p.ty));
+        }
         writeln!(self.output, "{} {}({}) {{", ret_str, fn_name, params_str).unwrap();
         self.indent += 1;
 
@@ -1275,22 +1332,8 @@ impl CodeGen {
             Stmt::Let {
                 name, ty, value, ..
             } => {
-                // If assigning a lambda to a variable, generate it as a named function
-                if let Expr::Lambda { params, ret, body, .. } = value {
-                    let lambda_name = self.var_to_lambda.get(name.as_str()).cloned()
-                        .unwrap_or_else(|| name.clone());
-                    let captures = self.lambda_captures.get(&lambda_name).cloned().unwrap_or_default();
-                    let mut all_params = params.clone();
-                    for cap in &captures {
-                        all_params.push(Param { name: cap.clone(), ty: Type::I64, default: None });
-                    }
-                    // Generate function with the variable's name — no assignment needed
-                    self.gen_fn(name, &all_params, ret, body);
-                    // Register the function signature for call-site lookup
-                    let ret_c = ret.as_ref().map_or("void".into(), |t| self.c_type(t));
-                    let param_tys: Vec<String> = all_params.iter().map(|p| self.c_type(&p.ty)).collect();
-                    self.fn_sigs.insert(name.clone(), (param_tys, ret_c.clone()));
-                    self.fn_returns.insert(name.clone(), ret_c);
+                // If assigning a lambda to a variable, skip — generated outside main by pending_lambdas
+                if let Expr::Lambda { .. } = value {
                     return;
                 }
                 let c_ty = ty
@@ -1577,6 +1620,9 @@ impl CodeGen {
                 let params_str: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
                 format!("{} (*)({})", ret_str, params_str.join(", "))
             }
+            Expr::Ident(name) => {
+                self.var_types.get(name.as_str()).cloned().unwrap_or_else(|| "long".into())
+            }
             Expr::OkExpr(val) => self.infer_c_type(val),
             Expr::ErrExpr(_) => "const char*".into(),
             Expr::Range { .. } => "sbx_range_t".into(),
@@ -1837,8 +1883,46 @@ impl CodeGen {
                 } else {
                     sc.clone()
                 };
+                // Detect if this is a string match (any arm has StrLiteral pattern)
+                let is_string_match = arms.iter().any(|arm| matches!(&arm.pattern,
+                    Pattern::StrLiteral(_)
+                ));
+                // Detect if the match produces string results (any arm body returns a string literal)
+                let is_string_result = arms.iter().any(|arm| {
+                    arm.body.iter().any(|s| matches!(s,
+                        Stmt::ExprStmt(Expr::Str(_)) | Stmt::Return(Some(Expr::Str(_)))
+                    ))
+                });
                 // GNU statement expression: ({ long __r=0; long __m=tag; if(...) __r=val; ... __r; })
-                let mut c = format!("({{ double {res} = 0; long {tmp} = {tag_expr}; ");
+                let mut c = if is_string_result {
+                    format!("({{ const char* {res} = \"\"; const char* {tmp} = {tag_expr}; ")
+                } else if is_string_match || sc_ty == "const char*" || sc_ty == "string" {
+                    format!("({{ double {res} = 0; const char* {tmp} = {tag_expr}; ")
+                } else {
+                    format!("({{ double {res} = 0; long {tmp} = {tag_expr}; ")
+                };
+                // Pre-declare pattern binding variables for arms with guards (deduplicated)
+                let mut predeclared: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let is_string_scrutinee = sc_ty == "const char*" || sc_ty == "string";
+                for arm in arms.iter() {
+                    if arm.guard.is_some() {
+                        if let Some(ref b) = match &arm.pattern {
+                            Pattern::EnumVariant { binding: Some(b), .. }
+                            | Pattern::SomePattern { binding: Some(b) }
+                            | Pattern::Variable(b) => Some(b.clone()),
+                            _ => None,
+                        } {
+                            if !predeclared.contains(b) {
+                                predeclared.insert(b.clone());
+                                if is_string_scrutinee {
+                                    c.push_str(&format!("const char* {b} = \"\"; "));
+                                } else {
+                                    c.push_str(&format!("long {b} = 0; "));
+                                }
+                            }
+                        }
+                    }
+                }
                 let mut first = true;
                 for arm in arms {
                     let cond = match &arm.pattern {
@@ -1851,33 +1935,73 @@ impl CodeGen {
                         Pattern::NonePattern => format!("{tmp} == 0"),
                         Pattern::IntLiteral(n) => format!("{tmp} == {n}"),
                         Pattern::BoolLiteral(b) => format!("{tmp} == {}", if *b { 1 } else { 0 }),
+                        Pattern::StrLiteral(s) => {
+                            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                            format!("strcmp({tmp}, \"{}\") == 0", escaped)
+                        }
                         _ => "1".to_string(),
                     };
-                    let kw = if first { "if" } else { "else if" };
-                    first = false;
-                    // Check if pattern has a binding variable
-                    let binding_decl = match &arm.pattern {
-                        Pattern::EnumVariant {
-                            binding: Some(b), ..
-                        } => {
+                    // Extract binding info from pattern
+                    let binding_name: Option<String> = match &arm.pattern {
+                        Pattern::EnumVariant { binding: Some(b), .. }
+                        | Pattern::SomePattern { binding: Some(b) }
+                        | Pattern::Variable(b) => Some(b.clone()),
+                        _ => None,
+                    };
+                    let has_guard = arm.guard.is_some();
+                    // Check if this variable was pre-declared by any guarded arm
+                    let was_predeclared = if let Some(ref b) = binding_name {
+                        arms.iter().any(|a| a.guard.is_some() && {
+                            let b2 = match &a.pattern {
+                                Pattern::EnumVariant { binding: Some(n), .. }
+                                | Pattern::SomePattern { binding: Some(n) }
+                                | Pattern::Variable(n) => Some(n.as_str()),
+                                _ => None,
+                            };
+                            b2.as_deref() == Some(b.as_str())
+                        })
+                    } else {
+                        false
+                    };
+                    let binding_decl = if let Some(ref b) = binding_name {
+                        if has_guard || was_predeclared {
+                            // Variable pre-declared; just assign
+                            if is_enum_match {
+                                format!("{b} = (long){sc}.payload.d; ")
+                            } else {
+                                format!("{b} = {sc}; ")
+                            }
+                        } else {
                             if is_enum_match {
                                 format!("long {b} = (long){sc}.payload.d; ")
+                            } else if is_string_scrutinee {
+                                format!("const char* {b} = {sc}; ")
                             } else {
                                 format!("long {b} = {sc}; ")
                             }
                         }
-                        Pattern::SomePattern { binding: Some(b) } => {
-                            format!("long {b} = {sc}; ")
-                        }
-                        Pattern::Variable(name) => {
-                            if is_enum_match {
-                                format!("long {name} = (long){sc}.payload.d; ")
-                            } else {
-                                format!("long {name} = {sc}; ")
-                            }
-                        }
-                        _ => String::new(),
+                    } else {
+                        String::new()
                     };
+                    // Add guard check if present — bind pattern variable before guard
+                    let cond = if let Some(ref guard_expr) = arm.guard {
+                        let guard_code = self.gen_expr(guard_expr);
+                        if let Some(ref b) = binding_name {
+                            // Use comma operator: assign variable, then check guard
+                            let assign_code = if is_enum_match {
+                                format!("{b} = (long){sc}.payload.d")
+                            } else {
+                                format!("{b} = {sc}")
+                            };
+                            format!("({cond}) && ({assign_code}, {guard_code})")
+                        } else {
+                            format!("({cond}) && ({guard_code})")
+                        }
+                    } else {
+                        cond
+                    };
+                    let kw = if first { "if" } else { "else if" };
+                    first = false;
                     // Generate ALL statements in the arm body
                     let mut arm_code = String::new();
                     arm_code.push_str(&binding_decl);
@@ -2062,9 +2186,9 @@ impl CodeGen {
     fn monomorphize_function(&mut self, fn_def: &TopLevel, type_args: &[Type]) -> String {
         if let TopLevel::FnDef { name, type_params, params, ret, body, .. } = fn_def {
             // Build substitution map
-            let sub: std::collections::HashMap<String, Type> = type_params.iter()
+            let sub: std::collections::HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone())
                 .zip(type_args.iter())
-                .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
+                .map(|(tp, concrete)| (tp, concrete.clone()))
                 .collect();
 
             // Generate monomorphized name: max__i64 -> max_i64
@@ -2115,6 +2239,34 @@ impl CodeGen {
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::type_id(inner)),
             Type::TypeParam(name) => name.clone(),
+        }
+    }
+
+    /// Evaluate a constant expression at compile time (same as TypeChecker::eval_const_expr)
+    fn eval_const_expr_static(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Int(n) => Some(*n),
+            Expr::Bool(b) => Some(if *b { 1 } else { 0 }),
+            Expr::BinaryOp { left, op, right } => {
+                let l = Self::eval_const_expr_static(left)?;
+                let r = Self::eval_const_expr_static(right)?;
+                match op {
+                    BinOp::Add => Some(l + r),
+                    BinOp::Sub => Some(l - r),
+                    BinOp::Mul => Some(l * r),
+                    BinOp::Div => if r == 0 { None } else { Some(l / r) },
+                    BinOp::Mod => if r == 0 { None } else { Some(l % r) },
+                    _ => None,
+                }
+            }
+            Expr::UnaryOp { op, expr } => {
+                let v = Self::eval_const_expr_static(expr)?;
+                match op {
+                    UnOp::Neg => Some(-v),
+                    UnOp::Not => Some(if v == 0 { 1 } else { 0 }),
+                }
+            }
+            _ => None,
         }
     }
 

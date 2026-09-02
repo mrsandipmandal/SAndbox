@@ -22,7 +22,7 @@ pub struct LlvmGen {
     /// Maps variable name -> lambda function name (for calls to lambda-typed variables)
     var_lambdas: HashMap<String, String>,
     /// Generic struct definitions: name -> (type_params, fields)
-    generic_structs: HashMap<String, (Vec<String>, Vec<Field>)>,
+    generic_structs: HashMap<String, (Vec<crate::ast::TypeParamDef>, Vec<Field>)>,
     /// Monomorphized struct names already generated
     mono_structs: std::collections::HashSet<String>,
     /// Pending struct monomorphizations: (mono_name, original_name, type_args)
@@ -1006,12 +1006,40 @@ impl LlvmGen {
                         Pattern::Variable(_) | Pattern::Wildcard => {
                             "true".to_string()
                         }
-                        Pattern::StrLiteral(_) => {
-                            // String comparison would need strcmp; treat as wildcard for now
-                            "true".to_string()
+                        Pattern::StrLiteral(s) => {
+                            // Use module-level string constant via fresh_str
+                            let str_name = self.fresh_str(s);
+                            let len = s.len() + 1; // include null terminator
+                            let str_ptr = self.fresh_var();
+                            writeln!(self.output, "  {} = getelementptr [{} x i8], [{} x i8]* @{}, i32 0, i32 0", str_ptr, len, len, str_name).unwrap();
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, sc, str_ptr).unwrap();
+                            let eq = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp eq i32 {}, 0", eq, cmp).unwrap();
+                            eq
                         }
                         _ => "true".to_string(),
                     };
+                    // Add guard check if present
+                    let final_cond = if let Some(ref guard_expr) = arm.guard {
+                        let guard_val = self.gen_expr(guard_expr);
+                        let guard_bool = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = icmp ne i64 {}, 0",
+                            guard_bool, guard_val
+                        ).unwrap();
+                        let and_var = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = and i1 {}, {}",
+                            and_var, cond, guard_bool
+                        ).unwrap();
+                        and_var
+                    } else {
+                        cond
+                    };
+
                     let next_label = if i + 1 < num_arms {
                         &skip_labels[i + 1]
                     } else {
@@ -1020,7 +1048,7 @@ impl LlvmGen {
                     writeln!(
                         self.output,
                         "  br i1 {}, label %{}, label %{}",
-                        cond, arm_label, next_label
+                        final_cond, arm_label, next_label
                     )
                     .unwrap();
                     self.block_terminated = true;
@@ -1694,9 +1722,9 @@ impl LlvmGen {
             if self.mono_structs.contains(&key) { return; }
             self.mono_structs.insert(key);
 
-            let sub: std::collections::HashMap<String, Type> = type_params.iter()
+            let sub: std::collections::HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone())
                 .zip(type_args.iter())
-                .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
+                .map(|(tp, concrete)| (tp, concrete.clone()))
                 .collect();
 
             let field_tys: Vec<String> = fields.iter().map(|f| {

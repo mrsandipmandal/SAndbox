@@ -7,12 +7,14 @@ pub struct TypeChecker {
     structs: HashMap<String, Vec<Field>>,
     enums: HashMap<String, Vec<EnumVariantDef>>,
     /// Generic structs: name -> (type_params, fields)
-    generic_structs: HashMap<String, (Vec<String>, Vec<Field>)>,
+    generic_structs: HashMap<String, (Vec<crate::ast::TypeParamDef>, Vec<Field>)>,
     /// Generic enums: name -> (type_params, variants)
-    generic_enums: HashMap<String, (Vec<String>, Vec<EnumVariantDef>)>,
+    generic_enums: HashMap<String, (Vec<crate::ast::TypeParamDef>, Vec<EnumVariantDef>)>,
     functions: HashMap<String, (Vec<Type>, Option<Type>)>,
     fn_defs: HashMap<String, TopLevel>,
     scopes: Vec<HashMap<String, Type>>,
+    /// Compile-time constants: name -> (type, evaluated_value)
+    constants: HashMap<String, (Type, i64)>,
 }
 
 impl TypeChecker {
@@ -25,10 +27,91 @@ impl TypeChecker {
             functions: HashMap::new(),
             fn_defs: HashMap::new(),
             scopes: vec![HashMap::new()],
+            constants: HashMap::new(),
+        }
+    }
+
+    /// Substitute known constant identifiers with their integer values
+    fn substitute_const_expr(expr: &Expr, constants: &HashMap<String, (Type, i64)>) -> Expr {
+        match expr {
+            Expr::Ident(name) => {
+                if let Some((_, val)) = constants.get(name) {
+                    Expr::Int(*val)
+                } else {
+                    expr.clone()
+                }
+            }
+            Expr::BinaryOp { left, op, right } => {
+                Expr::BinaryOp {
+                    op: op.clone(),
+                    left: Box::new(Self::substitute_const_expr(left, constants)),
+                    right: Box::new(Self::substitute_const_expr(right, constants)),
+                }
+            }
+            Expr::UnaryOp { op, expr } => {
+                Expr::UnaryOp {
+                    op: op.clone(),
+                    expr: Box::new(Self::substitute_const_expr(expr, constants)),
+                }
+            }
+            _ => expr.clone(),
+        }
+    }
+
+    /// Evaluate a constant expression at compile time (simple cases only)
+    fn eval_const_expr(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Int(n) => Some(*n),
+            Expr::Bool(b) => Some(if *b { 1 } else { 0 }),
+            Expr::BinaryOp { left, op, right } => {
+                let l = Self::eval_const_expr(left)?;
+                let r = Self::eval_const_expr(right)?;
+                match op {
+                    BinOp::Add => Some(l + r),
+                    BinOp::Sub => Some(l - r),
+                    BinOp::Mul => Some(l * r),
+                    BinOp::Div => if r == 0 { None } else { Some(l / r) },
+                    BinOp::Mod => if r == 0 { None } else { Some(l % r) },
+                    _ => None,
+                }
+            }
+            Expr::UnaryOp { op, expr } => {
+                let v = Self::eval_const_expr(expr)?;
+                match op {
+                    UnOp::Neg => Some(-v),
+                    UnOp::Not => Some(if v == 0 { 1 } else { 0 }),
+                }
+            }
+            _ => None,
         }
     }
 
     /// Substitute type parameters with concrete types (static version for typechecker)
+
+    /// Infer a type parameter from a raw type pattern and a concrete type.
+    /// E.g., infer_type_param(TypeParam("T"), "T", Type::I64) => Some(Type::I64)
+    fn infer_type_param(raw_pattern: &Type, param_name: &str, concrete: &Type) -> Option<Type> {
+        match raw_pattern {
+            Type::TypeParam(name) if name == param_name => Some(concrete.clone()),
+            Type::Custom { name, type_args } if name == param_name && type_args.is_empty() => Some(concrete.clone()),
+            Type::Array(inner) => {
+                if let Type::Array(concrete_inner) = concrete {
+                    Self::infer_type_param(inner, param_name, concrete_inner)
+                } else {
+                    None
+                }
+            }
+            Type::Option(inner) => {
+                if let Type::Option(concrete_inner) = concrete {
+                    Self::infer_type_param(inner, param_name, concrete_inner)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn substitute_type_static(ty: &Type, sub: &std::collections::HashMap<String, Type>) -> Type {
         match ty {
             Type::TypeParam(name) => {
@@ -156,6 +239,21 @@ impl TypeChecker {
                         println!("  ✓ Method '{}::{}' type-checked", type_name, name);
                     }
                 }
+            }
+        }
+
+        // Process compile-time constants (multi-pass for forward references)
+        for item in &program.items {
+            if let TopLevel::ConstDef { name, ty, value } = item {
+                // Substitute known constants in the expression
+                let substituted = Self::substitute_const_expr(value, &self.constants);
+                let val_ty = self.check_expr(&substituted)?;
+                if let Some(evaluated) = Self::eval_const_expr(&substituted) {
+                    let const_ty = ty.clone().unwrap_or(val_ty.clone());
+                    self.constants.insert(name.clone(), (const_ty, evaluated));
+                }
+                // Also register in scope as a variable
+                self.scopes.last_mut().unwrap().insert(name.clone(), val_ty);
             }
         }
 
@@ -409,8 +507,8 @@ impl TypeChecker {
                             ));
                         }
                         // Build substitution map: T → concrete type
-                        let sub: HashMap<String, Type> = type_params.iter().zip(type_args.iter())
-                            .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
+                        let sub: HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone()).zip(type_args.iter())
+                            .map(|(tp, concrete)| (tp, concrete.clone()))
                             .collect();
                         // Substitute in param types and return type
                         param_tys = param_tys.iter().map(|t| Self::substitute_type(t, &sub)).collect();
@@ -457,8 +555,8 @@ impl TypeChecker {
                     if let Some((type_params, generic_fields)) = self.generic_structs.get(name).cloned() {
                         // Build substitution: T -> concrete type
                         let sub: std::collections::HashMap<String, Type> = type_params.iter()
-                            .zip(type_args.iter())
-                            .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
+                            .map(|tp| tp.name.clone()).zip(type_args.iter())
+                            .map(|(tp, concrete)| (tp, concrete.clone()))
                             .collect();
                         // Register the concrete struct with substituted field types
                         let concrete_fields: Vec<Field> = generic_fields.iter().map(|f| {
@@ -584,7 +682,7 @@ impl TypeChecker {
                 variant,
                 payload,
             } => {
-                let (has_payload, expected_payload) = {
+                let (has_payload_v, raw_payload_ty_v) = {
                     let ev = self
                         .enums
                         .get(enum_name)
@@ -592,41 +690,117 @@ impl TypeChecker {
                     let v = ev.iter().find(|v| v.name == *variant).ok_or_else(|| {
                         anyhow!("Unknown variant '{}' in enum '{}'", variant, enum_name)
                     })?;
-                    // Substitute type params if generic
-                    let payload = if let Some(ref p) = v.payload {
-                        if let Some((type_params, _)) = self.generic_enums.get(enum_name) {
-                            let sub: std::collections::HashMap<String, Type> = type_params.iter()
-                                .zip(type_args.iter())
-                                .map(|(tp, concrete)| (tp.clone(), concrete.clone()))
-                                .collect();
-                            Some(Self::substitute_type_static(p, &sub))
+                    (v.payload.is_some(), v.payload.clone())
+                };
+
+                let has_payload = has_payload_v;
+                let raw_payload_ty = raw_payload_ty_v;
+
+                // If type_args are empty and enum is generic, infer from payload
+                let generic_info = self.generic_enums.get(enum_name).cloned();
+                let resolved_type_args = if type_args.is_empty() {
+                    if let Some((type_params, _)) = &generic_info {
+                        if let (Some(ref payload_expr), Some(ref raw_payload_ty_pat)) = (&payload, &raw_payload_ty) {
+                            let arg_ty = self.check_expr(payload_expr)?;
+                            // Try to infer type params from the payload
+                            let mut sub: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+                            let mut all_resolved = true;
+                            for tp in type_params.iter().map(|tp| tp.name.as_str()) {
+                                if let Some(concrete) = Self::infer_type_param(raw_payload_ty_pat, tp, &arg_ty) {
+                                    sub.insert(tp.to_string(), concrete);
+                                } else {
+                                    all_resolved = false;
+                                }
+                            }
+                            if all_resolved && sub.len() == type_params.len() {
+                                type_params.iter().map(|tp| sub.get(&tp.name).cloned().unwrap_or(Type::Void)).collect()
+                            } else {
+                                type_args.clone()
+                            }
                         } else {
-                            Some(p.clone())
+                            type_args.clone()
                         }
                     } else {
-                        None
-                    };
-                    (v.payload.is_some(), payload)
+                        type_args.clone()
+                    }
+                } else {
+                    type_args.clone()
                 };
+
+                // Build substitution from resolved type args
+                let sub: std::collections::HashMap<String, Type> = if let Some((type_params, _)) = &generic_info {
+                    type_params.iter().map(|tp| tp.name.clone())
+                        .zip(resolved_type_args.iter())
+                        .map(|(tp, concrete)| (tp, concrete.clone()))
+                        .collect()
+                } else {
+                    std::collections::HashMap::new()
+                };
+
+                // Get the expected payload type (substituted if generic)
+                let expected_payload = if let Some(ref raw_ty) = raw_payload_ty {
+                    if sub.is_empty() {
+                        Some(raw_ty.clone())
+                    } else {
+                        Some(Self::substitute_type_static(raw_ty, &sub))
+                    }
+                } else {
+                    None
+                };
+
                 match (has_payload, expected_payload, payload) {
-                    (false, _, None) => Ok(Type::custom(&enum_name)),
+                    (false, _, None) => Ok(if resolved_type_args.is_empty() {
+                        Type::custom(&enum_name)
+                    } else {
+                        Type::Custom { name: enum_name.clone(), type_args: resolved_type_args }
+                    }),
                     (true, Some(expected), Some(expr)) => {
-                        let arg_ty = self.check_expr(expr)?;
-                        if !self.types_compatible(&expected, &arg_ty) {
-                            return Err(anyhow!(
-                                "Enum variant '{}::{}': expected payload '{}', got '{}'",
-                                enum_name,
-                                variant,
-                                expected,
-                                arg_ty
-                            ));
-                        }
-                        // Return the concrete enum type
-                        if !type_args.is_empty() {
-                            Ok(Type::Custom { name: enum_name.clone(), type_args: type_args.clone() })
+                        // For generic enums without explicit type args, check against raw TypeParam
+                        let arg_ty = if resolved_type_args.is_empty() {
+                            self.check_expr(expr)?
                         } else {
-                            Ok(Type::custom(&enum_name))
-                        }
+                            let checked = self.check_expr(expr)?;
+                            if !self.types_compatible(&expected, &checked) {
+                                return Err(anyhow!(
+                                    "Enum variant '{}::{}': expected payload '{}', got '{}'",
+                                    enum_name, variant, expected, checked
+                                ));
+                            }
+                            checked
+                        };
+
+                        // If we still have unresolved type params, infer them
+                        let final_type_args = if resolved_type_args.is_empty() {
+                            if let Some((type_params, _)) = &generic_info {
+                                if let Some(ref raw_ty) = raw_payload_ty {
+                                    let mut sub2: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+                                    let mut all_resolved = true;
+                                    for tp in type_params.iter().map(|tp| tp.name.as_str()) {
+                                        if let Some(concrete) = Self::infer_type_param(raw_ty, tp, &arg_ty) {
+                                            sub2.insert(tp.to_string(), concrete);
+                                        } else {
+                                            all_resolved = false;
+                                        }
+                                    }
+                                    if all_resolved && sub2.len() == type_params.len() {
+                                        type_params.iter().map(|tp| sub2.get(&tp.name).cloned().unwrap_or(Type::Void)).collect()
+                                    } else {
+                                        return Err(anyhow!(
+                                            "Enum variant '{}::{}': cannot infer type parameter from payload '{}' (got '{}')",
+                                            enum_name, variant, raw_ty, arg_ty
+                                        ));
+                                    }
+                                } else {
+                                    resolved_type_args
+                                }
+                            } else {
+                                resolved_type_args
+                            }
+                        } else {
+                            resolved_type_args
+                        };
+
+                        Ok(Type::Custom { name: enum_name.clone(), type_args: final_type_args })
                     }
                     (false, _, Some(_)) => {
                         Err(anyhow!("Variant '{}' does not take a payload", variant))
@@ -679,6 +853,13 @@ impl TypeChecker {
                         }
                         Pattern::SomePattern { binding: None } | Pattern::NonePattern => {}
                         _ => {}
+                    }
+                    // Typecheck guard expression if present
+                    if let Some(ref guard) = arm.guard {
+                        let guard_ty = self.check_expr(guard)?;
+                        if !matches!(guard_ty, Type::Bool) {
+                            // Allow it but warn — guard should be bool
+                        }
                     }
                     self.check_block(&arm.body)?;
                     if let Some(last) = arm.body.last() {

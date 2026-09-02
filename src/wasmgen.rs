@@ -80,6 +80,7 @@ impl WasmGen {
                     params,
                     ret,
                     body,
+                    ..
                 } => {
                     self.gen_wasm_fn(name, params, ret, body);
                 }
@@ -90,6 +91,7 @@ impl WasmGen {
                             params,
                             ret,
                             body,
+                            ..
                         } = item
                         {
                             self.gen_wasm_fn(name, params, ret, body);
@@ -367,6 +369,9 @@ impl WasmGen {
                 self.write_indent();
                 self.gen_wasm_expr(expr);
             }
+            Stmt::IfLet { .. } => {
+                // Simplified: skip for WASM backend
+            }
         }
     }
 
@@ -454,7 +459,7 @@ impl WasmGen {
                     writeln!(self.output, ")").unwrap();
                 }
             },
-            Expr::Call { name, args } => {
+            Expr::Call { name, type_args: _, args } => {
                 self.write_indent();
                 // Try to find function name with module prefix stripped
                 let fn_name = name.rfind("::").map_or(name.as_str(), |i| &name[i + 2..]);

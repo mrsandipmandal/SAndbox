@@ -5,6 +5,7 @@ mod lexer;
 mod llvmgen;
 mod lsp;
 mod parser;
+mod registry_client;
 mod repl;
 mod stdlib;
 mod token;
@@ -49,6 +50,14 @@ enum Commands {
         /// Path to .sbx file
         file: PathBuf,
     },
+    /// Run tests in a .sbx file
+    Test {
+        /// Path to .sbx file
+        file: PathBuf,
+        /// Filter tests by name (substring match)
+        #[arg(long, short)]
+        filter: Option<String>,
+    },
     /// Initialize a new Sandbox project
     Init {
         /// Project name
@@ -72,7 +81,11 @@ enum Commands {
         version: String,
     },
     /// Install all dependencies from sandbox.toml
-    Install,
+    Install {
+        /// Fail if any package is unsigned or has an invalid signature
+        #[arg(long)]
+        require_signatures: bool,
+    },
     /// Show dependency tree
     Tree,
     /// Fetch and vendor all dependencies into .sandbox/vendor/
@@ -101,10 +114,66 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Package registry commands
+    Pkg {
+        #[command(subcommand)]
+        command: PkgCommands,
+    },
     /// Start the LSP server for IDE support
     Lsp,
     /// Start interactive REPL
     Repl,
+    /// Interpret a .sbx file directly (no C compilation)
+    Interpret {
+        /// Path to .sbx file
+        file: PathBuf,
+    },
+    /// Generate documentation for a .sbx file
+    Doc {
+        /// Path to .sbx file
+        file: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum PkgCommands {
+    /// Log in to the package registry
+    Login,
+    /// Create an account on the package registry
+    Register,
+    /// Publish a package to the registry
+    Publish {
+        /// Path to package file (.sbx)
+        file: String,
+    },
+    /// Search for packages
+    Search {
+        /// Search query
+        #[arg(default_value = "")]
+        query: String,
+    },
+    /// Show package information
+    Info {
+        /// Package name
+        name: String,
+    },
+    /// Scaffold a new publishable package in the current directory
+    Init {
+        /// Package name (defaults to current directory name)
+        #[arg(default_value = "")]
+        name: String,
+    },
+    /// Generate ed25519 signing keypair
+    Keygen,
+    /// Register public key with the registry
+    Keys,
+    /// Verify a package's signature
+    Verify {
+        /// Package name
+        name: String,
+        /// Package version
+        version: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -142,6 +211,12 @@ fn main() -> anyhow::Result<()> {
             let compiler = compiler::Compiler::new(&source, &filename);
             compiler.check()?;
         }
+        Commands::Test { file, filter } => {
+            let source = fs::read_to_string(&file)?;
+            let filename = file.to_string_lossy().to_string();
+            let compiler = compiler::Compiler::new(&source, &filename);
+            compiler.run_tests(filter.as_deref())?;
+        }
         Commands::Init { name } => {
             init_project(&name)?;
         }
@@ -151,15 +226,44 @@ fn main() -> anyhow::Result<()> {
         Commands::Add { package, version } => {
             add_dependency(&package, &version)?;
         }
-        Commands::Install => {
-            install_dependencies()?;
+        Commands::Install { require_signatures } => {
+            install_dependencies(require_signatures)?;
         }
         Commands::Tree => {
             show_tree()?;
         }
         Commands::Vendor => {
-            install_dependencies()?;
+            install_dependencies(false)?;
         }
+        Commands::Pkg { command } => match command {
+            PkgCommands::Login => {
+                registry_client::pkg_login()?;
+            }
+            PkgCommands::Register => {
+                registry_client::pkg_register()?;
+            }
+            PkgCommands::Publish { file } => {
+                registry_client::pkg_publish(&file)?;
+            }
+            PkgCommands::Search { query } => {
+                registry_client::pkg_search(&query)?;
+            }
+            PkgCommands::Info { name } => {
+                registry_client::pkg_info(&name)?;
+            }
+            PkgCommands::Init { name } => {
+                registry_client::pkg_init(&name)?;
+            }
+            PkgCommands::Keygen => {
+                registry_client::pkg_keygen()?;
+            }
+            PkgCommands::Keys => {
+                registry_client::pkg_keys_register()?;
+            }
+            PkgCommands::Verify { name, version } => {
+                registry_client::pkg_verify(&name, &version)?;
+            }
+        },
         Commands::Wasm { file, output } => {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
@@ -197,6 +301,15 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Repl => {
             repl::run_repl()?;
+        }
+        Commands::Interpret { file } => {
+            let source = fs::read_to_string(&file)?;
+            let filename = file.to_string_lossy().to_string();
+            interpret(&source, &filename)?;
+        }
+        Commands::Doc { file } => {
+            let source = fs::read_to_string(&file)?;
+            generate_docs(&source)?;
         }
     }
 
@@ -421,7 +534,7 @@ fn rebuild_toml(config: &SandboxToml) -> String {
     out
 }
 
-fn install_dependencies() -> anyhow::Result<()> {
+fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {
     let content = find_sandbox_toml()?;
     let config = parse_sandbox_toml(&content)?;
 
@@ -430,40 +543,91 @@ fn install_dependencies() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("📦 Installing dependencies...");
+    println!("📦 Resolving dependencies...");
+
+    // Use the resolver to get all dependencies with checksums
+    let resolved_deps = registry_client::resolve_all_dependencies(&config.dependencies)?;
+
+    if resolved_deps.is_empty() {
+        println!("⚠ No dependencies could be resolved");
+        return Ok(());
+    }
+
+    println!("📦 Installing {} dependencies...", resolved_deps.len());
     fs::create_dir_all(".sandbox/vendor")?;
 
-    let mut lock_lines = String::new();
-    lock_lines.push_str("# sandbox.lock — generated by `sandbox install`\n");
-    lock_lines.push_str("# Do not edit by hand.\n\n");
+    let mut lock = String::new();
+    lock.push_str("# sandbox.lock — generated by `sandbox install`\n");
+    lock.push_str("# Do not edit by hand.\n\n");
+    lock.push_str("[dependencies]\n");
 
-    let mut deps: Vec<_> = config.dependencies.iter().collect();
-    deps.sort_by_key(|(k, _)| (*k).clone());
-
-    let registry = std::env::var("SANDBOX_REGISTRY")
-        .unwrap_or_else(|_| "https://registry.sandbox.dev/v1".to_string());
     let mut any_fetched = false;
 
-    for (name, version) in &deps {
-        println!("  → {} v{}", name, version);
-        match fetch_package(&registry, name, version) {
-            Ok(pkg) => {
+    for (name, version, checksum) in &resolved_deps {
+        print!("  → {} v{}... ", name, version);
+
+        // Download the package
+        match registry_client::download_package_bytes(name, version) {
+            Ok(data) => {
+                // Verify checksum
+                use sha2::{Sha256, Digest};
+                let mut hasher = Sha256::new();
+                hasher.update(&data);
+                let actual = format!("sha256:{}", hex::encode(hasher.finalize()));
+
+                if checksum != "unknown" && actual != *checksum {
+                    println!("❌ checksum mismatch!");
+                    println!("     expected: {}", checksum);
+                    println!("     actual:   {}", actual);
+                    lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", status = \"mismatch\" }}\n", name, version, actual));
+                    continue;
+                }
+
                 let dir = format!(".sandbox/vendor/{}", name);
                 fs::create_dir_all(&dir)?;
                 let path = format!("{dir}/{}.sbx", name);
-                fs::write(&path, &pkg.source)?;
-                lock_lines.push_str(&format!("{} = \"{}\"\n", name, pkg.version));
-                println!("  ✓ {} v{} downloaded", name, pkg.version);
+                fs::write(&path, &data)?;
+
+                // Verify ed25519 signature
+                let mut sig_status_str = "unsigned".to_string();
+                match registry_client::verify_package_signature(name, version) {
+                    Ok(status) if status.signed && status.valid => {
+                        sig_status_str = format!("signed by {}", status.signed_by);
+                    }
+                    Ok(status) if status.signed && !status.valid => {
+                        sig_status_str = "INVALID signature".to_string();
+                        if require_signatures {
+                            println!("❌ {} v{} has an INVALID signature — aborting (signed by {})", name, version, status.signed_by);
+                            lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", status = \"invalid_signature\" }}\n", name, version, actual));
+                            continue;
+                        }
+                        println!("⚠  WARNING: {} v{} has an INVALID signature (signed by {})", name, version, status.signed_by);
+                    }
+                    Ok(_status) => {
+                        // not signed
+                        if require_signatures {
+                            println!("❌ {} v{} is NOT signed — aborting", name, version);
+                            lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", status = \"unsigned\" }}\n", name, version, actual));
+                            continue;
+                        }
+                    }
+                    Err(_) => {
+                        // Verify endpoint unavailable — that's fine
+                    }
+                }
+
+                lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", signature = \"{}\" }}\n", name, version, actual, sig_status_str));
+                println!("✓ {} bytes, verified, {}", data.len(), sig_status_str);
                 any_fetched = true;
             }
             Err(e) => {
-                println!("  ⚠ {} — {}", name, e);
-                lock_lines.push_str(&format!("{} = \"{}\" (unresolved)\n", name, version));
+                println!("⚠ {}", e);
+                lock.push_str(&format!("{} = {{ version = \"{}\", status = \"failed\" }}\n", name, version));
             }
         }
     }
 
-    fs::write(".sandbox/lock.toml", &lock_lines)?;
+    fs::write(".sandbox/lock.toml", &lock)?;
 
     if !any_fetched {
         println!(
@@ -474,87 +638,6 @@ fn install_dependencies() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetches a package from the registry over plain TCP (HTTP/1.1 or HTTPS).
-/// Returns (source, resolved_version).
-fn fetch_package(registry: &str, name: &str, version: &str) -> anyhow::Result<FetchedPackage> {
-    let url = format!("{registry}/package/{name}?version={version}");
-    let (host, port, path) = parse_registry_url(&url)?;
-
-    let addr = format!("{}:{}", host, port);
-    let mut stream = std::net::TcpStream::connect(&addr)
-        .map_err(|e| anyhow::anyhow!("cannot reach registry {}: {}", addr, e))?;
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-        .ok();
-    stream
-        .set_write_timeout(Some(std::time::Duration::from_secs(5)))
-        .ok();
-
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: sandbox-cli/2.0\r\nConnection: close\r\n\r\n",
-        path, host
-    );
-    use std::io::Write;
-    stream.write_all(request.as_bytes())?;
-
-    use std::io::Read;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf)?;
-    let resp = String::from_utf8_lossy(&buf);
-
-    let status = resp
-        .lines()
-        .next()
-        .unwrap_or("HTTP/1.1 000")
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("000")
-        .to_string();
-
-    if status != "200" && status != "201" {
-        return Err(anyhow::anyhow!("registry returned HTTP {}", status));
-    }
-
-    // Body starts after the blank line separating headers.
-    let body = resp
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if body.is_empty() {
-        return Err(anyhow::anyhow!("registry returned an empty package"));
-    }
-
-    Ok(FetchedPackage {
-        source: body,
-        version: version.to_string(),
-    })
-}
-
-struct FetchedPackage {
-    source: String,
-    version: String,
-}
-
-/// Splits "https://host:port/path" (or http://) into (host, port, path).
-/// HTTPS/443 and HTTP/80 are the defaults; TLS is not negotiated — the
-/// registry endpoint is expected to be served over plain HTTP for v2.0.
-fn parse_registry_url(url: &str) -> anyhow::Result<(String, u16, String)> {
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| anyhow::anyhow!("unsupported registry URL: {}", url))?;
-    let (authority, path) = match rest.split_once('/') {
-        Some((a, p)) => (a, format!("/{p}")),
-        None => (rest, "/".to_string()),
-    };
-    let (host, port) = match authority.split_once(':') {
-        Some((h, p)) => (h.to_string(), p.parse::<u16>().unwrap_or(80)),
-        None => (authority.to_string(), 80),
-    };
-    Ok((host, port, path))
-}
 
 fn show_tree() -> anyhow::Result<()> {
     let content = find_sandbox_toml()?;
@@ -564,16 +647,428 @@ fn show_tree() -> anyhow::Result<()> {
 
     if config.dependencies.is_empty() {
         println!("  (no dependencies)");
-    } else {
-        let mut deps: Vec<_> = config.dependencies.iter().collect();
-        deps.sort_by_key(|(k, _)| (*k).clone());
-        for (i, (name, version)) in deps.iter().enumerate() {
-            let prefix = if i == deps.len() - 1 {
-                "└──"
-            } else {
-                "├──"
-            };
-            println!("  {} {} v{}", prefix, name, version);
+        return Ok(());
+    }
+
+    // Collect all conflicts found during traversal
+    let mut conflicts: Vec<String> = Vec::new();
+    // Track resolved versions: package_name -> (spec, resolved_version, required_by)
+    let mut resolved_versions: std::collections::HashMap<String, Vec<(String, String, String)>> =
+        std::collections::HashMap::new();
+
+    // Resolve direct dependencies
+    let mut direct_deps: Vec<(&String, &String)> = config.dependencies.iter().collect();
+    direct_deps.sort_by_key(|(k, _)| (*k).clone());
+
+    for (i, (name, spec)) in direct_deps.iter().enumerate() {
+        let is_last = i == direct_deps.len() - 1;
+        let connector = if is_last { "└──" } else { "├──" };
+        let continuation = if is_last { "   " } else { "│  " };
+
+        match registry_client::resolve_version(name, spec) {
+            Ok(resolved) => {
+                // Track resolved version for conflict detection
+                resolved_versions
+                    .entry(name.to_string())
+                    .or_default()
+                    .push((spec.to_string(), resolved.clone(), config.package.name.clone()));
+
+                println!("  {} {} v{} (resolved: {})", connector, name, spec, resolved);
+
+                // Fetch and display transitive dependencies
+                match registry_client::fetch_package_deps(name, &resolved) {
+                    Ok(transitive) if !transitive.is_empty() => {
+                        let mut trans_sorted = transitive;
+                        trans_sorted.sort_by_key(|(k, _)| k.clone());
+                        for (j, (dep_name, dep_spec)) in trans_sorted.iter().enumerate() {
+                            let dep_last = j == trans_sorted.len() - 1;
+                            let dep_connector = if dep_last { "└──" } else { "├──" };
+                            let dep_cont = if dep_last { "   " } else { "│  " };
+
+                            // Check for conflicts
+                            if let Some(existing) = resolved_versions.get(dep_name) {
+                                for (prev_spec, prev_resolved, prev_by) in existing {
+                                    if prev_resolved != dep_spec {
+                                        // Different specifiers might resolve to different versions
+                                        match registry_client::resolve_version(dep_name, dep_spec) {
+                                            Ok(dep_resolved) if dep_resolved != *prev_resolved => {
+                                                conflicts.push(format!(
+                                                    "  ⚠ Conflict: {} requires v{}, but {} requires v{}",
+                                                    name, dep_resolved, prev_by, prev_resolved
+                                                ));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+
+                            match registry_client::resolve_version(dep_name, dep_spec) {
+                                Ok(dep_resolved) => {
+                                    resolved_versions
+                                        .entry(dep_name.to_string())
+                                        .or_default()
+                                        .push((dep_spec.to_string(), dep_resolved.clone(), name.to_string()));
+
+                                    println!("  {}  {} {} v{} (resolved: {})",
+                                        continuation, dep_connector, dep_name, dep_spec, dep_resolved);
+
+                                    // Fetch depth-2 transitive deps
+                                    match registry_client::fetch_package_deps(dep_name, &dep_resolved) {
+                                        Ok(deep_deps) if !deep_deps.is_empty() => {
+                                            let mut deep_sorted = deep_deps;
+                                            deep_sorted.sort_by_key(|(k, _)| k.clone());
+                                            for (k, (deep_name, deep_spec)) in deep_sorted.iter().enumerate() {
+                                                let deep_last = k == deep_sorted.len() - 1;
+                                                let deep_connector = if deep_last { "└──" } else { "├──" };
+
+                                                if let Some(existing) = resolved_versions.get(deep_name) {
+                                                    for (prev_spec, prev_resolved, prev_by) in existing {
+                                                        if prev_resolved != deep_spec {
+                                                            match registry_client::resolve_version(deep_name, deep_spec) {
+                                                                Ok(d_resolved) if d_resolved != *prev_resolved => {
+                                                                    conflicts.push(format!(
+                                                                        "  ⚠ Conflict: {} requires v{}, but {} requires v{}",
+                                                                        dep_name, d_resolved, prev_by, prev_resolved
+                                                                    ));
+                                                                }
+                                                                _ => {}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                match registry_client::resolve_version(deep_name, deep_spec) {
+                                                    Ok(d_resolved) => {
+                                                        resolved_versions
+                                                            .entry(deep_name.to_string())
+                                                            .or_default()
+                                                            .push((deep_spec.to_string(), d_resolved.clone(), dep_name.to_string()));
+                                                        println!("  {}  {}  {} {} v{} (resolved: {})",
+                                                            continuation, dep_cont, deep_connector, deep_name, deep_spec, d_resolved);
+                                                    }
+                                                    Err(e) => {
+                                                        println!("  {}  {}  {} ⚠ {} v{}: {}", continuation, dep_cont, deep_connector, deep_name, deep_spec, e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("  {}  {} ⚠ {} v{}: {}", continuation, dep_connector, dep_name, dep_spec, e);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                println!("  {} ⚠ {} v{}: {}", connector, name, spec, e);
+            }
+        }
+    }
+
+    // Print conflicts at the end
+    if !conflicts.is_empty() {
+        println!("\n⚠ {} conflict(s) detected:", conflicts.len());
+        for c in &conflicts {
+            println!("{}", c);
+        }
+    }
+
+    // Print lock file info if it exists
+    let lock_path = std::path::Path::new(".sandbox/lock.toml");
+    if lock_path.exists() {
+        if let Ok(lock_content) = std::fs::read_to_string(lock_path) {
+            let installed = lock_content.lines()
+                .filter(|l| l.contains("version") && !l.starts_with('#'))
+                .count();
+            println!("\n🔒 {} package(s) installed (see .sandbox/lock.toml)", installed);
+        }
+    }
+
+    Ok(())
+}
+
+// ── Phase 4: Bytecode Interpreter ──
+
+/// Tree-walking interpreter that evaluates Sandbox source directly
+/// without compiling to C. Enables instant `sandbox interpret` for dev.
+fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
+    use std::collections::HashMap;
+
+    let mut lexer = lexer::Lexer::new(source);
+    let tokens = lexer.tokenize().map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+    let mut parser = parser::Parser::new(tokens);
+    let program = parser.parse().map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+
+    let mut vars: HashMap<String, i64> = HashMap::new();
+    let mut str_vars: HashMap<String, String> = HashMap::new();
+
+    let mut functions: HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)> = HashMap::new();
+    for item in &program.items {
+        if let ast::TopLevel::FnDef { name, params, ret, body, .. } = item {
+            functions.insert(name.clone(), (params.clone(), ret.clone(), body.clone()));
+        }
+    }
+
+    let main_fn = functions.get("main").cloned()
+        .ok_or_else(|| anyhow::anyhow!("No 'main' function found in {}", filename))?;
+
+    fn exec_stmts(
+        stmts: &[ast::Stmt],
+        vars: &mut HashMap<String, i64>,
+        str_vars: &mut HashMap<String, String>,
+        functions: &HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
+    ) -> anyhow::Result<Option<i64>> {
+        for stmt in stmts {
+            match stmt {
+                ast::Stmt::Let { name, value, .. } => {
+                    let val = eval_expr(value, vars, str_vars, functions)?;
+                    vars.insert(name.clone(), val);
+                }
+                ast::Stmt::Assign { name, value } => {
+                    let val = eval_expr(value, vars, str_vars, functions)?;
+                    vars.insert(name.clone(), val);
+                }
+                ast::Stmt::Print(expr) => {
+                    let val = eval_expr(expr, vars, str_vars, functions)?;
+                    if let ast::Expr::Ident(n) = expr {
+                        if let Some(s) = str_vars.get(n) {
+                            println!("{}", s);
+                            continue;
+                        }
+                    }
+                    println!("{}", val);
+                }
+                ast::Stmt::Return(Some(expr)) => {
+                    let val = eval_expr(expr, vars, str_vars, functions)?;
+                    return Ok(Some(val));
+                }
+                ast::Stmt::Return(None) => return Ok(Some(0)),
+                ast::Stmt::If { condition, then, else_ } => {
+                    let cond = eval_expr(condition, vars, str_vars, functions)?;
+                    if cond != 0 {
+                        if let Some(val) = exec_stmts(then, vars, str_vars, functions)? {
+                            return Ok(Some(val));
+                        }
+                    } else if let Some(else_body) = else_ {
+                        if let Some(val) = exec_stmts(else_body, vars, str_vars, functions)? {
+                            return Ok(Some(val));
+                        }
+                    }
+                }
+                ast::Stmt::While { condition, body } => {
+                    loop {
+                        let cond = eval_expr(condition, vars, str_vars, functions)?;
+                        if cond == 0 { break; }
+                        if let Some(val) = exec_stmts(body, vars, str_vars, functions)? {
+                            return Ok(Some(val));
+                        }
+                    }
+                }
+                ast::Stmt::For { variable, iterable, body } => {
+                    let count = eval_expr(iterable, vars, str_vars, functions)?;
+                    for i in 0..count {
+                        vars.insert(variable.clone(), i);
+                        if let Some(val) = exec_stmts(body, vars, str_vars, functions)? {
+                            return Ok(Some(val));
+                        }
+                    }
+                }
+                ast::Stmt::ExprStmt(expr) => {
+                    eval_expr(expr, vars, str_vars, functions)?;
+                }
+                ast::Stmt::IfLet { value, then, else_, .. } => {
+                    let val = eval_expr(value, vars, str_vars, functions)?;
+                    if val != 0 {
+                        if let Some(result) = exec_stmts(then, vars, str_vars, functions)? {
+                            return Ok(Some(result));
+                        }
+                    } else if let Some(else_body) = else_ {
+                        if let Some(result) = exec_stmts(else_body, vars, str_vars, functions)? {
+                            return Ok(Some(result));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn eval_expr(
+        expr: &ast::Expr,
+        vars: &mut HashMap<String, i64>,
+        str_vars: &mut HashMap<String, String>,
+        functions: &HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
+    ) -> anyhow::Result<i64> {
+        match expr {
+            ast::Expr::Int(n) => Ok(*n),
+            ast::Expr::Float(n) => Ok(*n as i64),
+            ast::Expr::Bool(b) => Ok(if *b { 1 } else { 0 }),
+            ast::Expr::Str(s) => {
+                let key = format!("__str_{}", str_vars.len());
+                str_vars.insert(key, s.clone());
+                Ok(0)
+            }
+            ast::Expr::Ident(name) => Ok(*vars.get(name.as_str()).unwrap_or(&0)),
+            ast::Expr::BinaryOp { op, left, right } => {
+                let l = eval_expr(left, vars, str_vars, functions)?;
+                let r = eval_expr(right, vars, str_vars, functions)?;
+                match op {
+                    ast::BinOp::Add => Ok(l + r),
+                    ast::BinOp::Sub => Ok(l - r),
+                    ast::BinOp::Mul => Ok(l * r),
+                    ast::BinOp::Div => Ok(if r != 0 { l / r } else { 0 }),
+                    ast::BinOp::Mod => Ok(if r != 0 { l % r } else { 0 }),
+                    ast::BinOp::Eq => Ok(if l == r { 1 } else { 0 }),
+                    ast::BinOp::Neq => Ok(if l != r { 1 } else { 0 }),
+                    ast::BinOp::Lt => Ok(if l < r { 1 } else { 0 }),
+                    ast::BinOp::Gt => Ok(if l > r { 1 } else { 0 }),
+                    ast::BinOp::Le => Ok(if l <= r { 1 } else { 0 }),
+                    ast::BinOp::Ge => Ok(if l >= r { 1 } else { 0 }),
+                    ast::BinOp::And => Ok(if l != 0 && r != 0 { 1 } else { 0 }),
+                    ast::BinOp::Or => Ok(if l != 0 || r != 0 { 1 } else { 0 }),
+                }
+            }
+            ast::Expr::UnaryOp { op, expr } => {
+                let val = eval_expr(expr, vars, str_vars, functions)?;
+                match op {
+                    ast::UnOp::Neg => Ok(-val),
+                    ast::UnOp::Not => Ok(if val == 0 { 1 } else { 0 }),
+                }
+            }
+            ast::Expr::Call { name, type_args: _, args } => {
+                if name == "print" {
+                    if !args.is_empty() {
+                        let val = eval_expr(&args[0], vars, str_vars, functions)?;
+                        println!("{}", val);
+                    }
+                    return Ok(0);
+                }
+                if let Some((params, _ret, body)) = functions.get(name) {
+                    let mut local_vars = HashMap::new();
+                    let mut local_str = HashMap::new();
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        let val = eval_expr(arg, vars, str_vars, functions)?;
+                        local_vars.insert(param.name.clone(), val);
+                    }
+                    match exec_stmts(body, &mut local_vars, &mut local_str, functions)? {
+                        Some(v) => Ok(v),
+                        None => Ok(0),
+                    }
+                } else {
+                    Ok(0)
+                }
+            }
+            _ => Ok(0),
+        }
+    }
+
+    println!("\u{1f680} Interpreting {}...", filename);
+    let mut local_vars = HashMap::new();
+    let mut local_str = HashMap::new();
+    exec_stmts(&main_fn.2, &mut local_vars, &mut local_str, &functions)?;
+    println!("\u{2705} Interpreter finished");
+    Ok(())
+}
+
+// ── Phase 4: Documentation Generator ──
+
+fn generate_docs(source: &str) -> anyhow::Result<()> {
+    let mut lexer = lexer::Lexer::new(source);
+    let tokens = lexer.tokenize().map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+    let mut parser = parser::Parser::new(tokens);
+    let program = parser.parse().map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+
+    println!("# API Documentation");
+    println!();
+
+    fn sub_name(item: &ast::TopLevel) -> String {
+        match item {
+            ast::TopLevel::FnDef { name, .. } => name.clone(),
+            _ => String::new(),
+        }
+    }
+
+    for item in &program.items {
+        match item {
+            ast::TopLevel::FnDef { name, params, ret, doc, .. } => {
+                if let Some(d) = doc {
+                    for line in d.lines() {
+                        println!("// {}", line);
+                    }
+                }
+                let params_str: Vec<String> = params.iter()
+                    .map(|p| format!("{}: {}", p.name, p.ty))
+                    .collect();
+                let ret_str = ret.as_ref().map_or("void".to_string(), |t| t.to_string());
+                println!("## `{}({}) -> {}`", name, params_str.join(", "), ret_str);
+                println!();
+            }
+            ast::TopLevel::StructDef { name, fields, doc, .. } => {
+                if let Some(d) = doc {
+                    for line in d.lines() {
+                        println!("// {}", line);
+                    }
+                }
+                println!("## struct `{}`", name);
+                println!();
+                println!("| Field | Type |");
+                println!("|-------|------|");
+                for f in fields {
+                    println!("| `{}` | `{}` |", f.name, f.ty);
+                }
+                println!();
+            }
+            ast::TopLevel::EnumDef { name, variants, doc, .. } => {
+                if let Some(d) = doc {
+                    for line in d.lines() {
+                        println!("// {}", line);
+                    }
+                }
+                println!("## enum `{}`", name);
+                println!();
+                for v in variants {
+                    let payload_str = v.payload.as_ref()
+                        .map_or(String::new(), |t| format!("({})", t));
+                    println!("- `{}{}`", v.name, payload_str);
+                }
+                println!();
+            }
+            ast::TopLevel::ModuleDef { name, items, .. } => {
+                println!("## module `{}`", name);
+                println!();
+                for sub in items {
+                    if let ast::TopLevel::FnDef { params, ret, .. } = sub {
+                        let params_str: Vec<String> = params.iter()
+                            .map(|p| format!("{}: {}", p.name, p.ty))
+                            .collect();
+                        let ret_str = ret.as_ref().map_or("void".to_string(), |t| t.to_string());
+                        println!("### `{}::{}({}) -> {}`", name, sub_name(sub), params_str.join(", "), ret_str);
+                    }
+                }
+                println!();
+            }
+            ast::TopLevel::ImplDef { type_name, methods, .. } => {
+                println!("## impl `{}`", type_name);
+                println!();
+                for method in methods {
+                    if let ast::TopLevel::FnDef { name, params, ret, .. } = method {
+                        let params_str: Vec<String> = params.iter()
+                            .filter(|p| p.name != "self")
+                            .map(|p| format!("{}: {}", p.name, p.ty))
+                            .collect();
+                        let ret_str = ret.as_ref().map_or("void".to_string(), |t| t.to_string());
+                        println!("### `{}::{}({}) -> {}`", type_name, name, params_str.join(", "), ret_str);
+                    }
+                }
+                println!();
+            }
+            _ => {}
         }
     }
 

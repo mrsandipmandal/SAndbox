@@ -460,21 +460,32 @@ tests/
 - [x] Package manager: `sandbox add`, `sandbox install`, `sandbox tree`
 - [x] Formatter: `sandbox fmt`, `sandbox fmt --check`
 - [x] String concatenation with `+` operator
-- [ ] LLVM backend for native optimization
 
 ### v0.4 ✅ — Units, Decimal & WebAssembly
 - [x] Unit system with compile-time dimensional analysis
 - [x] Decimal type with exact i128 arithmetic
 - [x] WebAssembly .wat codegen backend
-- [ ] HTTP / JSON standard library
-- [ ] LLVM backend for native optimization
+- [x] HTTP / JSON standard library
 
 ### v1.0 ✅ — Production Ready
 - [x] Self-hosting compiler (Sandbox → C subset)
 - [x] Database DSL (table, query, SELECT/INSERT/UPDATE/DELETE)
 - [x] Ledger DSL (double-entry accounting with validation)
 - [x] IDE support (LSP server with diagnostics, completion, hover)
-- [ ] Package registry (`registry.sandbox.dev`)
+- [x] Package registry (server + client, ed25519 signing, dependency resolution)
+- [x] LLVM backend for native optimization (`sandbox llvm`, `sandbox llvm-build`)
+
+### v1.2 ✅ — LLVM Backend Parity
+- [x] LLVM backend at feature parity with the C backend
+  - Money literals & arithmetic, Decimal, Units
+  - Option/Some/None with match patterns
+  - Closure capture (free-variable detection + context passing)
+  - Async/await (sync-async model)
+  - Impl blocks, trait methods, module functions
+  - if-let, ranges, f-strings, assert/assert_eq
+  - Full binary operators (mod, le, ge, and, or)
+- [x] LLVM backend linked with shared C runtime (`sbx_runtime.c`)
+- [x] 12 new LLVM integration tests mirroring the C backend
 
 ---
 

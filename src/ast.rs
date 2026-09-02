@@ -14,9 +14,12 @@ pub enum Type {
     Unit(String),
     Array(Box<Type>),
     Void,
-    Custom(String),
+    Custom { name: String, type_args: Vec<Type> },
     Result(Box<Type>, Box<Type>),
+    Option(Box<Type>),
     Fn(Vec<Type>, Box<Type>),
+    Future(Box<Type>),
+    TypeParam(String),  // Generic type parameter like T, U
 }
 
 impl fmt::Display for Type {
@@ -31,13 +34,44 @@ impl fmt::Display for Type {
             Type::Unit(u) => write!(f, "{}", u),
             Type::Array(t) => write!(f, "[{}]", t),
             Type::Void => write!(f, "void"),
-            Type::Custom(n) => write!(f, "{}", n),
+            Type::Custom { name, type_args } => {
+                if type_args.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    let args: Vec<String> = type_args.iter().map(|a| format!("{}", a)).collect();
+                    write!(f, "{}<{}>", name, args.join(", "))
+                }
+            }
             Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            Type::Option(inner) => write!(f, "Option<{}>", inner),
             Type::Fn(params, ret) => {
                 let params_str: Vec<String> = params.iter().map(|p| format!("{}", p)).collect();
                 write!(f, "Fn({}) -> {}", params_str.join(", "), ret)
             }
+            Type::Future(inner) => write!(f, "Future<{}>", inner),
+            Type::TypeParam(name) => write!(f, "{}", name),
         }
+    }
+}
+
+
+impl Type {
+    /// Create a Custom type with no type arguments (backwards-compatible constructor)
+    pub fn custom(name: &str) -> Self {
+        Type::Custom { name: name.to_string(), type_args: Vec::new() }
+    }
+
+    /// Get the name of a Custom type (panics if not Custom)
+    pub fn custom_name(&self) -> &str {
+        match self {
+            Type::Custom { name, .. } => name,
+            _ => panic!("expected Custom type, got {:?}", self),
+        }
+    }
+
+    /// Check if this is a Custom type with no type arguments
+    pub fn is_custom_simple(&self) -> bool {
+        matches!(self, Type::Custom { type_args, .. } if type_args.is_empty())
     }
 }
 
@@ -61,10 +95,12 @@ pub enum Expr {
     },
     Call {
         name: String,
+        type_args: Vec<Type>,
         args: Vec<Expr>,
     },
     StructLiteral {
         name: String,
+        type_args: Vec<Type>,
         fields: Vec<(String, Expr)>,
     },
     ArrayLiteral(Vec<Expr>),
@@ -87,10 +123,22 @@ pub enum Expr {
     },
     OkExpr(Box<Expr>),
     ErrExpr(Box<Expr>),
+    SomeExpr(Box<Expr>),
+    NoneExpr,
     PanicExpr(Box<Expr>),
     TryExpr(Box<Expr>),
+    AssertExpr {
+        condition: Box<Expr>,
+        message: Option<Box<Expr>>,
+    },
+    AssertEqExpr {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        message: Option<Box<Expr>>,
+    },
     EnumVariant {
         enum_name: String,
+        type_args: Vec<Type>,
         variant: String,
         payload: Option<Box<Expr>>,
     },
@@ -98,11 +146,17 @@ pub enum Expr {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    MethodCall {
+        target: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
     Lambda {
         params: Vec<Param>,
         ret: Option<Type>,
         body: Vec<Stmt>,
     },
+    Await(Box<Expr>),
     Range {
         start: Box<Expr>,
         end: Box<Expr>,
@@ -153,6 +207,12 @@ pub enum Stmt {
         then: Vec<Stmt>,
         else_: Option<Vec<Stmt>>,
     },
+    IfLet {
+        pattern: Pattern,
+        value: Box<Expr>,
+        then: Vec<Stmt>,
+        else_: Option<Vec<Stmt>>,
+    },
     While {
         condition: Expr,
         body: Vec<Stmt>,
@@ -173,6 +233,7 @@ pub enum Stmt {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    pub default: Option<Expr>,  // default parameter value
 }
 
 #[derive(Debug, Clone)]
@@ -276,6 +337,10 @@ pub enum Pattern {
         variant: String,
         binding: Option<String>,
     },
+    SomePattern {
+        binding: Option<String>,
+    },
+    NonePattern,
     IntLiteral(i64),
     BoolLiteral(bool),
     StrLiteral(String),
@@ -303,17 +368,36 @@ pub enum FStringPart {
 pub enum TopLevel {
     FnDef {
         name: String,
+        type_params: Vec<String>,
         params: Vec<Param>,
         ret: Option<Type>,
         body: Vec<Stmt>,
+        doc: Option<String>,
+    },
+    AsyncFnDef {
+        name: String,
+        type_params: Vec<String>,
+        params: Vec<Param>,
+        ret: Option<Type>,
+        body: Vec<Stmt>,
+        doc: Option<String>,
     },
     StructDef {
         name: String,
+        type_params: Vec<String>,
         fields: Vec<Field>,
+        doc: Option<String>,
     },
     ModuleDef {
         name: String,
         items: Vec<TopLevel>,
+        doc: Option<String>,
+    },
+    // Traits
+    TraitDef {
+        name: String,
+        methods: Vec<TopLevel>,  // FnDefs without bodies (signatures only)
+        doc: Option<String>,
     },
     // v1.0: Ledger
     LedgerDef(LedgerDef),
@@ -327,7 +411,22 @@ pub enum TopLevel {
     // v1.1: Enums
     EnumDef {
         name: String,
+        type_params: Vec<String>,
         variants: Vec<EnumVariantDef>,
+        doc: Option<String>,
+    },
+    // v2.1: Impl blocks
+    ImplDef {
+        type_name: String,
+        trait_name: Option<String>,  // if `impl Trait for Type`, this is Some("Trait")
+        methods: Vec<TopLevel>,
+        doc: Option<String>,
+    },
+    // v2.1: Test functions
+    TestDef {
+        name: String,
+        body: Vec<Stmt>,
+        doc: Option<String>,
     },
 }
 

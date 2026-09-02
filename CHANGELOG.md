@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-01
+
+### Added
+
+- **LLVM Backend Feature Parity** — The LLVM IR backend now supports the full
+  Sandbox language feature set, matching the C/GCC backend:
+  - Money literals & arithmetic (scaled i64 ×10000)
+  - Decimal type (i128 scaled ×10^18)
+  - Option/Some/None with match patterns (Some/None)
+  - Closure capture (free-variable detection, captures passed as extra params)
+  - Async/await (sync-async model via shared C runtime)
+  - Impl blocks, trait methods, and module functions
+  - if-let, ranges, f-strings, assert/assert_eq
+  - Full binary operators (mod, <=, >=, and, or)
+  - Method calls (string methods + struct methods)
+  - Array literals and indexing
+  - Panic, error, try, and assert expressions
+
+- **LLVM Backend Runtime Linking** — `sandbox llvm-build` now emits the shared
+  C runtime (`sbx_runtime.c`) alongside the `.ll` file and compiles both with
+  clang. The runtime `static` functions are exported so they link correctly.
+  `sandbox llvm` (IR-only mode) also emits the runtime `.c` with a compile hint.
+
+- 12 new LLVM integration tests mirroring the C backend tests:
+  money, if-let, range-for, f-string, option-match, none-match,
+  closure-capture, async-await, modulo, le/ge, assert_eq, impl-method
+
+### Changed
+
+- Version bumped to 1.2.0
+- README roadmap: LLVM backend and HTTP/JSON marked complete; Package registry
+  marked complete; new v1.2 section added
+
 ## [1.0.0] - 2026-08-27
 
 ### Added

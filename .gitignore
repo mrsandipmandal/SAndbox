@@ -25,3 +25,7 @@ Thumbs.db
 
 # Runtime databases
 kv.db
+
+# Registry data
+registry/registry-data/
+registry/Cargo.lock

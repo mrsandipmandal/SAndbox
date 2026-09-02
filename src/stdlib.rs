@@ -323,6 +323,130 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
     register(&mut m, "sleep", vec![("ms".into(), Type::I64)], Type::Void);
     register(&mut m, "time::ms", vec![], Type::I64);
 
+    // ── v2.0: Future ──
+    register(
+        &mut m,
+        "future::wait",
+        vec![("handle".into(), Type::I64)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "future::is_ready",
+        vec![("handle".into(), Type::I64)],
+        Type::I64,
+    );
+
+    // ── v2.1: file I/O module ──
+    register(
+        &mut m,
+        "file::read",
+        vec![("path".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "file::write",
+        vec![("path".into(), Type::String), ("data".into(), Type::String)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "file::exists",
+        vec![("path".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "file::mkdir",
+        vec![("path".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "file::remove",
+        vec![("path".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "file::read_dir",
+        vec![("path".into(), Type::String)],
+        Type::String,
+    );
+
+    // ── v2.1: additional string methods ──
+    register(
+        &mut m,
+        "string::replace",
+        vec![
+            ("s".into(), Type::String),
+            ("from".into(), Type::String),
+            ("to".into(), Type::String),
+        ],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::to_upper",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::to_lower",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::char_at",
+        vec![("s".into(), Type::String), ("i".into(), Type::I64)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "string::repeat",
+        vec![("s".into(), Type::String), ("n".into(), Type::I64)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::split",
+        vec![("s".into(), Type::String), ("delim".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::join",
+        vec![("arr".into(), Type::String), ("sep".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "string::parse_int",
+        vec![("s".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "string::parse_float",
+        vec![("s".into(), Type::String)],
+        Type::F64,
+    );
+    register(
+        &mut m,
+        "string::ends_with",
+        vec![("s".into(), Type::String), ("suffix".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "string::is_empty",
+        vec![("s".into(), Type::String)],
+        Type::Bool,
+    );
+
     // ── v2.0: database (file-backed persistence) ──
     register(
         &mut m,
@@ -365,6 +489,35 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
         Type::I64,
     );
 
+    // ── assert_eq! (builtin) ──
+    register(&mut m, "assert_eq", vec![("a".into(), Type::I64), ("b".into(), Type::I64)], Type::Void);
+
+    // ── collections module ──
+    // List — opaque pointer handle (i64)
+    register(&mut m, "list::new", vec![], Type::I64);
+    register(&mut m, "list::len", vec![("l".into(), Type::I64)], Type::I64);
+    register(&mut m, "list::push", vec![("l".into(), Type::I64), ("v".into(), Type::I64)], Type::Void);
+    register(&mut m, "list::get", vec![("l".into(), Type::I64), ("i".into(), Type::I64)], Type::I64);
+    register(&mut m, "list::set", vec![("l".into(), Type::I64), ("i".into(), Type::I64), ("v".into(), Type::I64)], Type::Void);
+    register(&mut m, "list::contains", vec![("l".into(), Type::I64), ("v".into(), Type::I64)], Type::Bool);
+    register(&mut m, "list::sort", vec![("l".into(), Type::I64)], Type::Void);
+    register(&mut m, "list::remove", vec![("l".into(), Type::I64), ("i".into(), Type::I64)], Type::Void);
+    register(&mut m, "list::is_empty", vec![("l".into(), Type::I64)], Type::Bool);
+    // Map — opaque pointer handle (i64)
+    register(&mut m, "map::new", vec![], Type::I64);
+    register(&mut m, "map::len", vec![("m".into(), Type::I64)], Type::I64);
+    register(&mut m, "map::insert", vec![("m".into(), Type::I64), ("k".into(), Type::String), ("v".into(), Type::I64)], Type::Void);
+    register(&mut m, "map::get", vec![("m".into(), Type::I64), ("k".into(), Type::String)], Type::I64);
+    register(&mut m, "map::contains", vec![("m".into(), Type::I64), ("k".into(), Type::String)], Type::Bool);
+    register(&mut m, "map::remove", vec![("m".into(), Type::I64), ("k".into(), Type::String)], Type::Void);
+    register(&mut m, "map::keys", vec![("m".into(), Type::I64)], Type::String);
+    // Set — opaque pointer handle (i64)
+    register(&mut m, "set_of::new", vec![], Type::I64);
+    register(&mut m, "set_of::len", vec![("s".into(), Type::I64)], Type::I64);
+    register(&mut m, "set_of::insert", vec![("s".into(), Type::I64), ("v".into(), Type::String)], Type::Void);
+    register(&mut m, "set_of::contains", vec![("s".into(), Type::I64), ("v".into(), Type::String)], Type::Bool);
+    register(&mut m, "set_of::remove", vec![("s".into(), Type::I64), ("v".into(), Type::String)], Type::Void);
+
     m
 }
 
@@ -398,6 +551,23 @@ pub fn c_name(name: &str) -> &str {
         "string::starts_with" => "__sbx_str_starts_with",
         "string::contains" => "__sbx_str_contains",
         "string::find" => "__sbx_str_find",
+        "string::replace" => "__sbx_str_replace",
+        "string::to_upper" => "__sbx_str_to_upper",
+        "string::to_lower" => "__sbx_str_to_lower",
+        "string::char_at" => "__sbx_str_char_at",
+        "string::repeat" => "__sbx_str_repeat",
+        "string::split" => "__sbx_str_split",
+        "string::join" => "__sbx_str_join",
+        "string::parse_int" => "__sbx_str_parse_int",
+        "string::parse_float" => "__sbx_str_parse_float",
+        "string::ends_with" => "__sbx_str_ends_with",
+        "string::is_empty" => "__sbx_str_is_empty",
+        "file::read" => "__sbx_file_read",
+        "file::write" => "__sbx_file_write",
+        "file::exists" => "__sbx_file_exists",
+        "file::mkdir" => "__sbx_file_mkdir",
+        "file::remove" => "__sbx_file_remove",
+        "file::read_dir" => "__sbx_file_read_dir",
         "array::len" => "__sbx_arr_len",
         "array::push" => "__sbx_arr_push",
         "array::sort" => "__sbx_arr_sort",
@@ -436,6 +606,33 @@ pub fn c_name(name: &str) -> &str {
         "db::get" => "__sbx_db_get",
         "db::delete" => "__sbx_db_delete",
         "db::count" => "__sbx_db_count",
+        // collections
+        "list::new" => "__sbx_list_new",
+        "list::len" => "__sbx_list_len",
+        "list::push" => "__sbx_list_push",
+        "list::get" => "__sbx_list_get",
+        "list::set" => "__sbx_list_set",
+        "list::contains" => "__sbx_list_contains",
+        "list::sort" => "__sbx_list_sort",
+        "list::remove" => "__sbx_list_remove",
+        "list::is_empty" => "__sbx_list_is_empty",
+        "map::new" => "__sbx_map_new",
+        "map::len" => "__sbx_map_len",
+        "map::insert" => "__sbx_map_insert",
+        "map::get" => "__sbx_map_get",
+        "map::contains" => "__sbx_map_contains",
+        "map::remove" => "__sbx_map_remove",
+        "map::keys" => "__sbx_map_keys",
+        "set_of::new" => "__sbx_set_new",
+        "set_of::len" => "__sbx_set_len",
+        "set_of::insert" => "__sbx_set_insert",
+        "set_of::contains" => "__sbx_set_contains",
+        "set_of::remove" => "__sbx_set_remove",
+        "assert_eq" => "__sbx_assert_eq",
+        "__sbx_rc_retain" => "sbx_rc_retain",
+        "__sbx_rc_release" => "sbx_rc_release",
+        "future::wait" => "__sbx_future_wait",
+        "future::is_ready" => "__sbx_future_is_ready",
         _ => name,
     }
 }
@@ -455,7 +652,50 @@ pub fn c_preamble() -> String {
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <setjmp.h>
 #include <stdarg.h>
+#include <sys/stat.h>
+#include <dirent.h>
+
+/* ── Reference Counting Runtime ── */
+
+typedef struct {
+    long refcount;
+    size_t size;   /* size of payload (excluding header) */
+} sbx_rc_header;
+
+/* Allocate a new RC-managed block. refcount starts at 1. */
+static void* sbx_rc_alloc(size_t size) {
+    sbx_rc_header* h = (sbx_rc_header*)malloc(sizeof(sbx_rc_header) + size);
+    if (!h) { fprintf(stderr, "sandbox: out of memory\n"); exit(1); }
+    h->refcount = 1;
+    h->size = size;
+    return (void*)(h + 1);  /* return pointer past header */
+}
+
+/* Increment refcount */
+static void sbx_rc_retain(void* ptr) {
+    if (!ptr) return;
+    sbx_rc_header* h = ((sbx_rc_header*)ptr) - 1;
+    h->refcount++;
+}
+
+/* Decrement refcount; free if zero */
+static void sbx_rc_release(void* ptr) {
+    if (!ptr) return;
+    sbx_rc_header* h = ((sbx_rc_header*)ptr) - 1;
+    h->refcount--;
+    if (h->refcount <= 0) {
+        free(h);
+    }
+}
+
+/* Get current refcount (for debugging) */
+static long sbx_rc_refcount(void* ptr) {
+    if (!ptr) return 0;
+    sbx_rc_header* h = ((sbx_rc_header*)ptr) - 1;
+    return h->refcount;
+}
 
 /* ── string helpers ── */
 
@@ -466,7 +706,7 @@ static long __sbx_str_len(const char* s) {
 static const char* __sbx_str_concat(const char* a, const char* b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
-    char* out = (char*)malloc(la + lb + 1);
+    char* out = (char*)sbx_rc_alloc(la + lb + 1);
     memcpy(out, a, la);
     memcpy(out + la, b, lb);
     out[la + lb] = '\0';
@@ -477,12 +717,12 @@ static const char* __sbx_str_sub(const char* s, long start, long len) {
     size_t slen = strlen(s);
     if (start < 0) start = 0;
     if ((size_t)start >= slen) {
-        char* empty = (char*)malloc(1);
+        char* empty = (char*)sbx_rc_alloc(1);
         empty[0] = '\0';
         return empty;
     }
     if ((size_t)(start + len) > slen) len = (long)(slen - start);
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)sbx_rc_alloc((size_t)len + 1);
     memcpy(out, s + start, (size_t)len);
     out[len] = '\0';
     return out;
@@ -496,7 +736,7 @@ static const char* __sbx_str_trim(const char* s) {
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     size_t len = strlen(s);
     while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' || s[len-1] == '\n' || s[len-1] == '\r')) len--;
-    char* out = (char*)malloc(len + 1);
+    char* out = (char*)sbx_rc_alloc(len + 1);
     memcpy(out, s, len);
     out[len] = '\0';
     return out;
@@ -540,7 +780,7 @@ static void __sbx_arr_sort(long* arr, long len) {
 /* ── v2.0: JSON helpers ── */
 
 static const char* __sBx_json_stringify(long v) {
-    char* out = (char*)malloc(32);
+    char* out = (char*)sbx_rc_alloc(32);
     snprintf(out, 32, "%ld", v);
     return out;
 }
@@ -552,7 +792,7 @@ static const char* __sbx_json_stringify(long v) {
 }
 
 static const char* __sbx_json_stringify_float(double v) {
-    char* out = (char*)malloc(64);
+    char* out = (char*)sbx_rc_alloc(64);
     snprintf(out, 64, "%f", v);
     return out;
 }
@@ -582,7 +822,7 @@ static const char* __sbx_json_get(const char* s, const char* key) {
         const char* end = strchr(p, '"');
         if (!end) return "";
         size_t len = (size_t)(end - p);
-        char* out = (char*)malloc(len + 1);
+        char* out = (char*)sbx_rc_alloc(len + 1);
         memcpy(out, p, len);
         out[len] = '\0';
         return out;
@@ -591,7 +831,7 @@ static const char* __sbx_json_get(const char* s, const char* key) {
     const char* start = p;
     while (*p && *p != ',' && *p != '}' && *p != ']' && *p != '\n' && *p != '\r' && *p != ' ') p++;
     size_t len = (size_t)(p - start);
-    char* out = (char*)malloc(len + 1);
+    char* out = (char*)sbx_rc_alloc(len + 1);
     memcpy(out, start, len);
     out[len] = '\0';
     return out;
@@ -600,7 +840,7 @@ static const char* __sbx_json_get(const char* s, const char* key) {
 static const char* __sbx_json_stringify_string(const char* s) {
     /* Quote a string for JSON: hello -> "hello" */
     size_t len = strlen(s);
-    char* out = (char*)malloc(len + 3);
+    char* out = (char*)sbx_rc_alloc(len + 3);
     out[0] = '"';
     memcpy(out + 1, s, len);
     out[len + 1] = '"';
@@ -634,7 +874,7 @@ static const char* __sbx_json_parse_string(const char* s) {
     const char* end = strchr(p, '"');
     if (!end) return "";
     size_t len = (size_t)(end - p);
-    char* out = (char*)malloc(len + 1);
+    char* out = (char*)sbx_rc_alloc(len + 1);
     memcpy(out, p, len);
     out[len] = '\0';
     return out;
@@ -898,7 +1138,7 @@ static long __sbx_chan_recv(long ch) {
     return val;
 }
 
-/* ── v2.0: Spawn + time ── */
+/* ── v2.0: Spawn + time + Future ── */
 
 typedef struct {
     void (*fn)(long);
@@ -919,6 +1159,94 @@ static void __sbx_spawn(void (*fn)(long), long arg) {
     pthread_t tid;
     pthread_create(&tid, NULL, __sbx_task_run, t);
     pthread_detach(tid);
+}
+
+/* ── Future type ──
+   A Future stores a thread handle + result slot.
+   future::wait() blocks until the thread completes.
+   future::is_ready() checks non-blocking.
+*/
+#define SBX_MAX_FUTURES 128
+
+typedef struct {
+    pthread_t tid;
+    long result;       /* result value (for long-returning futures) */
+    void* result_ptr;  /* result pointer (for string-returning futures) */
+    int done;          /* 1 = thread finished */
+    int used;          /* 1 = slot in use */
+    pthread_mutex_t mutex;
+    pthread_cond_t done_cond;
+} sbx_future;
+
+static sbx_future sbx_futures[SBX_MAX_FUTURES];
+
+/* Wrapper: runs user fn, stores result, marks done */
+typedef struct {
+    long (*fn)(void);
+    int future_id;
+} sbx_future_task;
+
+static void* __sbx_future_run(void* p) {
+    sbx_future_task* ft = (sbx_future_task*)p;
+    long result = ft->fn();
+    sbx_future* f = &sbx_futures[ft->future_id];
+    pthread_mutex_lock(&f->mutex);
+    f->result = result;
+    f->done = 1;
+    pthread_cond_signal(&f->done_cond);
+    pthread_mutex_unlock(&f->mutex);
+    free(ft);
+    return NULL;
+}
+
+/* Create a future: spawns fn on a thread, returns future handle (1-based) */
+static long __sbx_future_spawn(long (*fn)(void)) {
+    for (long i = 0; i < SBX_MAX_FUTURES; i++) {
+        if (!sbx_futures[i].used) {
+            sbx_future* f = &sbx_futures[i];
+            f->used = 1;
+            f->done = 0;
+            f->result = 0;
+            f->result_ptr = NULL;
+            pthread_mutex_init(&f->mutex, NULL);
+            pthread_cond_init(&f->done_cond, NULL);
+            sbx_future_task* ft = (sbx_future_task*)malloc(sizeof(sbx_future_task));
+            ft->fn = fn;
+            ft->future_id = (int)i;
+            pthread_create(&f->tid, NULL, __sbx_future_run, ft);
+            return i + 1; /* 1-based handle */
+        }
+    }
+    return -1; /* no free slot */
+}
+
+/* Await: block until future completes, return result */
+static long __sbx_future_wait(long handle) {
+    if (handle < 1 || handle > SBX_MAX_FUTURES) return -1;
+    sbx_future* f = &sbx_futures[handle - 1];
+    if (!f->used) return -1;
+    pthread_mutex_lock(&f->mutex);
+    while (!f->done) {
+        pthread_cond_wait(&f->done_cond, &f->mutex);
+    }
+    long result = f->result;
+    pthread_mutex_unlock(&f->mutex);
+    /* Cleanup */
+    pthread_mutex_destroy(&f->mutex);
+    pthread_cond_destroy(&f->done_cond);
+    f->used = 0;
+    return result;
+}
+
+/* Check if future is done (non-blocking) */
+static long __sbx_future_is_ready(long handle) {
+    if (handle < 1 || handle > SBX_MAX_FUTURES) return 0;
+    sbx_future* f = &sbx_futures[handle - 1];
+    if (!f->used) return 0;
+    pthread_mutex_lock(&f->mutex);
+    long ready = f->done;
+    pthread_mutex_unlock(&f->mutex);
+    return ready;
 }
 
 static void __sbx_sleep(long ms) {
@@ -1305,14 +1633,14 @@ static sbx_range_t sbx_range_inclusive(long start, long end) {
 
 /* ── f-string helpers ── */
 static const char* __sbx_to_string(long v) {
-    char* buf = (char*)malloc(64);
-    snprintf(buf, sizeof(buf), "%ld", v);
+    char* buf = (char*)sbx_rc_alloc(64);
+    snprintf(buf, 64, "%ld", v);
     return buf;
 }
 
 static const char* __sbx_to_string_f(double v) {
-    char* buf = (char*)malloc(64);
-    snprintf(buf, sizeof(buf), "%g", v);
+    char* buf = (char*)sbx_rc_alloc(64);
+    snprintf(buf, 64, "%g", v);
     return buf;
 }
 
@@ -1328,7 +1656,7 @@ static const char* __sbx_str_concat_multi(int count, ...) {
     }
     va_end(args);
     /* Second pass: concatenate */
-    char* out = (char*)malloc(total + 1);
+    char* out = (char*)sbx_rc_alloc(total + 1);
     out[0] = '\0';
     va_start(args, count);
     for (int i = 0; i < count; i++) {
@@ -1337,6 +1665,455 @@ static const char* __sbx_str_concat_multi(int count, ...) {
     }
     va_end(args);
     return out;
+}
+
+/* ── v2.1: File I/O helpers ── */
+
+static const char* __sbx_file_read(const char* path) {
+    FILE* fp = fopen(path, "r");
+    if (!fp) return "";
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char* buf = (char*)sbx_rc_alloc((size_t)size + 1);
+    size_t n = fread(buf, 1, (size_t)size, fp);
+    buf[n] = '\0';
+    fclose(fp);
+    return buf;
+}
+
+static long __sbx_file_write(const char* path, const char* data) {
+    FILE* fp = fopen(path, "w");
+    if (!fp) return 0;
+    size_t len = strlen(data);
+    fwrite(data, 1, len, fp);
+    fclose(fp);
+    return (long)len;
+}
+
+static long __sbx_file_exists(const char* path) {
+    struct stat st;
+    return stat(path, &st) == 0 ? 1 : 0;
+}
+
+static long __sbx_file_mkdir(const char* path) {
+    return mkdir(path, 0755) == 0 ? 1 : 0;
+}
+
+static long __sbx_file_remove(const char* path) {
+    return remove(path) == 0 ? 1 : 0;
+}
+
+static const char* __sbx_file_read_dir(const char* path) {
+    DIR* d = opendir(path);
+    if (!d) return "";
+    /* Build comma-separated list of entries */
+    static char out[65536];
+    size_t pos = 0;
+    struct dirent* ent;
+    int first = 1;
+    while ((ent = readdir(d)) != NULL && pos < sizeof(out) - 256) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        if (!first && pos < sizeof(out) - 1) out[pos++] = ',';
+        first = 0;
+        size_t nlen = strlen(ent->d_name);
+        if (pos + nlen < sizeof(out)) {
+            memcpy(out + pos, ent->d_name, nlen);
+            pos += nlen;
+        }
+    }
+    out[pos] = '\0';
+    closedir(d);
+    return out;
+}
+
+/* ── v2.1: Additional string helpers ── */
+
+static const char* __sbx_str_replace(const char* s, const char* from, const char* to) {
+    size_t flen = strlen(from);
+    if (flen == 0) return s;
+    /* Count occurrences */
+    long count = 0;
+    const char* p = s;
+    while ((p = strstr(p, from)) != NULL) { count++; p += flen; }
+    size_t tlen = strlen(to);
+    size_t slen = strlen(s);
+    size_t outlen = slen + count * (tlen > flen ? tlen - flen : flen - tlen);
+    char* out = (char*)sbx_rc_alloc(outlen + 1);
+    char* dst = out;
+    const char* src = s;
+    const char* match;
+    while ((match = strstr(src, from)) != NULL) {
+        size_t prefix = (size_t)(match - src);
+        memcpy(dst, src, prefix);
+        dst += prefix;
+        memcpy(dst, to, tlen);
+        dst += tlen;
+        src = match + flen;
+    }
+    strcpy(dst, src);
+    return out;
+}
+
+static const char* __sbx_str_to_upper(const char* s) {
+    size_t len = strlen(s);
+    char* out = (char*)sbx_rc_alloc(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        out[i] = (s[i] >= 'a' && s[i] <= 'z') ? s[i] - 32 : s[i];
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static const char* __sbx_str_to_lower(const char* s) {
+    size_t len = strlen(s);
+    char* out = (char*)sbx_rc_alloc(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        out[i] = (s[i] >= 'A' && s[i] <= 'Z') ? s[i] + 32 : s[i];
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static long __sbx_str_char_at(const char* s, long i) {
+    if (i < 0 || (size_t)i >= strlen(s)) return 0;
+    return (long)(unsigned char)s[i];
+}
+
+static const char* __sbx_str_repeat(const char* s, long n) {
+    if (n <= 0) {
+        char* empty = (char*)sbx_rc_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    size_t slen = strlen(s);
+    size_t total = slen * (size_t)n;
+    char* out = (char*)sbx_rc_alloc(total + 1);
+    for (long i = 0; i < n; i++) {
+        memcpy(out + i * slen, s, slen);
+    }
+    out[total] = '\0';
+    return out;
+}
+
+static const char* __sbx_str_split(const char* s, const char* delim) {
+    /* Returns comma-separated parts (simplified — real implementation would return array) */
+    static char out[65536];
+    size_t pos = 0;
+    size_t dlen = strlen(delim);
+    const char* p = s;
+    int first = 1;
+    while (*p) {
+        const char* match = strstr(p, delim);
+        size_t part_len = match ? (size_t)(match - p) : strlen(p);
+        if (!first && pos < sizeof(out) - 1) out[pos++] = ',';
+        first = 0;
+        if (pos + part_len < sizeof(out)) {
+            memcpy(out + pos, p, part_len);
+            pos += part_len;
+        }
+        p += part_len;
+        if (match) p += dlen;
+        else break;
+    }
+    out[pos] = '\0';
+    return out;
+}
+
+static const char* __sbx_str_join(const char* arr, const char* sep) {
+    /* arr is comma-separated, join with sep */
+    return arr; /* simplified — full impl would split and rejoin */
+}
+
+static long __sbx_str_parse_int(const char* s) {
+    return strtol(s, NULL, 10);
+}
+
+static double __sbx_str_parse_float(const char* s) {
+    return strtod(s, NULL);
+}
+
+static long __sbx_str_ends_with(const char* s, const char* suffix) {
+    size_t slen = strlen(s);
+    size_t suffix_len = strlen(suffix);
+    if (suffix_len > slen) return 0;
+    return strcmp(s + slen - suffix_len, suffix) == 0 ? 1 : 0;
+}
+
+static long __sbx_str_is_empty(const char* s) {
+    return s[0] == '\0' ? 1 : 0;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Collections: List<T>, Map<K,V>, Set<V>
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── List ── */
+typedef struct {
+    long* data;
+    long  len;
+    long  cap;
+} sbx_list;
+
+static long __sbx_list_new(void) {
+    sbx_list* l = (sbx_list*)sbx_rc_alloc(sizeof(sbx_list));
+    l->data = NULL;
+    l->len  = 0;
+    l->cap  = 0;
+    return (long)l;
+}
+
+static long __sbx_list_len(long ptr) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return 0;
+    return l->len;
+}
+
+static void __sbx_list_push(long ptr, long val) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return;
+    if (l->len >= l->cap) {
+        l->cap = l->cap == 0 ? 8 : l->cap * 2;
+        l->data = (long*)realloc(l->data, (size_t)l->cap * sizeof(long));
+    }
+    l->data[l->len++] = val;
+}
+
+static long __sbx_list_get(long ptr, long idx) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return 0;
+    if (idx < 0 || idx >= l->len) return 0;
+    return l->data[idx];
+}
+
+static void __sbx_list_set(long ptr, long idx, long val) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return;
+    if (idx < 0 || idx >= l->len) return;
+    l->data[idx] = val;
+}
+
+static long __sbx_list_contains(long ptr, long val) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return 0;
+    for (long i = 0; i < l->len; i++) {
+        if (l->data[i] == val) return 1;
+    }
+    return 0;
+}
+
+static void __sbx_list_sort(long ptr) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return;
+    /* insertion sort */
+    for (long i = 1; i < l->len; i++) {
+        long key = l->data[i];
+        long j = i - 1;
+        while (j >= 0 && l->data[j] > key) {
+            l->data[j + 1] = l->data[j];
+            j--;
+        }
+        l->data[j + 1] = key;
+    }
+}
+
+static void __sbx_list_remove(long ptr, long idx) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return;
+    if (idx < 0 || idx >= l->len) return;
+    for (long i = idx; i < l->len - 1; i++) {
+        l->data[i] = l->data[i + 1];
+    }
+    l->len--;
+}
+
+static long __sbx_list_is_empty(long ptr) {
+    sbx_list* l = (sbx_list*)ptr;
+    if (!l) return 1;
+    return l->len == 0 ? 1 : 0;
+}
+
+/* ── Map ── */
+typedef struct {
+    const char** keys;
+    long*        vals;
+    long         len;
+    long         cap;
+} sbx_map;
+
+static long __sbx_map_new(void) {
+    sbx_map* m = (sbx_map*)sbx_rc_alloc(sizeof(sbx_map));
+    m->keys = NULL;
+    m->vals = NULL;
+    m->len  = 0;
+    m->cap  = 0;
+    return (long)m;
+}
+
+static long __sbx_map_len(long ptr) {
+    sbx_map* m = (sbx_map*)ptr;
+    if (!m) return 0;
+    return m->len;
+}
+
+static void __sbx_map_insert(long ptr, const char* key, long val) {
+    sbx_map* m = (sbx_map*)ptr;
+    if (!m) return;
+    /* update existing key */
+    for (long i = 0; i < m->len; i++) {
+        if (strcmp(m->keys[i], key) == 0) {
+            m->vals[i] = val;
+            return;
+        }
+    }
+    /* new key */
+    if (m->len >= m->cap) {
+        m->cap = m->cap == 0 ? 8 : m->cap * 2;
+        m->keys = (const char**)realloc(m->keys, (size_t)m->cap * sizeof(const char*));
+        m->vals = (long*)realloc(m->vals, (size_t)m->cap * sizeof(long));
+    }
+    /* copy the key string */
+    size_t klen = strlen(key);
+    char* kcopy = (char*)sbx_rc_alloc(klen + 1);
+    memcpy(kcopy, key, klen + 1);
+    m->keys[m->len] = kcopy;
+    m->vals[m->len] = val;
+    m->len++;
+}
+
+static long __sbx_map_get(long ptr, const char* key) {
+    sbx_map* m = (sbx_map*)ptr;
+    if (!m) return 0;
+    for (long i = 0; i < m->len; i++) {
+        if (strcmp(m->keys[i], key) == 0) return m->vals[i];
+    }
+    return 0;
+}
+
+static long __sbx_map_contains(long ptr, const char* key) {
+    sbx_map* m = (sbx_map*)ptr;
+    if (!m) return 0;
+    for (long i = 0; i < m->len; i++) {
+        if (strcmp(m->keys[i], key) == 0) return 1;
+    }
+    return 0;
+}
+
+static void __sbx_map_remove(long ptr, const char* key) {
+    sbx_map* m = (sbx_map*)ptr;
+    if (!m) return;
+    for (long i = 0; i < m->len; i++) {
+        if (strcmp(m->keys[i], key) == 0) {
+            for (long j = i; j < m->len - 1; j++) {
+                m->keys[j] = m->keys[j + 1];
+                m->vals[j] = m->vals[j + 1];
+            }
+            m->len--;
+            return;
+        }
+    }
+}
+
+/* Returns keys as a comma-separated string */
+static const char* __sbx_map_keys(long ptr) {
+    sbx_map* m = (sbx_map*)ptr;
+    if (!m) return "";
+    if (m->len == 0) return "";
+    /* Estimate size */
+    size_t total = 0;
+    for (long i = 0; i < m->len; i++) {
+        total += strlen(m->keys[i]) + 1; /* +1 for comma */
+    }
+    char* out = (char*)sbx_rc_alloc(total + 1);
+    out[0] = '\0';
+    for (long i = 0; i < m->len; i++) {
+        if (i > 0) strcat(out, ",");
+        strcat(out, m->keys[i]);
+    }
+    return out;
+}
+
+/* ── Set ── */
+typedef struct {
+    const char** items;
+    long         len;
+    long         cap;
+} sbx_set;
+
+static long __sbx_set_new(void) {
+    sbx_set* s = (sbx_set*)sbx_rc_alloc(sizeof(sbx_set));
+    s->items = NULL;
+    s->len   = 0;
+    s->cap   = 0;
+    return (long)s;
+}
+
+static long __sbx_set_len(long ptr) {
+    sbx_set* s = (sbx_set*)ptr;
+    if (!s) return 0;
+    return s->len;
+}
+
+static void __sbx_set_insert(long ptr, const char* val) {
+    sbx_set* s = (sbx_set*)ptr;
+    if (!s) return;
+    /* check duplicate */
+    for (long i = 0; i < s->len; i++) {
+        if (strcmp(s->items[i], val) == 0) return;
+    }
+    if (s->len >= s->cap) {
+        s->cap = s->cap == 0 ? 8 : s->cap * 2;
+        s->items = (const char**)realloc(s->items, (size_t)s->cap * sizeof(const char*));
+    }
+    size_t vlen = strlen(val);
+    char* vcopy = (char*)sbx_rc_alloc(vlen + 1);
+    memcpy(vcopy, val, vlen + 1);
+    s->items[s->len++] = vcopy;
+}
+
+static long __sbx_set_contains(long ptr, const char* val) {
+    sbx_set* s = (sbx_set*)ptr;
+    if (!s) return 0;
+    for (long i = 0; i < s->len; i++) {
+        if (strcmp(s->items[i], val) == 0) return 1;
+    }
+    return 0;
+}
+
+static void __sbx_set_remove(long ptr, const char* val) {
+    sbx_set* s = (sbx_set*)ptr;
+    if (!s) return;
+    for (long i = 0; i < s->len; i++) {
+        if (strcmp(s->items[i], val) == 0) {
+            for (long j = i; j < s->len - 1; j++) {
+                s->items[j] = s->items[j + 1];
+            }
+            s->len--;
+            return;
+        }
+    }
+}
+
+/* ── assert_eq (builtin) ── */
+static void __sbx_assert_eq(long a, long b) {
+    if (a != b) {
+        fprintf(stderr, "assert_eq failed: %ld != %ld\n", a, b);
+        exit(1);
+    }
+}
+
+/* ── Result unwrap (for ? operator) ── */
+static long __sbx_result_unwrap(long val) {
+    return val;
+}
+
+/* ── Bounds checking ── */
+static long __sbx_bounds_check(long idx, long len) {
+    if (idx < 0 || idx >= len) {
+        fprintf(stderr, "sandbox: index %ld out of bounds (len=%ld)\n", idx, len);
+        exit(1);
+    }
+    return idx;
 }
 
 /* ── End Sandbox Standard Library ── */

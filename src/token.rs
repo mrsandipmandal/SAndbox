@@ -28,6 +28,9 @@ pub enum Token {
     Result,
     Ok,
     Err,
+    Some_,
+    None_,
+    Option,
     Panic,
     QuestionMark,
 
@@ -38,6 +41,19 @@ pub enum Token {
     // v1.1: Enums + pattern matching
     Enum,
     Match,
+
+    // Traits
+    Trait,
+
+    // v2.1: Impl blocks + tests
+    Impl,
+    Self_,
+    Test,
+    Assert,
+
+    // v2.0: Async/await + Future
+    Async,
+    Await,
 
     // v0.3: Types
     TypeI64,
@@ -85,6 +101,9 @@ pub enum Token {
     Gt,
     Le,
     Ge,
+    Bang,
+    And,
+    Or,
     Assign,
     Arrow,
     FatArrow,
@@ -107,6 +126,9 @@ pub enum Token {
 
     // Special
     Eof,
+
+    // Doc comments
+    DocComment(String),
 }
 
 impl fmt::Display for Token {

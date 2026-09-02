@@ -32,7 +32,10 @@ impl Lexer {
     }
 
     fn next_token(&mut self) -> Result<Spanned> {
-        self.skip_whitespace_and_comments();
+        let doc = self.skip_whitespace_and_comments();
+        if let Some(text) = doc {
+            return Ok(Spanned::new(Token::DocComment(text), self.line, self.col));
+        }
         if self.pos >= self.input.len() {
             return Ok(Spanned::new(Token::Eof, self.line, self.col));
         }
@@ -95,7 +98,7 @@ impl Lexer {
                     self.advance();
                     Ok(Spanned::new(Token::Neq, line, col))
                 } else {
-                    Err(anyhow!("Unexpected character '!' at {}:{}", line, col))
+                    Ok(Spanned::new(Token::Bang, line, col))
                 }
             }
             '<' => {
@@ -120,9 +123,23 @@ impl Lexer {
                 self.advance();
                 Ok(Spanned::new(Token::QuestionMark, line, col))
             }
+            '&' => {
+                self.advance();
+                if self.peek() == Some('&') {
+                    self.advance();
+                    Ok(Spanned::new(Token::And, line, col))
+                } else {
+                    Err(anyhow!("Unexpected character '&' at {}:{}", line, col))
+                }
+            }
             '|' => {
                 self.advance();
-                Ok(Spanned::new(Token::Pipe, line, col))
+                if self.peek() == Some('|') {
+                    self.advance();
+                    Ok(Spanned::new(Token::Or, line, col))
+                } else {
+                    Ok(Spanned::new(Token::Pipe, line, col))
+                }
             }
             '.' => {
                 self.advance();
@@ -346,6 +363,9 @@ impl Lexer {
             "Result" => Token::Result,
             "Ok" => Token::Ok,
             "Err" => Token::Err,
+            "Some" => Token::Some_,
+            "None" => Token::None_,
+            "Option" => Token::Option,
             "panic" => Token::Panic,
             "mod" => Token::Mod,
             "use" => Token::Use,
@@ -376,14 +396,26 @@ impl Lexer {
             "set" | "SET" => Token::Set,
             "enum" => Token::Enum,
             "match" => Token::Match,
+            "async" => Token::Async,
+            "await" => Token::Await,
+            // v2.1: Impl blocks + tests
+            "impl" => Token::Impl,
+            "trait" => Token::Trait,
+            "Self" => Token::Self_,
+            "test" => Token::Test,
+            "assert" => Token::Assert,
             // Currencies
             "INR" | "USD" | "EUR" | "GBP" | "JPY" | "CNY" | "BDT" => Token::Currency(text),
             _ => Token::Ident(text),
         })
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
-        while self.pos < self.input.len() {
+    fn skip_whitespace_and_comments(&mut self) -> Option<String> {
+        let mut doc_comment: Option<String> = None;
+        loop {
+            if self.pos >= self.input.len() {
+                break;
+            }
             let ch = self.input[self.pos];
             if ch == ' ' || ch == '\t' || ch == '\r' {
                 self.advance();
@@ -395,13 +427,40 @@ impl Lexer {
                 && self.pos + 1 < self.input.len()
                 && self.input[self.pos + 1] == '/'
             {
-                while self.pos < self.input.len() && self.input[self.pos] != '\n' {
-                    self.advance();
+                // Check for doc comment (///)
+                if self.pos + 2 < self.input.len() && self.input[self.pos + 2] == '/' {
+                    self.advance(); // skip first /
+                    self.advance(); // skip second /
+                    self.advance(); // skip third /
+                    let start = self.pos;
+                    while self.pos < self.input.len() && self.input[self.pos] != '\n' {
+                        self.advance();
+                    }
+                    let text: String = self.input[start..self.pos].iter().collect();
+                    let text = text.trim().to_string();
+                    if !text.is_empty() {
+                        // Accumulate doc comment lines
+                        match &mut doc_comment {
+                            Some(existing) => {
+                                existing.push('\n');
+                                existing.push_str(&text);
+                            }
+                            None => {
+                                doc_comment = Some(text);
+                            }
+                        }
+                    }
+                } else {
+                    // Regular // comment — skip
+                    while self.pos < self.input.len() && self.input[self.pos] != '\n' {
+                        self.advance();
+                    }
                 }
             } else {
                 break;
             }
         }
+        doc_comment
     }
 
     fn advance(&mut self) {

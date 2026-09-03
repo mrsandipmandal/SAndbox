@@ -404,7 +404,8 @@ impl TypeChecker {
                 let iter_ty = self.check_expr(iterable)?;
                 let elem_ty = match &iter_ty {
                     Type::Array(inner) => inner.as_ref().clone(),
-                    _ => return Err(anyhow!("For loop requires array, got '{}'", iter_ty)),
+                    Type::String => Type::I64,  // string iteration: chars as i64
+                    _ => return Err(anyhow!("For loop requires array or string, got '{}'", iter_ty)),
                 };
                 self.scopes.push(HashMap::new());
                 self.scopes

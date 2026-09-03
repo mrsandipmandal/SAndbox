@@ -4601,3 +4601,274 @@ fn test_str_eq_empty() {
     assert!(output.contains("equal"), "Expected equal, got: {}", output);
     assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
 }
+
+#[test]
+fn test_call_as_expression() {
+    let source = r#"fn double(x: i64) -> i64 {
+    return x * 2
+}
+fn main() {
+    let y = double(5)
+    print(y)
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "call as expression failed: {}", output);
+    assert!(output.contains("10"), "Expected 10, got: {}", output);
+}
+
+#[test]
+fn test_call_nested() {
+    let source = r#"fn double(x: i64) -> i64 {
+    return x * 2
+}
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+fn main() {
+    print(double(add(1, 2)))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "nested call failed: {}", output);
+    assert!(output.contains("6"), "Expected 6, got: {}", output);
+}
+
+#[test]
+fn test_call_in_binary() {
+    let source = r#"fn get_val() -> i64 {
+    return 10
+}
+fn main() {
+    let result = get_val() + get_val()
+    print(result)
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "call in binary failed: {}", output);
+    assert!(output.contains("20"), "Expected 20, got: {}", output);
+}
+
+#[test]
+fn test_call_in_if() {
+    let source = r#"fn is_big(x: i64) -> i64 {
+    if x > 100 {
+        return 1
+    } else {
+        return 0
+    }
+}
+fn main() {
+    if is_big(200) == 1 {
+        print("big")
+    } else {
+        print("small")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "call in if failed: {}", output);
+    assert!(output.contains("big"), "Expected big, got: {}", output);
+}
+
+#[test]
+fn test_call_triple_nested() {
+    let source = r#"fn id(x: i64) -> i64 {
+    return x
+}
+fn main() {
+    print(id(id(id(42))))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "triple nested call failed: {}", output);
+    assert!(output.contains("42"), "Expected 42, got: {}", output);
+}
+
+#[test]
+fn test_closure_expr_body() {
+    let source = r#"fn main() {
+    let f = |x| x + 1
+    print(f(5))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "closure expr body failed: {}", output);
+    assert!(output.contains("6"), "Expected 6, got: {}", output);
+}
+
+#[test]
+fn test_closure_multi_param() {
+    let source = r#"fn main() {
+    let add = |x, y| x + y
+    print(add(3, 4))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "closure multi param failed: {}", output);
+    assert!(output.contains("7"), "Expected 7, got: {}", output);
+}
+
+#[test]
+fn test_closure_comparison() {
+    let source = r#"fn main() {
+    let is_pos = |x| x > 0
+    print(is_pos(5))
+    print(is_pos(-1))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "closure comparison failed: {}", output);
+    assert!(output.contains("1"), "Expected 1, got: {}", output);
+    assert!(output.contains("0"), "Expected 0, got: {}", output);
+}
+
+#[test]
+fn test_closure_arithmetic() {
+    let source = r#"fn main() {
+    let square = |x| x * x
+    print(square(7))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "closure arithmetic failed: {}", output);
+    assert!(output.contains("49"), "Expected 49, got: {}", output);
+}
+
+#[test]
+fn test_str_lt() {
+    let source = r#"fn main() {
+    if "aaa" < "zzz" {
+        print("ok")
+    } else {
+        print("wrong")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str lt failed: {}", output);
+    assert!(output.contains("ok"), "Expected ok, got: {}", output);
+}
+
+#[test]
+fn test_str_gt() {
+    let source = r#"fn main() {
+    if "zzz" > "aaa" {
+        print("ok")
+    } else {
+        print("wrong")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str gt failed: {}", output);
+    assert!(output.contains("ok"), "Expected ok, got: {}", output);
+}
+
+#[test]
+fn test_str_le() {
+    let source = r#"fn main() {
+    if "aaa" <= "aaa" {
+        print("ok")
+    } else {
+        print("wrong")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str le failed: {}", output);
+    assert!(output.contains("ok"), "Expected ok, got: {}", output);
+}
+
+#[test]
+fn test_str_ge() {
+    let source = r#"fn main() {
+    if "zzz" >= "aaa" {
+        print("ok")
+    } else {
+        print("wrong")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str ge failed: {}", output);
+    assert!(output.contains("ok"), "Expected ok, got: {}", output);
+}
+
+#[test]
+fn test_str_ordering_variables() {
+    let source = r#"fn main() {
+    let a = "apple"
+    let b = "banana"
+    if a < b {
+        print("apple < banana")
+    }
+    if b > a {
+        print("banana > apple")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str ordering variables failed: {}", output);
+    assert!(output.contains("apple < banana"), "Expected 'apple < banana', got: {}", output);
+    assert!(output.contains("banana > apple"), "Expected 'banana > apple', got: {}", output);
+}
+
+#[test]
+fn test_for_string_literal() {
+    let source = r#"fn main() {
+    for c in "abc" {
+        print(c)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "for string literal failed: {}", output);
+    assert!(output.contains("97"), "Expected 97 (a), got: {}", output);
+    assert!(output.contains("98"), "Expected 98 (b), got: {}", output);
+    assert!(output.contains("99"), "Expected 99 (c), got: {}", output);
+}
+
+#[test]
+fn test_for_string_variable() {
+    let source = r#"fn main() {
+    let s = "hi"
+    for c in s {
+        print(c)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "for string variable failed: {}", output);
+    assert!(output.contains("104"), "Expected 104 (h), got: {}", output);
+    assert!(output.contains("105"), "Expected 105 (i), got: {}", output);
+}
+
+#[test]
+fn test_for_string_empty() {
+    let source = r#"fn main() {
+    for c in "" {
+        print(999)
+    }
+    print("done")
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "for string empty failed: {}", output);
+    assert!(!output.contains("999"), "Should not print 999, got: {}", output);
+    assert!(output.contains("done"), "Expected done, got: {}", output);
+}
+
+#[test]
+fn test_for_string_count() {
+    let source = r#"fn main() {
+    let count = 0
+    for c in "hello" {
+        count = count + 1
+    }
+    print(count)
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "for string count failed: {}", output);
+    assert!(output.contains("5"), "Expected 5, got: {}", output);
+}
+
+#[test]
+fn test_for_string_break() {
+    let source = r#"fn main() {
+    for c in "hello" {
+        if c == 108 {
+            break
+        }
+        print(c)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "for string break failed: {}", output);
+    assert!(output.contains("104"), "Expected 104 (h), got: {}", output);
+    assert!(output.contains("101"), "Expected 101 (e), got: {}", output);
+    assert!(!output.contains("108"), "Should not contain 108 (l), got: {}", output);
+}

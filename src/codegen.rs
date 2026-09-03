@@ -1449,6 +1449,30 @@ impl CodeGen {
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
+                } else if self.infer_c_type(iterable) == "const char*" || self.infer_c_type(iterable) == "char*" {
+                    // String iteration: iterate over characters
+                    let str_val = self.gen_expr(iterable);
+                    self.write_indent();
+                    writeln!(self.output, "{{").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "const char* __str = {};", str_val).unwrap();
+                    self.write_indent();
+                    writeln!(self.output, "long __len = (long)strlen(__str);").unwrap();
+                    self.write_indent();
+                    writeln!(self.output, "for (long __i = 0; __i < __len; __i++) {{").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "long {} = (long)__str[__i];", variable).unwrap();
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
                 } else {
                     let iter_expr = self.gen_expr(iterable);
                     self.write_indent();
@@ -1738,6 +1762,21 @@ impl CodeGen {
                         let cmp = match op {
                             BinOp::Eq => format!("strcmp({}, {}) == 0", l, r),
                             BinOp::Neq => format!("strcmp({}, {}) != 0", l, r),
+                            _ => unreachable!(),
+                        };
+                        return format!("(long)({})", cmp);
+                    }
+                }
+                // String ordering: use strcmp for lexicographic comparison
+                if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) {
+                    let lt = self.infer_c_type(left);
+                    let rt = self.infer_c_type(right);
+                    if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
+                        let cmp = match op {
+                            BinOp::Lt => format!("strcmp({}, {}) < 0", l, r),
+                            BinOp::Gt => format!("strcmp({}, {}) > 0", l, r),
+                            BinOp::Le => format!("strcmp({}, {}) <= 0", l, r),
+                            BinOp::Ge => format!("strcmp({}, {}) >= 0", l, r),
                             _ => unreachable!(),
                         };
                         return format!("(long)({})", cmp);

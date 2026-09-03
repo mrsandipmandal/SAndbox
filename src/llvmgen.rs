@@ -709,10 +709,91 @@ impl LlvmGen {
                     self.block_terminated = false;
                     "void".to_string()
                 } else {
-                    for s in body {
-                        self.gen_stmt(s);
+                    // Check if iterable is a string
+                    let iter_ty = self.infer_llvm_type(iterable);
+                    if iter_ty == "i8*" || iter_ty == "i8**" {
+                        // String iteration: iterate over characters
+                        let str_val = self.gen_expr(iterable);
+                        let loop_var = variable.clone();
+                        let cond_label = self.fresh_label("for.cond");
+                        let body_label = self.fresh_label("for.body");
+                        let end_label = self.fresh_label("for.end");
+                        let incr_label = self.fresh_label("for.incr");
+
+                        // Allocate loop counter
+                        let counter_alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca i64", counter_alloca).unwrap();
+                        writeln!(self.output, "  store i64 0, i64* {}", counter_alloca).unwrap();
+
+                        // Get string length
+                        let str_len = self.fresh_var();
+                        writeln!(self.output, "  {} = call i64 @strlen(i8* {})", str_len, str_val).unwrap();
+
+                        // Allocate loop variable (i64 for char value)
+                        let var_alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca i64", var_alloca).unwrap();
+                        self.variables.insert(loop_var.clone(), (var_alloca.clone(), "i64".to_string()));
+
+                        // Push loop context
+                        self.loop_stack.push((end_label.clone(), incr_label.clone()));
+
+                        // Branch to condition
+                        writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                        self.block_terminated = true;
+
+                        // Condition: counter < strlen
+                        writeln!(self.output, "{}:", cond_label).unwrap();
+                        self.block_terminated = false;
+                        let loaded_counter = self.fresh_var();
+                        writeln!(self.output, "  {} = load i64, i64* {}", loaded_counter, counter_alloca).unwrap();
+                        let cmp = self.fresh_var();
+                        writeln!(self.output, "  {} = icmp slt i64 {}, {}", cmp, loaded_counter, str_len).unwrap();
+                        writeln!(self.output, "  br i1 {}, label %{}, label %{}", cmp, body_label, end_label).unwrap();
+                        self.block_terminated = true;
+
+                        // Body: load str[i] as i64
+                        writeln!(self.output, "{}:", body_label).unwrap();
+                        self.block_terminated = false;
+                        let char_ptr = self.fresh_var();
+                        writeln!(self.output, "  {} = getelementptr i8, i8* {}, i64 {}", char_ptr, str_val, loaded_counter).unwrap();
+                        let char_val = self.fresh_var();
+                        writeln!(self.output, "  {} = load i8, i8* {}", char_val, char_ptr).unwrap();
+                        let char_ext = self.fresh_var();
+                        writeln!(self.output, "  {} = sext i8 {} to i64", char_ext, char_val).unwrap();
+                        writeln!(self.output, "  store i64 {}, i64* {}", char_ext, var_alloca).unwrap();
+
+                        for s in body {
+                            self.gen_stmt(s);
+                        }
+                        if !self.block_terminated {
+                            writeln!(self.output, "  br label %{}", incr_label).unwrap();
+                            self.block_terminated = true;
+                        }
+
+                        // Increment
+                        writeln!(self.output, "{}:", incr_label).unwrap();
+                        self.block_terminated = false;
+                        let loaded2 = self.fresh_var();
+                        writeln!(self.output, "  {} = load i64, i64* {}", loaded2, counter_alloca).unwrap();
+                        let incr = self.fresh_var();
+                        writeln!(self.output, "  {} = add i64 {}, 1", incr, loaded2).unwrap();
+                        writeln!(self.output, "  store i64 {}, i64* {}", incr, counter_alloca).unwrap();
+                        writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                        self.block_terminated = true;
+
+                        // Pop loop context
+                        self.loop_stack.pop();
+
+                        // End block
+                        writeln!(self.output, "{}:", end_label).unwrap();
+                        self.block_terminated = false;
+                        "void".to_string()
+                    } else {
+                        for s in body {
+                            self.gen_stmt(s);
+                        }
+                        "void".to_string()
                     }
-                    "void".to_string()
                 }
             }
         }
@@ -818,28 +899,56 @@ impl LlvmGen {
                         }
                     }
                     BinOp::Lt => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp slt {} {}, {}", result, lt, l, r)
-                            .unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, l, r).unwrap();
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp slt i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp slt {} {}, {}", result, lt, l, r).unwrap();
+                            result
+                        }
                     }
                     BinOp::Gt => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp sgt {} {}, {}", result, lt, l, r)
-                            .unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, l, r).unwrap();
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp sgt i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp sgt {} {}, {}", result, lt, l, r).unwrap();
+                            result
+                        }
                     }
                     BinOp::Le => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp sle {} {}, {}", result, lt, l, r)
-                            .unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, l, r).unwrap();
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp sle i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp sle {} {}, {}", result, lt, l, r).unwrap();
+                            result
+                        }
                     }
                     BinOp::Ge => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp sge {} {}, {}", result, lt, l, r)
-                            .unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, l, r).unwrap();
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp sge i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp sge {} {}, {}", result, lt, l, r).unwrap();
+                            result
+                        }
                     }
                     BinOp::And => {
                         // non-short-circuit and (both operands evaluated)

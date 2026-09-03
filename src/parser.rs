@@ -1183,6 +1183,8 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
+                // Save position before trying type args (may need to backtrack)
+                let pre_type_args_pos = self.pos;
                 // Check for type args before :: : EnumName<T>::Variant
                 let type_args = self.try_parse_type_args();
                 if self.peek_token(&Token::Colon) && self.peek_token_at(1, &Token::Colon) {
@@ -1250,14 +1252,15 @@ impl Parser {
                         Ok(Expr::Ident(name))
                     }
                 } else {
-                    // Lowercase name with type args and ( → generic function call
-                    if !type_args.is_empty() && self.peek_token(&Token::LParen) {
+                    // Lowercase name — check for ( → function call
+                    if self.peek_token(&Token::LParen) {
                         self.advance(); // skip (
                         let args = self.parse_args()?;
                         self.expect_token(&Token::RParen)?;
                         Ok(Expr::Call { name, type_args, args })
                     } else if !type_args.is_empty() {
-                        // type args consumed but no ( — shouldn't happen, but handle gracefully
+                        // Type args consumed but no ( — backtrack
+                        self.pos = pre_type_args_pos;
                         Ok(Expr::Ident(name))
                     } else {
                         Ok(Expr::Ident(name))
@@ -1388,13 +1391,20 @@ impl Parser {
             None
         };
 
-        // Body
-        self.expect_token(&Token::LBrace)?;
-        let mut body = Vec::new();
-        while !self.peek_token(&Token::RBrace) {
-            body.push(self.parse_stmt()?);
-        }
-        self.expect_token(&Token::RBrace)?;
+        // Body: block { ... } or single expression
+        let body = if self.peek_token(&Token::LBrace) {
+            self.advance();
+            let mut stmts = Vec::new();
+            while !self.peek_token(&Token::RBrace) {
+                stmts.push(self.parse_stmt()?);
+            }
+            self.expect_token(&Token::RBrace)?;
+            stmts
+        } else {
+            // Expression body: parse single expression, wrap in return
+            let expr = self.parse_expr()?;
+            vec![Stmt::Return(Some(expr))]
+        };
 
         Ok(Expr::Lambda { params, ret, body })
     }

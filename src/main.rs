@@ -1057,6 +1057,10 @@ fn exec_block(
                 let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
                 let lambda_keys_before: std::collections::HashSet<String> = state.lambdas.keys().filter(|k| k.starts_with("__lambda_")).cloned().collect();
                 let int_val = eval_expr(value, state)?;
+                // Clear old type entries for re-declaration (after eval so old value was accessible)
+                state.str_vars.remove(name);
+                state.arr_vars.remove(name);
+                state.lambdas.remove(name);
                 // Find new keys and rename to variable name
                 let new_str_key = state.str_vars.keys().filter(|k| k.starts_with("__auto_") && !str_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
                 if let Some(key) = new_str_key {
@@ -1080,11 +1084,24 @@ fn exec_block(
                 if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) && !state.lambdas.contains_key(name.as_str()) {
                     state.vars.insert(name.clone(), int_val);
                 }
+                // Clean up intermediate leaked auto keys (from sub-expression string literals)
+                let leaked: Vec<String> = state.str_vars.keys()
+                    .filter(|k| k.starts_with("__auto_") && **k != *name)
+                    .cloned()
+                    .collect();
+                for k in leaked {
+                    state.str_vars.remove(&k);
+                }
             }
             ast::Stmt::Assign { name, value } => {
+                // Evaluate FIRST (may reference current value of this variable)
                 let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
                 let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
                 let int_val = eval_expr(value, state)?;
+                // Now clear old type entries (after eval, so the old value was still accessible)
+                state.str_vars.remove(name);
+                state.arr_vars.remove(name);
+                state.lambdas.remove(name);
                 let new_str_key = state.str_vars.keys().filter(|k| k.starts_with("__auto_") && !str_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
                 if let Some(key) = new_str_key {
                     if let Some(s) = state.str_vars.remove(&key) {
@@ -1099,6 +1116,14 @@ fn exec_block(
                 }
                 if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) {
                     state.vars.insert(name.clone(), int_val);
+                }
+                // Clean up intermediate leaked auto keys
+                let leaked: Vec<String> = state.str_vars.keys()
+                    .filter(|k| k.starts_with("__auto_") && **k != *name)
+                    .cloned()
+                    .collect();
+                for k in leaked {
+                    state.str_vars.remove(&k);
                 }
             }
             ast::Stmt::Print(expr) => {
@@ -1136,34 +1161,97 @@ fn exec_block(
                     ast::Expr::Call { name, type_args: _, args } => {
                         if name == "print" {
                             if let Some(first) = args.first() {
-                                // Nested print — evaluate the inner print's arg
-                                // and just print it
-                                match first {
-                                    ast::Expr::Ident(n) => {
-                                        if let Some(s) = state.str_vars.get(n) {
-                                            println!("{}", s);
-                                        } else {
-                                            let val = state.vars.get(n.as_str()).unwrap_or(&0);
-                                            println!("{}", val);
-                                        }
-                                    }
-                                    ast::Expr::Str(s) => println!("{}", s),
-                                    _ => {
-                                        let val = eval_expr(first, state)?;
+                                // Snapshot str_vars before to detect new strings
+                                let str_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
+                                let val = eval_expr(first, state)?;
+                                // Check if a new string was created (from concat, etc.)
+                                let new_str = state.str_vars.keys()
+                                    .filter(|k| !str_before.contains(*k))
+                                    .max_by(|a, b| a.cmp(b))
+                                    .cloned();
+                                if let Some(key) = new_str {
+                                    if let Some(s) = state.str_vars.get(&key) {
+                                        println!("{}", s);
+                                    } else {
                                         println!("{}", val);
                                     }
+                                } else if let ast::Expr::Ident(n) = first {
+                                    if let Some(s) = state.str_vars.get(n) {
+                                        println!("{}", s);
+                                    } else if let Some(arr) = state.arr_vars.get(n) {
+                                        let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                        println!("[{}]", elems.join(", "));
+                                    } else {
+                                        println!("{}", val);
+                                    }
+                                } else {
+                                    println!("{}", val);
                                 }
                             }
                         } else {
+                            // Snapshot to detect side-effectful calls (map/filter store in arr_vars)
+                            let str_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
+                            let arr_before: std::collections::HashSet<String> = state.arr_vars.keys().cloned().collect();
                             let val = eval_expr(expr, state)?;
-                            // Check if the call produced a string (e.g., str_concat)
-                            // For now, print the integer result
-                            println!("{}", val);
+                            let new_str = state.str_vars.keys()
+                                .filter(|k| !str_before.contains(*k))
+                                .max_by(|a, b| a.cmp(b))
+                                .cloned();
+                            if let Some(key) = new_str {
+                                if let Some(s) = state.str_vars.get(&key) {
+                                    println!("{}", s);
+                                } else {
+                                    println!("{}", val);
+                                }
+                            } else {
+                                let new_arr = state.arr_vars.keys()
+                                    .filter(|k| !arr_before.contains(*k))
+                                    .max_by(|a, b| a.cmp(b))
+                                    .cloned();
+                                if let Some(key) = new_arr {
+                                    if let Some(arr) = state.arr_vars.get(&key) {
+                                        let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                        println!("[{}]", elems.join(", "));
+                                    } else {
+                                        println!("{}", val);
+                                    }
+                                } else {
+                                    println!("{}", val);
+                                }
+                            }
                         }
                     }
                     _ => {
+                        // Snapshot to detect intermediate strings/arrays from expression evaluation
+                        let str_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
+                        let arr_before: std::collections::HashSet<String> = state.arr_vars.keys().cloned().collect();
                         let val = eval_expr(expr, state)?;
-                        println!("{}", val);
+                        let new_str = state.str_vars.keys()
+                            .filter(|k| !str_before.contains(*k))
+                            .max_by(|a, b| a.cmp(b))
+                            .cloned();
+                        if let Some(key) = new_str {
+                            if let Some(s) = state.str_vars.get(&key) {
+                                println!("{}", s);
+                            } else {
+                                println!("{}", val);
+                            }
+                        } else {
+                            let new_arr = state.arr_vars.keys()
+                                .filter(|k| !arr_before.contains(*k))
+                                .max_by(|a, b| a.cmp(b))
+                                .cloned();
+                            if let Some(key) = new_arr {
+                                if let Some(arr) = state.arr_vars.get(&key) {
+                                    let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                    println!("[{}]", elems.join(", "));
+                                } else {
+                                    println!("{}", val);
+                                }
+                            } else {
+                                println!("{}", val);
+                            }
+                        }
                     }
                 }
             }
@@ -1319,11 +1407,22 @@ fn eval_expr(
             Ok(0)
         }
         ast::Expr::BinaryOp { op, left, right } => {
+            // Snapshot auto keys before evaluating each side to detect intermediate strings
+            let str_before_left: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
             let l = eval_expr(left, state)?;
+            let str_after_left: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
+            let left_auto_key: Option<String> = str_after_left.difference(&str_before_left).cloned().max_by(|a, b| a.cmp(b));
+
+            let str_before_right: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
             let r = eval_expr(right, state)?;
-            // Resolve string/array values from both Ident and literal expressions
-            let left_str = resolve_str(left, state);
-            let right_str = resolve_str(right, state);
+            let str_after_right: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
+            let right_auto_key: Option<String> = str_after_right.difference(&str_before_right).cloned().max_by(|a, b| a.cmp(b));
+
+            // Resolve string values — prefer auto keys from intermediate eval, then AST-based resolution
+            let left_str = left_auto_key.and_then(|k| state.str_vars.get(&k).cloned())
+                .or_else(|| resolve_str(left, state));
+            let right_str = right_auto_key.and_then(|k| state.str_vars.get(&k).cloned())
+                .or_else(|| resolve_str(right, state));
             let left_arr = resolve_arr(left, state);
             let right_arr = resolve_arr(right, state);
 
@@ -1441,8 +1540,35 @@ fn eval_expr(
                             println!("[{}]", vals.join(", "));
                         }
                         other => {
+                            let str_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
+                            let arr_before: std::collections::HashSet<String> = state.arr_vars.keys().cloned().collect();
                             let val = eval_expr(other, state)?;
-                            println!("{}", val);
+                            let new_str = state.str_vars.keys()
+                                .filter(|k| !str_before.contains(*k))
+                                .max_by(|a, b| a.cmp(b))
+                                .cloned();
+                            if let Some(key) = new_str {
+                                if let Some(s) = state.str_vars.get(&key) {
+                                    println!("{}", s);
+                                } else {
+                                    println!("{}", val);
+                                }
+                            } else {
+                                let new_arr = state.arr_vars.keys()
+                                    .filter(|k| !arr_before.contains(*k))
+                                    .max_by(|a, b| a.cmp(b))
+                                    .cloned();
+                                if let Some(key) = new_arr {
+                                    if let Some(arr) = state.arr_vars.get(&key) {
+                                        let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                        println!("[{}]", elems.join(", "));
+                                    } else {
+                                        println!("{}", val);
+                                    }
+                                } else {
+                                    println!("{}", val);
+                                }
+                            }
                         }
                     }
                 }
@@ -1611,6 +1737,12 @@ fn eval_expr(
             } else {
                 Ok(0)
             }
+        }
+        ast::Expr::Range { start, end, inclusive } => {
+            let s = eval_expr(start, state)?;
+            let e = eval_expr(end, state)?;
+            let count = if *inclusive { e - s + 1 } else { e - s };
+            Ok(if count > 0 { count } else { 0 })
         }
         _ => Ok(0),
     }

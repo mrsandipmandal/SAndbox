@@ -1487,6 +1487,14 @@ impl CodeGen {
                     writeln!(self.output, "return;").unwrap();
                 }
             }
+            Stmt::Break => {
+                self.write_indent();
+                writeln!(self.output, "break;").unwrap();
+            }
+            Stmt::Continue => {
+                self.write_indent();
+                writeln!(self.output, "continue;").unwrap();
+            }
             Stmt::Print(expr) => {
                 self.gen_print(expr);
             }
@@ -1733,6 +1741,20 @@ impl CodeGen {
                 }
             }
             Expr::Call { name, type_args, args } => {
+                // Special-case: len() — dispatch based on argument type
+                if name == "len" && args.len() == 1 {
+                    let arg = &args[0];
+                    // Array literals: count elements directly
+                    if let Expr::ArrayLiteral(elems) = arg {
+                        return format!("{}", elems.len());
+                    }
+                    let c_ty = self.infer_c_type(arg);
+                    if c_ty == "const char*" || c_ty == "char*" {
+                        return format!("(long)strlen({})", self.gen_expr(arg));
+                    } else if c_ty.ends_with('*') {
+                        return format!("__sbx_arr_len({})", self.gen_expr(arg));
+                    }
+                }
                 // If type_args are present, queue monomorphization
                 if !type_args.is_empty() {
                     if let Some(fn_def) = self.fn_defs.get(name.as_str()) {

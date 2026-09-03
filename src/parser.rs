@@ -111,12 +111,12 @@ impl Parser {
             if self.peek_token(&Token::Star) {
                 self.advance();
                 let wildcard = true;
-                self.expect_token(&Token::Semicolon)?;
+                if self.peek_token(&Token::Semicolon) { self.advance(); }
                 return Ok(TopLevel::Use { path, wildcard });
             }
             path.push(self.expect_ident()?);
         }
-        self.expect_token(&Token::Semicolon)?;
+        if self.peek_token(&Token::Semicolon) { self.advance(); }
         Ok(TopLevel::Use {
             path,
             wildcard: false,
@@ -703,6 +703,14 @@ impl Parser {
             Token::For => self.parse_for(),
             Token::Return => self.parse_return(),
             Token::Print => self.parse_print(),
+            Token::Break => {
+                self.advance();
+                Ok(Stmt::Break)
+            }
+            Token::Continue => {
+                self.advance();
+                Ok(Stmt::Continue)
+            }
             Token::Panic => self.parse_panic(),
             Token::Ident(_) if self.peek_token_at(1, &Token::Assign) => {
                 let name = self.expect_ident()?;

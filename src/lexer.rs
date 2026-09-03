@@ -360,6 +360,8 @@ impl Lexer {
             "in" => Token::In,
             "return" => Token::Return,
             "print" => Token::Print,
+            "break" => Token::Break,
+            "continue" => Token::Continue,
             "Result" => Token::Result,
             "Ok" => Token::Ok,
             "Err" => Token::Err,

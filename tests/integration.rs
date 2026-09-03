@@ -4218,3 +4218,135 @@ fn main() {
     assert!(output.contains("2"), "Expected 2 for start, got: {}", output);
     assert!(output.contains("-1"), "Expected -1 for unknown, got: {}", output);
 }
+
+#[test]
+fn test_break_while() {
+    let source = r#"fn main() {
+    let i = 0
+    while i < 10 {
+        if i == 5 {
+            break
+        }
+        print(i)
+        i = i + 1
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "break while failed: {}", output);
+    assert!(output.contains("0"), "Expected 0, got: {}", output);
+    assert!(output.contains("4"), "Expected 4, got: {}", output);
+    assert!(!output.contains("5"), "Should not contain 5, got: {}", output);
+}
+
+#[test]
+fn test_continue_while() {
+    let source = r#"fn main() {
+    let i = 0
+    while i < 10 {
+        i = i + 1
+        if i % 2 == 0 {
+            continue
+        }
+        print(i)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "continue while failed: {}", output);
+    assert!(output.contains("1"), "Expected 1, got: {}", output);
+    assert!(output.contains("3"), "Expected 3, got: {}", output);
+    assert!(output.contains("9"), "Expected 9, got: {}", output);
+    assert!(!output.contains("\n2\n"), "Should not contain 2 as output, got: {}", output);
+}
+
+#[test]
+fn test_break_for() {
+    let source = r#"fn main() {
+    for i in 0..10 {
+        if i == 5 {
+            break
+        }
+        print(i)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "break for failed: {}", output);
+    assert!(output.contains("0"), "Expected 0, got: {}", output);
+    assert!(output.contains("4"), "Expected 4, got: {}", output);
+    assert!(!output.contains("5"), "Should not contain 5, got: {}", output);
+}
+
+#[test]
+fn test_continue_for() {
+    let source = r#"fn main() {
+    for i in 0..10 {
+        if i % 2 == 0 {
+            continue
+        }
+        print(i)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "continue for failed: {}", output);
+    assert!(output.contains("1"), "Expected 1, got: {}", output);
+    assert!(output.contains("3"), "Expected 3, got: {}", output);
+    assert!(output.contains("9"), "Expected 9, got: {}", output);
+    assert!(!output.contains("\n0\n"), "Should not contain 0 as output, got: {}", output);
+    assert!(!output.contains("\n2\n"), "Should not contain 2 as output, got: {}", output);
+}
+
+#[test]
+fn test_len_string_literal() {
+    let source = r#"fn main() {
+    print(len("hello"))
+    print(len(""))
+    print(len("a"))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "len string literal failed: {}", output);
+    assert!(output.contains("5"), "Expected 5, got: {}", output);
+    assert!(output.contains("0"), "Expected 0, got: {}", output);
+    assert!(output.contains("1"), "Expected 1, got: {}", output);
+}
+
+#[test]
+fn test_len_string_variable() {
+    let source = r#"fn main() {
+    let s = "world"
+    print(len(s))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "len string variable failed: {}", output);
+    assert!(output.contains("5"), "Expected 5, got: {}", output);
+}
+
+#[test]
+fn test_len_array_literal() {
+    let source = r#"fn main() {
+    print(len([1, 2, 3]))
+    print(len([10, 20]))
+    print(len([]))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "len array literal failed: {}", output);
+    assert!(output.contains("3"), "Expected 3, got: {}", output);
+    assert!(output.contains("2"), "Expected 2, got: {}", output);
+    assert!(output.contains("0"), "Expected 0, got: {}", output);
+}
+
+#[test]
+fn test_len_wrong_args() {
+    let source = r#"fn main() {
+    len()
+}"#;
+    let (_, ok) = compile_and_run(source);
+    assert!(!ok, "len() with no args should fail");
+}
+
+#[test]
+fn test_len_wrong_type() {
+    let source = r#"fn main() {
+    len(42)
+}"#;
+    let (_, ok) = compile_and_run(source);
+    assert!(!ok, "len(42) should fail on non-string/array type");
+}

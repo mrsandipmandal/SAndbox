@@ -27,6 +27,8 @@ pub struct LlvmGen {
     mono_structs: std::collections::HashSet<String>,
     /// Pending struct monomorphizations: (mono_name, original_name, type_args)
     pending_mono_structs: Vec<(String, String, Vec<Type>)>,
+    /// Stack of (end_label, continue_label) for break/continue in loops
+    loop_stack: Vec<(String, String)>,
 }
 
 /// Check if an LLVM type string represents a named struct (e.g., "%Point")
@@ -53,6 +55,7 @@ impl LlvmGen {
             generic_structs: HashMap::new(),
             mono_structs: std::collections::HashSet::new(),
             pending_mono_structs: Vec::new(),
+            loop_stack: Vec::new(),
         }
     }
 
@@ -477,6 +480,9 @@ impl LlvmGen {
                 let body_label = self.fresh_label("while.body");
                 let end_label = self.fresh_label("while.end");
 
+                // Push loop context for break/continue (continue -> cond to re-check)
+                self.loop_stack.push((end_label.clone(), cond_label.clone()));
+
                 writeln!(self.output, "  br label %{}", cond_label).unwrap();
                 self.block_terminated = true;
                 writeln!(self.output, "{}:", cond_label).unwrap();
@@ -499,8 +505,23 @@ impl LlvmGen {
                     self.block_terminated = true;
                 }
 
+                self.loop_stack.pop();
                 writeln!(self.output, "{}:", end_label).unwrap();
                 self.block_terminated = false;
+                "void".to_string()
+            }
+            Stmt::Break => {
+                if let Some((end_label, _)) = self.loop_stack.last() {
+                    writeln!(self.output, "  br label %{}", end_label).unwrap();
+                    self.block_terminated = true;
+                }
+                "void".to_string()
+            }
+            Stmt::Continue => {
+                if let Some((_, continue_label)) = self.loop_stack.last() {
+                    writeln!(self.output, "  br label %{}", continue_label).unwrap();
+                    self.block_terminated = true;
+                }
                 "void".to_string()
             }
             Stmt::Return(Some(expr)) => {
@@ -622,6 +643,9 @@ impl LlvmGen {
                     self.variables
                         .insert(loop_var.clone(), (alloca.clone(), "i64".to_string()));
 
+                    // Push loop context for break/continue (continue -> incr_label)
+                    self.loop_stack.push((end_label.clone(), incr_label.clone()));
+
                     // Branch to condition
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
                     self.block_terminated = true;
@@ -676,6 +700,9 @@ impl LlvmGen {
                     writeln!(self.output, "  store i64 {}, i64* {}", incr, alloca).unwrap();
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
                     self.block_terminated = true;
+
+                    // Pop loop context
+                    self.loop_stack.pop();
 
                     // End block
                     writeln!(self.output, "{}:", end_label).unwrap();
@@ -849,6 +876,29 @@ impl LlvmGen {
                 }
             }
             Expr::Call { name, type_args: _, args } => {
+                // Special-case: len() — dispatch based on argument type
+                if name == "len" && args.len() == 1 {
+                    let arg = &args[0];
+                    let arg_ty = self.infer_llvm_type(arg);
+                    if arg_ty == "i8*" || arg_ty == "i8**" {
+                        // String len → call strlen
+                        let arg_val = self.gen_expr(arg);
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = call i64 @strlen(i8* {})", result, arg_val).unwrap();
+                        return result;
+                    } else if arg_ty.ends_with('*') {
+                        // Array — count elements from ArrayLiteral if possible
+                        if let Expr::ArrayLiteral(elems) = arg {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = add i64 0, {}", result, elems.len()).unwrap();
+                            return result;
+                        }
+                    }
+                    // Default: return 0
+                    let result = self.fresh_var();
+                    writeln!(self.output, "  {} = add i64 0, 0", result).unwrap();
+                    return result;
+                }
                 // Map stdlib builtin names to their C runtime equivalents
                 let mapped_name = if crate::stdlib::is_builtin(name) {
                     crate::stdlib::c_name(name).to_string()

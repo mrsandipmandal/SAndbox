@@ -33,6 +33,8 @@ fn tok_str(tok: &Token) -> String {
         Token::In => "in".into(),
         Token::Return => "return".into(),
         Token::Print => "print".into(),
+        Token::Break => "break".into(),
+        Token::Continue => "continue".into(),
         Token::Mod => "mod".into(),
         Token::Use => "use".into(),
         Token::Async => "async".into(),
@@ -111,7 +113,7 @@ fn is_keyword(tok: &Token) -> bool {
     matches!(
         tok,
         Token::Fn | Token::Let | Token::Mut | Token::If | Token::Else | Token::While
-            | Token::For | Token::In | Token::Return | Token::Print | Token::Struct
+            | Token::For | Token::In | Token::Return | Token::Print | Token::Break | Token::Continue | Token::Struct
             | Token::Enum | Token::Mod | Token::Use | Token::Async | Token::Await
             | Token::Impl | Token::Trait | Token::Test | Token::Assert | Token::Match
             | Token::Const | Token::Panic | Token::Database | Token::Table
@@ -158,11 +160,13 @@ struct Formatter<'a> {
     match_depth: usize,
     /// Set when the previous non-whitespace token was the `match` keyword
     prev_was_match: bool,
+    /// Stack tracking whether each { opened a match block
+    match_open_stack: Vec<bool>,
 }
 
 impl<'a> Formatter<'a> {
     fn new(tokens: &'a [Spanned]) -> Self {
-        Self { tokens, pos: 0, output: String::new(), indent: 0, match_depth: 0, prev_was_match: false }
+        Self { tokens, pos: 0, output: String::new(), indent: 0, match_depth: 0, prev_was_match: false, match_open_stack: Vec::new() }
     }
 
     fn peek(&self) -> &Token {
@@ -264,10 +268,12 @@ impl<'a> Formatter<'a> {
                     self.output.push_str("{\n");
                     self.indent += 1;
                     // Track match block depth for arm formatting
-                    if self.prev_was_match {
+                    let is_match_block = self.prev_was_match;
+                    self.match_open_stack.push(is_match_block);
+                    if is_match_block {
                         self.match_depth += 1;
-                        self.prev_was_match = false;
                     }
+                    self.prev_was_match = false;
                     just_wrote_newline = true;
                     self.advance();
 
@@ -282,9 +288,9 @@ impl<'a> Formatter<'a> {
                 // Closing brace — dedent, then }
                 Token::RBrace => {
                     self.indent = self.indent.saturating_sub(1);
-                    // Decrement match depth if closing a match block
-                    if self.match_depth > 0 {
-                        self.match_depth -= 1;
+                    // Only decrement match_depth if closing a match block's brace
+                    if self.match_open_stack.pop().unwrap_or(false) {
+                        self.match_depth = self.match_depth.saturating_sub(1);
                     }
                     // Remove trailing spaces and content on current line
                     while self.output.ends_with(' ') {

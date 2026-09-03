@@ -15,6 +15,8 @@ pub struct TypeChecker {
     scopes: Vec<HashMap<String, Type>>,
     /// Compile-time constants: name -> (type, evaluated_value)
     constants: HashMap<String, (Type, i64)>,
+    /// Depth of nested loops (for break/continue validation)
+    loop_depth: usize,
 }
 
 impl TypeChecker {
@@ -28,6 +30,7 @@ impl TypeChecker {
             fn_defs: HashMap::new(),
             scopes: vec![HashMap::new()],
             constants: HashMap::new(),
+            loop_depth: 0,
         }
     }
 
@@ -261,7 +264,9 @@ impl TypeChecker {
         for item in &program.items {
             if let TopLevel::TestDef { name, body, .. } = item {
                 self.scopes.push(HashMap::new());
+                self.loop_depth += 1;
                 self.check_block(body)?;
+                self.loop_depth -= 1;
                 self.scopes.pop();
                 println!("  ✓ Test '{}' type-checked", name);
             }
@@ -389,7 +394,9 @@ impl TypeChecker {
                 if cond_ty != Type::Bool {
                     return Err(anyhow!("While condition must be bool, got '{}'", cond_ty));
                 }
+                self.loop_depth += 1;
                 self.check_block(body)?;
+                self.loop_depth -= 1;
             }
             Stmt::For {
                 variable,
@@ -406,7 +413,9 @@ impl TypeChecker {
                     .last_mut()
                     .unwrap()
                     .insert(variable.clone(), elem_ty);
+                self.loop_depth += 1;
                 self.check_block(body)?;
+                self.loop_depth -= 1;
                 self.scopes.pop();
             }
             Stmt::Return(expr) => {
@@ -419,6 +428,11 @@ impl TypeChecker {
             }
             Stmt::ExprStmt(expr) => {
                 self.check_expr(expr)?;
+            }
+            Stmt::Break | Stmt::Continue => {
+                if self.loop_depth == 0 {
+                    return Err(anyhow!("'break'/'continue' outside of loop"));
+                }
             }
         }
         Ok(())
@@ -470,6 +484,17 @@ impl TypeChecker {
                 }
             }
             Expr::Call { name, type_args, args } => {
+                // Special-case: len() — polymorphic over strings and arrays
+                if name == "len" && type_args.is_empty() {
+                    if args.len() != 1 {
+                        return Err(anyhow!("'len' takes exactly 1 argument, got {}", args.len()));
+                    }
+                    let arg_ty = self.check_expr(&args[0])?;
+                    match &arg_ty {
+                        Type::String | Type::Array(_) => return Ok(Type::I64),
+                        _ => return Err(anyhow!("'len' is not defined for type '{}'", arg_ty)),
+                    }
+                }
 
                 let (mut param_tys, mut ret_ty): (Vec<Type>, Option<Type>) = if let Some(sig) =
                     self.functions.get(name).or_else(|| {

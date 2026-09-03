@@ -985,6 +985,8 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
         str_vars: &mut HashMap<String, String>,
         functions: &HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
     ) -> anyhow::Result<Option<i64>> {
+        const BREAK_SENTINEL: i64 = -999999;
+        const CONTINUE_SENTINEL: i64 = -999998;
         for stmt in stmts {
             match stmt {
                 ast::Stmt::Let { name, value, .. } => {
@@ -1010,6 +1012,8 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
                     return Ok(Some(val));
                 }
                 ast::Stmt::Return(None) => return Ok(Some(0)),
+                ast::Stmt::Break => return Ok(Some(BREAK_SENTINEL)),
+                ast::Stmt::Continue => return Ok(Some(CONTINUE_SENTINEL)),
                 ast::Stmt::If { condition, then, else_ } => {
                     let cond = eval_expr(condition, vars, str_vars, functions)?;
                     if cond != 0 {
@@ -1026,8 +1030,11 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
                     loop {
                         let cond = eval_expr(condition, vars, str_vars, functions)?;
                         if cond == 0 { break; }
-                        if let Some(val) = exec_stmts(body, vars, str_vars, functions)? {
-                            return Ok(Some(val));
+                        match exec_stmts(body, vars, str_vars, functions)? {
+                            Some(BREAK_SENTINEL) => break,
+                            Some(CONTINUE_SENTINEL) => continue,
+                            Some(val) => return Ok(Some(val)),
+                            None => {}
                         }
                     }
                 }
@@ -1035,8 +1042,11 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
                     let count = eval_expr(iterable, vars, str_vars, functions)?;
                     for i in 0..count {
                         vars.insert(variable.clone(), i);
-                        if let Some(val) = exec_stmts(body, vars, str_vars, functions)? {
-                            return Ok(Some(val));
+                        match exec_stmts(body, vars, str_vars, functions)? {
+                            Some(BREAK_SENTINEL) => break,
+                            Some(CONTINUE_SENTINEL) => continue,
+                            Some(val) => return Ok(Some(val)),
+                            None => {}
                         }
                     }
                 }
@@ -1107,6 +1117,19 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
                     if !args.is_empty() {
                         let val = eval_expr(&args[0], vars, str_vars, functions)?;
                         println!("{}", val);
+                    }
+                    return Ok(0);
+                }
+                if name == "len" && args.len() == 1 {
+                    match &args[0] {
+                        ast::Expr::Str(s) => return Ok(s.len() as i64),
+                        ast::Expr::Ident(n) => {
+                            if let Some(s) = str_vars.get(n) {
+                                return Ok(s.len() as i64);
+                            }
+                        }
+                        ast::Expr::ArrayLiteral(elems) => return Ok(elems.len() as i64),
+                        _ => {}
                     }
                     return Ok(0);
                 }

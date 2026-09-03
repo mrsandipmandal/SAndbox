@@ -225,6 +225,8 @@ pub enum Stmt {
     Return(Option<Expr>),
     ExprStmt(Expr),
     Print(Expr),
+    Break,
+    Continue,
 }
 
 // ── Top-level ──

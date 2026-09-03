@@ -346,6 +346,8 @@ impl WasmGen {
                     self.gen_wasm_stmt(s);
                 }
             }
+            Stmt::Break => {}
+            Stmt::Continue => {}
             Stmt::Return(Some(expr)) => {
                 self.write_indent();
                 self.gen_wasm_expr(expr);

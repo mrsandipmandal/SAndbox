@@ -23,6 +23,8 @@ pub enum Token {
     In,
     Return,
     Print,
+    Break,
+    Continue,
 
     // v0.2: Error handling
     Result,

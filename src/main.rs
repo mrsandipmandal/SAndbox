@@ -962,8 +962,11 @@ struct InterpreterState {
     vars: std::collections::HashMap<String, i64>,
     str_vars: std::collections::HashMap<String, String>,
     arr_vars: std::collections::HashMap<String, Vec<i64>>,
-    lambdas: std::collections::HashMap<String, (Vec<ast::Param>, Vec<ast::Stmt>)>,
+    lambdas: std::collections::HashMap<String, (Vec<ast::Param>, Vec<ast::Stmt>, std::collections::HashMap<String, i64>, std::collections::HashMap<String, String>, std::collections::HashMap<String, Vec<i64>>)>,
     functions: std::collections::HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
+    struct_fields: std::collections::HashMap<String, Vec<String>>,
+    struct_instances: std::collections::HashMap<String, Vec<i64>>,
+    struct_type_of: std::collections::HashMap<String, String>,
     lambda_counter: usize,
 }
 
@@ -975,6 +978,9 @@ impl InterpreterState {
             arr_vars: std::collections::HashMap::new(),
             lambdas: std::collections::HashMap::new(),
             functions: std::collections::HashMap::new(),
+            struct_fields: std::collections::HashMap::new(),
+            struct_instances: std::collections::HashMap::new(),
+            struct_type_of: std::collections::HashMap::new(),
             lambda_counter: 0,
         }
     }
@@ -1030,8 +1036,14 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
 
     let mut state = InterpreterState::new();
     for item in &program.items {
-        if let ast::TopLevel::FnDef { name, params, ret, body, .. } = item {
-            state.functions.insert(name.clone(), (params.clone(), ret.clone(), body.clone()));
+        match item {
+            ast::TopLevel::FnDef { name, params, ret, body, .. } => {
+                state.functions.insert(name.clone(), (params.clone(), ret.clone(), body.clone()));
+            }
+            ast::TopLevel::StructDef { name, fields, .. } => {
+                state.struct_fields.insert(name.clone(), fields.iter().map(|f| f.name.clone()).collect());
+            }
+            _ => {}
         }
     }
 
@@ -1056,6 +1068,7 @@ fn exec_block(
                 let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
                 let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
                 let lambda_keys_before: std::collections::HashSet<String> = state.lambdas.keys().filter(|k| k.starts_with("__lambda_")).cloned().collect();
+                let struct_keys_before: std::collections::HashSet<String> = state.struct_instances.keys().filter(|k| k.starts_with("__struct_")).cloned().collect();
                 let int_val = eval_expr(value, state)?;
                 // Clear old type entries for re-declaration (after eval so old value was accessible)
                 state.str_vars.remove(name);
@@ -1080,8 +1093,19 @@ fn exec_block(
                         state.lambdas.insert(name.clone(), l);
                     }
                 }
-                // If no string/array/lambda was produced, store the integer value
-                if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) && !state.lambdas.contains_key(name.as_str()) {
+                // Transfer new struct instance to variable name
+                let new_struct_key = state.struct_instances.keys().filter(|k| k.starts_with("__struct_") && !struct_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_struct_key {
+                    if let Some(s) = state.struct_instances.remove(&key) {
+                        state.struct_instances.insert(name.clone(), s);
+                        // Copy type mapping from auto key to variable name
+                        if let Some(type_name) = state.struct_type_of.remove(&key) {
+                            state.struct_type_of.insert(name.clone(), type_name);
+                        }
+                    }
+                }
+                // If no string/array/lambda/struct was produced, store the integer value
+                if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) && !state.lambdas.contains_key(name.as_str()) && !state.struct_instances.contains_key(name.as_str()) {
                     state.vars.insert(name.clone(), int_val);
                 }
                 // Clean up intermediate leaked auto keys (from sub-expression string literals)
@@ -1135,7 +1159,7 @@ fn exec_block(
                         } else if let Some(arr) = state.arr_vars.get(n) {
                             let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                             println!("[{}]", elems.join(", "));
-                        } else if let Some((params, body)) = state.lambdas.get(n).cloned() {
+                        } else if let Some((params, _body, _cv, _cs, _ca)) = state.lambdas.get(n).cloned() {
                             // Print function pointer for lambdas
                             print!("<fn|");
                             for (i, p) in params.iter().enumerate() {
@@ -1189,34 +1213,37 @@ fn exec_block(
                                 }
                             }
                         } else {
-                            // Snapshot to detect side-effectful calls (map/filter store in arr_vars)
                             let str_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
                             let arr_before: std::collections::HashSet<String> = state.arr_vars.keys().cloned().collect();
                             let val = eval_expr(expr, state)?;
-                            let new_str = state.str_vars.keys()
-                                .filter(|k| !str_before.contains(*k))
-                                .max_by(|a, b| a.cmp(b))
-                                .cloned();
-                            if let Some(key) = new_str {
-                                if let Some(s) = state.str_vars.get(&key) {
-                                    println!("{}", s);
-                                } else {
-                                    println!("{}", val);
-                                }
+                            if val != 0 {
+                                println!("{}", val);
                             } else {
-                                let new_arr = state.arr_vars.keys()
-                                    .filter(|k| !arr_before.contains(*k))
+                                let new_str = state.str_vars.keys()
+                                    .filter(|k| !str_before.contains(*k))
                                     .max_by(|a, b| a.cmp(b))
                                     .cloned();
-                                if let Some(key) = new_arr {
-                                    if let Some(arr) = state.arr_vars.get(&key) {
-                                        let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
-                                        println!("[{}]", elems.join(", "));
+                                if let Some(key) = new_str {
+                                    if let Some(s) = state.str_vars.get(&key) {
+                                        println!("{}", s);
                                     } else {
                                         println!("{}", val);
                                     }
                                 } else {
-                                    println!("{}", val);
+                                    let new_arr = state.arr_vars.keys()
+                                        .filter(|k| !arr_before.contains(*k))
+                                        .max_by(|a, b| a.cmp(b))
+                                        .cloned();
+                                    if let Some(key) = new_arr {
+                                        if let Some(arr) = state.arr_vars.get(&key) {
+                                            let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                            println!("[{}]", elems.join(", "));
+                                        } else {
+                                            println!("{}", val);
+                                        }
+                                    } else {
+                                        println!("{}", val);
+                                    }
                                 }
                             }
                         }
@@ -1399,11 +1426,28 @@ fn eval_expr(
             let key = format!("__auto_arr_{}", state.arr_vars.len());
             state.arr_vars.insert(key, vals);
             Ok(0)
+        }            ast::Expr::StructLiteral { name, fields, .. } => {
+            // Evaluate struct literal: Point { x: 1, y: 2 }
+            let field_defs = state.struct_fields.get(name).cloned().unwrap_or_default();
+            let mut values = vec![0i64; field_defs.len()];
+            for (fname, fval) in fields {
+                if let Some(idx) = field_defs.iter().position(|f| f == fname) {
+                    values[idx] = eval_expr(fval, state)?;
+                }
+            }
+            let key = format!("__struct_{}", state.struct_instances.len());
+            state.struct_type_of.insert(key.clone(), name.clone());
+            state.struct_instances.insert(key, values);
+            Ok(0)
         }
         ast::Expr::Lambda { params, body, .. } => {
+            // Capture enclosing scope variables
+            let captured_vars = state.vars.clone();
+            let captured_strs = state.str_vars.clone();
+            let captured_arrs = state.arr_vars.clone();
             let key = format!("__lambda_{}", state.lambda_counter);
             state.lambda_counter += 1;
-            state.lambdas.insert(key, (params.clone(), body.clone()));
+            state.lambdas.insert(key, (params.clone(), body.clone(), captured_vars, captured_strs, captured_arrs));
             Ok(0)
         }
         ast::Expr::BinaryOp { op, left, right } => {
@@ -1543,30 +1587,34 @@ fn eval_expr(
                             let str_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
                             let arr_before: std::collections::HashSet<String> = state.arr_vars.keys().cloned().collect();
                             let val = eval_expr(other, state)?;
-                            let new_str = state.str_vars.keys()
-                                .filter(|k| !str_before.contains(*k))
-                                .max_by(|a, b| a.cmp(b))
-                                .cloned();
-                            if let Some(key) = new_str {
-                                if let Some(s) = state.str_vars.get(&key) {
-                                    println!("{}", s);
-                                } else {
-                                    println!("{}", val);
-                                }
+                            if val != 0 {
+                                println!("{}", val);
                             } else {
-                                let new_arr = state.arr_vars.keys()
-                                    .filter(|k| !arr_before.contains(*k))
+                                let new_str = state.str_vars.keys()
+                                    .filter(|k| !str_before.contains(*k))
                                     .max_by(|a, b| a.cmp(b))
                                     .cloned();
-                                if let Some(key) = new_arr {
-                                    if let Some(arr) = state.arr_vars.get(&key) {
-                                        let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
-                                        println!("[{}]", elems.join(", "));
+                                if let Some(key) = new_str {
+                                    if let Some(s) = state.str_vars.get(&key) {
+                                        println!("{}", s);
                                     } else {
                                         println!("{}", val);
                                     }
                                 } else {
-                                    println!("{}", val);
+                                    let new_arr = state.arr_vars.keys()
+                                        .filter(|k| !arr_before.contains(*k))
+                                        .max_by(|a, b| a.cmp(b))
+                                        .cloned();
+                                    if let Some(key) = new_arr {
+                                        if let Some(arr) = state.arr_vars.get(&key) {
+                                            let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                            println!("[{}]", elems.join(", "));
+                                        } else {
+                                            println!("{}", val);
+                                        }
+                                    } else {
+                                        println!("{}", val);
+                                    }
                                 }
                             }
                         }
@@ -1575,6 +1623,29 @@ fn eval_expr(
                 return Ok(0);
             }
             if name == "len" && args.len() == 1 {
+                // Snapshot auto-keys before evaluating arg (detect side-effectful calls)
+                let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().cloned().collect();
+                let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().cloned().collect();
+                let val = eval_expr(&args[0], state)?;
+                // Check for new string auto-key
+                let new_str_key = state.str_vars.keys()
+                    .filter(|k| !str_keys_before.contains(*k))
+                    .max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_str_key {
+                    if let Some(s) = state.str_vars.get(&key) {
+                        return Ok(s.len() as i64);
+                    }
+                }
+                // Check for new array auto-key
+                let new_arr_key = state.arr_vars.keys()
+                    .filter(|k| !arr_keys_before.contains(*k))
+                    .max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_arr_key {
+                    if let Some(a) = state.arr_vars.get(&key) {
+                        return Ok(a.len() as i64);
+                    }
+                }
+                // Fallback: check named variables
                 match &args[0] {
                     ast::Expr::Str(s) => return Ok(s.len() as i64),
                     ast::Expr::Ident(n) => {
@@ -1608,15 +1679,24 @@ fn eval_expr(
                 };
                 // Get the lambda
                 let lambda_info = match &args[1] {
-                    ast::Expr::Lambda { params, body, .. } => Some((params.clone(), body.clone())),
+                    ast::Expr::Lambda { params, body, .. } => {
+                        let cv = state.vars.clone();
+                        let cs = state.str_vars.clone();
+                        let ca = state.arr_vars.clone();
+                        Some((params.clone(), body.clone(), cv, cs, ca))
+                    },
                     ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
                     _ => None,
                 };
-                if let Some((params, body)) = lambda_info {
+                if let Some((params, body, cap_vars, cap_strs, cap_arrs)) = lambda_info {
                     let mut result = Vec::new();
                     for elem in &arr {
                         let mut local_state = InterpreterState::new();
                         local_state.functions = state.functions.clone();
+                        local_state.struct_fields = state.struct_fields.clone();
+                        local_state.vars.extend(cap_vars.clone());
+                        local_state.str_vars.extend(cap_strs.clone());
+                        local_state.arr_vars.extend(cap_arrs.clone());
                         if let Some(param) = params.first() {
                             local_state.vars.insert(param.name.clone(), *elem);
                         }
@@ -1646,15 +1726,24 @@ fn eval_expr(
                     }
                 };
                 let lambda_info = match &args[1] {
-                    ast::Expr::Lambda { params, body, .. } => Some((params.clone(), body.clone())),
+                    ast::Expr::Lambda { params, body, .. } => {
+                        let cv = state.vars.clone();
+                        let cs = state.str_vars.clone();
+                        let ca = state.arr_vars.clone();
+                        Some((params.clone(), body.clone(), cv, cs, ca))
+                    },
                     ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
                     _ => None,
                 };
-                if let Some((params, body)) = lambda_info {
+                if let Some((params, body, cap_vars, cap_strs, cap_arrs)) = lambda_info {
                     let mut result = Vec::new();
                     for elem in &arr {
                         let mut local_state = InterpreterState::new();
                         local_state.functions = state.functions.clone();
+                        local_state.struct_fields = state.struct_fields.clone();
+                        local_state.vars.extend(cap_vars.clone());
+                        local_state.str_vars.extend(cap_strs.clone());
+                        local_state.arr_vars.extend(cap_arrs.clone());
                         if let Some(param) = params.first() {
                             local_state.vars.insert(param.name.clone(), *elem);
                         }
@@ -1688,14 +1777,23 @@ fn eval_expr(
                 };
                 let mut acc = eval_expr(&args[2], state)?;
                 let lambda_info = match &args[1] {
-                    ast::Expr::Lambda { params, body, .. } => Some((params.clone(), body.clone())),
+                    ast::Expr::Lambda { params, body, .. } => {
+                        let cv = state.vars.clone();
+                        let cs = state.str_vars.clone();
+                        let ca = state.arr_vars.clone();
+                        Some((params.clone(), body.clone(), cv, cs, ca))
+                    },
                     ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
                     _ => None,
                 };
-                if let Some((params, body)) = lambda_info {
+                if let Some((params, body, cap_vars, cap_strs, cap_arrs)) = lambda_info {
                     for elem in &arr {
                         let mut local_state = InterpreterState::new();
                         local_state.functions = state.functions.clone();
+                        local_state.struct_fields = state.struct_fields.clone();
+                        local_state.vars.extend(cap_vars.clone());
+                        local_state.str_vars.extend(cap_strs.clone());
+                        local_state.arr_vars.extend(cap_arrs.clone());
                         if params.len() >= 2 {
                             local_state.vars.insert(params[0].name.clone(), acc);
                             local_state.vars.insert(params[1].name.clone(), *elem);
@@ -1712,9 +1810,15 @@ fn eval_expr(
                 return Ok(0);
             }
             // Lambda call
-            if let Some((params, body)) = state.lambdas.get(name).cloned() {
+            if let Some((params, body, cap_vars, cap_strs, cap_arrs)) = state.lambdas.get(name).cloned() {
                 let mut local_state = InterpreterState::new();
                 local_state.functions = state.functions.clone();
+                local_state.struct_fields = state.struct_fields.clone();
+                // Inject captured scope
+                local_state.vars.extend(cap_vars);
+                local_state.str_vars.extend(cap_strs);
+                local_state.arr_vars.extend(cap_arrs);
+                // Inject explicit arguments (override captured if same name)
                 for (param, arg) in params.iter().zip(args.iter()) {
                     let val = eval_expr(arg, state)?;
                     local_state.vars.insert(param.name.clone(), val);
@@ -1743,6 +1847,30 @@ fn eval_expr(
             let e = eval_expr(end, state)?;
             let count = if *inclusive { e - s + 1 } else { e - s };
             Ok(if count > 0 { count } else { 0 })
+        }
+        ast::Expr::FieldAccess { target, field } => {
+            if let ast::Expr::Ident(name) = target.as_ref() {
+                // Struct field access: my_struct.field
+                if let Some(instance) = state.struct_instances.get(name) {
+                    // Look up field defs using the type name, not the variable name
+                    let type_name = state.struct_type_of.get(name).cloned();
+                    if let Some(ref tn) = type_name {
+                        if let Some(fields) = state.struct_fields.get(tn) {
+                            if let Some(idx) = fields.iter().position(|f| f == field) {
+                                return Ok(instance.get(idx).copied().unwrap_or(0));
+                            }
+                        }
+                    }
+                }
+                // Fallback: string/array .len
+                if let Some(s) = state.str_vars.get(name) {
+                    if field == "len" { return Ok(s.len() as i64); }
+                }
+                if let Some(a) = state.arr_vars.get(name) {
+                    if field == "len" { return Ok(a.len() as i64); }
+                }
+            }
+            Ok(0)
         }
         _ => Ok(0),
     }

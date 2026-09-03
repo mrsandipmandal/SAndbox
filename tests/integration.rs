@@ -4350,3 +4350,254 @@ fn test_len_wrong_type() {
     let (_, ok) = compile_and_run(source);
     assert!(!ok, "len(42) should fail on non-string/array type");
 }
+
+#[test]
+fn test_else_if_basic() {
+    let source = r#"fn main() {
+    let x = 2
+    if x == 1 {
+        print(1)
+    } else if x == 2 {
+        print(2)
+    } else if x == 3 {
+        print(3)
+    } else {
+        print(0)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "else-if basic failed: {}", output);
+    assert!(output.contains("2"), "Expected 2, got: {}", output);
+    assert!(!output.contains("\n1\n"), "Should not contain 1, got: {}", output);
+}
+
+#[test]
+fn test_else_if_fallthrough() {
+    let source = r#"fn main() {
+    let x = 99
+    if x == 1 {
+        print(1)
+    } else if x == 2 {
+        print(2)
+    } else {
+        print(99)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "else-if fallthrough failed: {}", output);
+    assert!(output.contains("99"), "Expected 99, got: {}", output);
+}
+
+#[test]
+fn test_else_if_no_final_else() {
+    let source = r#"fn main() {
+    let x = 2
+    if x == 1 {
+        print(1)
+    } else if x == 2 {
+        print(2)
+    } else if x == 3 {
+        print(3)
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "else-if no final else failed: {}", output);
+    assert!(output.contains("2"), "Expected 2, got: {}", output);
+}
+
+#[test]
+fn test_else_if_long_chain() {
+    let source = r#"fn main() {
+    let x = 7
+    if x == 1 { print(1) }
+    else if x == 2 { print(2) }
+    else if x == 3 { print(3) }
+    else if x == 4 { print(4) }
+    else if x == 5 { print(5) }
+    else if x == 6 { print(6) }
+    else if x == 7 { print(7) }
+    else { print(0) }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "else-if long chain failed: {}", output);
+    assert!(output.contains("7"), "Expected 7, got: {}", output);
+}
+
+#[test]
+fn test_else_if_single_branch() {
+    let source = r#"fn main() {
+    let x = 3
+    if x == 1 { print("first") }
+    else if x == 2 { print("second") }
+    else if x == 3 { print("third") }
+    else if x == 3 { print("duplicate") }
+    else { print("other") }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "else-if single branch failed: {}", output);
+    assert!(output.contains("third"), "Expected third, got: {}", output);
+    assert!(!output.contains("duplicate"), "Should not contain duplicate, got: {}", output);
+}
+
+#[test]
+fn test_else_if_with_if_let() {
+    let source = r#"fn main() {
+    let x = 1
+    if let n = x {
+        print(n)
+    } else if x == 2 {
+        print("two")
+    } else {
+        print("other")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "else-if with if-let failed: {}", output);
+    assert!(output.contains("1"), "Expected 1, got: {}", output);
+}
+
+#[test]
+fn test_str_concat_literals() {
+    let source = r#"fn main() {
+    print("foo" + "bar")
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str concat literals failed: {}", output);
+    assert!(output.contains("foobar"), "Expected foobar, got: {}", output);
+}
+
+#[test]
+fn test_str_concat_variables() {
+    let source = r#"fn main() {
+    let a = "hello"
+    let b = " world"
+    print(a + b)
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str concat variables failed: {}", output);
+    assert!(output.contains("hello world"), "Expected 'hello world', got: {}", output);
+}
+
+#[test]
+fn test_str_concat_triple() {
+    let source = r#"fn main() {
+    print("a" + "b" + "c")
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str concat triple failed: {}", output);
+    assert!(output.contains("abc"), "Expected abc, got: {}", output);
+}
+
+#[test]
+fn test_str_concat_mixed() {
+    let source = r#"fn main() {
+    let a = "hello"
+    print(a + " " + "world")
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str concat mixed failed: {}", output);
+    assert!(output.contains("hello world"), "Expected 'hello world', got: {}", output);
+}
+
+#[test]
+fn test_str_concat_with_len() {
+    let source = r#"fn main() {
+    let a = "hello"
+    let b = " world"
+    let msg = a + b
+    print(len(msg))
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str concat with len failed: {}", output);
+    assert!(output.contains("11"), "Expected 11, got: {}", output);
+}
+
+#[test]
+fn test_str_concat_type_error() {
+    let source = r#"fn main() {
+    let s = "hello"
+    print(s + 42)
+}"#;
+    let (_, ok) = compile_and_run(source);
+    assert!(!ok, "str + int should fail");
+}
+
+#[test]
+fn test_str_eq_same_literal() {
+    let source = r#"fn main() {
+    let a = "hello"
+    let b = "hello"
+    if a == b {
+        print("equal")
+    } else {
+        print("not equal")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str eq same literal failed: {}", output);
+    assert!(output.contains("equal"), "Expected equal, got: {}", output);
+}
+
+#[test]
+fn test_str_eq_different() {
+    let source = r#"fn main() {
+    let a = "hello"
+    let b = "world"
+    if a == b {
+        print("equal")
+    } else {
+        print("not equal")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str eq different failed: {}", output);
+    assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
+}
+
+#[test]
+fn test_str_eq_concat() {
+    let source = r#"fn main() {
+    let a = "hello"
+    let d = "" + "hello"
+    if a == d {
+        print("equal")
+    } else {
+        print("not equal")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str eq concat failed: {}", output);
+    assert!(output.contains("equal"), "Expected equal (strcmp), got: {}", output);
+}
+
+#[test]
+fn test_str_neq() {
+    let source = r#"fn main() {
+    let a = "hello"
+    let b = "world"
+    if a != b {
+        print("not equal")
+    } else {
+        print("equal")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str neq failed: {}", output);
+    assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
+}
+
+#[test]
+fn test_str_eq_empty() {
+    let source = r#"fn main() {
+    if "" == "" {
+        print("equal")
+    }
+    if "" != "x" {
+        print("not equal")
+    }
+}"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "str eq empty failed: {}", output);
+    assert!(output.contains("equal"), "Expected equal, got: {}", output);
+    assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
+}

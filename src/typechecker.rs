@@ -264,9 +264,7 @@ impl TypeChecker {
         for item in &program.items {
             if let TopLevel::TestDef { name, body, .. } = item {
                 self.scopes.push(HashMap::new());
-                self.loop_depth += 1;
                 self.check_block(body)?;
-                self.loop_depth -= 1;
                 self.scopes.pop();
                 println!("  ✓ Test '{}' type-checked", name);
             }

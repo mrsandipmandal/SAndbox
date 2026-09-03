@@ -761,9 +761,16 @@ impl LlvmGen {
                 let lt = self.infer_llvm_type(left);
                 match op {
                     BinOp::Add => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = add {} {}, {}", result, lt, l, r).unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            // String concatenation
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = call i8* @__sbx_str_concat(i8* {}, i8* {})", result, l, r).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = add {} {}, {}", result, lt, l, r).unwrap();
+                            result
+                        }
                     }
                     BinOp::Sub => {
                         let result = self.fresh_var();
@@ -781,16 +788,34 @@ impl LlvmGen {
                         result
                     }
                     BinOp::Eq => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp eq {} {}, {}", result, lt, l, r)
-                            .unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            // String equality: use strcmp
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, l, r).unwrap();
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp eq i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp eq {} {}, {}", result, lt, l, r)
+                                .unwrap();
+                            result
+                        }
                     }
                     BinOp::Neq => {
-                        let result = self.fresh_var();
-                        writeln!(self.output, "  {} = icmp ne {} {}, {}", result, lt, l, r)
-                            .unwrap();
-                        result
+                        if lt == "i8*" || lt == "i8**" {
+                            // String inequality: use strcmp
+                            let cmp = self.fresh_var();
+                            writeln!(self.output, "  {} = call i32 @strcmp(i8* {}, i8* {})", cmp, l, r).unwrap();
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp ne i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = icmp ne {} {}, {}", result, lt, l, r)
+                                .unwrap();
+                            result
+                        }
                     }
                     BinOp::Lt => {
                         let result = self.fresh_var();

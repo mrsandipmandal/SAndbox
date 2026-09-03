@@ -1588,6 +1588,14 @@ impl CodeGen {
                     name.clone()
                 }
             }
+            Expr::BinaryOp { op: BinOp::Add, left, right } => {
+                let lt = self.infer_c_type(left);
+                let rt = self.infer_c_type(right);
+                if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
+                    return "const char*".into();
+                }
+                "long".into()
+            }
             Expr::Call { name, .. } => {
                 if let Some(b) = stdlib::builtins().get(name.as_str()) {
                     self.c_type(&b.ret)
@@ -1716,8 +1724,23 @@ impl CodeGen {
                 };
 
                 if matches!(op, BinOp::Add) {
-                    if let (Expr::Str(_), _) | (_, Expr::Str(_)) = (left.as_ref(), right.as_ref()) {
+                    let lt = self.infer_c_type(left);
+                    let rt = self.infer_c_type(right);
+                    if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
                         return format!("__sbx_str_concat({}, {})", l, r);
+                    }
+                }
+                // String equality/inequality: use strcmp
+                if matches!(op, BinOp::Eq | BinOp::Neq) {
+                    let lt = self.infer_c_type(left);
+                    let rt = self.infer_c_type(right);
+                    if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
+                        let cmp = match op {
+                            BinOp::Eq => format!("strcmp({}, {}) == 0", l, r),
+                            BinOp::Neq => format!("strcmp({}, {}) != 0", l, r),
+                            _ => unreachable!(),
+                        };
+                        return format!("(long)({})", cmp);
                     }
                 }
 

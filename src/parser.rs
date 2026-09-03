@@ -759,7 +759,11 @@ impl Parser {
             let then = self.parse_block()?;
             let else_ = if self.peek_token(&Token::Else) {
                 self.advance();
-                Some(self.parse_block()?)
+                if self.peek_token(&Token::If) {
+                    Some(vec![self.parse_if()?])
+                } else {
+                    Some(self.parse_block()?)
+                }
             } else {
                 None
             };

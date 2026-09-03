@@ -494,6 +494,41 @@ impl TypeChecker {
                         _ => return Err(anyhow!("'len' is not defined for type '{}'", arg_ty)),
                     }
                 }
+                // map(arr, lambda) -> Array<result>
+                if name == "map" && type_args.is_empty() {
+                    if args.len() != 2 {
+                        return Err(anyhow!("'map' takes exactly 2 arguments (array, lambda), got {}", args.len()));
+                    }
+                    let arr_ty = self.check_expr(&args[0])?;
+                    let elem_ty = match &arr_ty {
+                        Type::Array(inner) => (**inner).clone(),
+                        _ => return Err(anyhow!("'map' first argument must be an array, got '{}'", arr_ty)),
+                    };
+                    // Check lambda type
+                    self.check_expr(&args[1])?;
+                    // Return array of whatever the lambda returns
+                    // For now return Array<i64> since we don't have full lambda type inference
+                    return Ok(Type::Array(Box::new(Type::I64)));
+                }
+                // filter(arr, lambda) -> Array<element>
+                if name == "filter" && type_args.is_empty() {
+                    if args.len() != 2 {
+                        return Err(anyhow!("'filter' takes exactly 2 arguments (array, lambda), got {}", args.len()));
+                    }
+                    let arr_ty = self.check_expr(&args[0])?;
+                    self.check_expr(&args[1])?;
+                    return Ok(arr_ty);
+                }
+                // reduce(arr, lambda, initial) -> element
+                if name == "reduce" && type_args.is_empty() {
+                    if args.len() != 3 {
+                        return Err(anyhow!("'reduce' takes exactly 3 arguments (array, lambda, initial), got {}", args.len()));
+                    }
+                    let arr_ty = self.check_expr(&args[0])?;
+                    self.check_expr(&args[1])?;
+                    let init_ty = self.check_expr(&args[2])?;
+                    return Ok(init_ty);
+                }
 
                 let (mut param_tys, mut ret_ty): (Vec<Type>, Option<Type>) = if let Some(sig) =
                     self.functions.get(name).or_else(|| {

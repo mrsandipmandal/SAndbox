@@ -958,206 +958,662 @@ fn show_tree() -> anyhow::Result<()> {
 
 /// Tree-walking interpreter that evaluates Sandbox source directly
 /// without compiling to C. Enables instant `sandbox interpret` for dev.
-fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
-    use std::collections::HashMap;
+struct InterpreterState {
+    vars: std::collections::HashMap<String, i64>,
+    str_vars: std::collections::HashMap<String, String>,
+    arr_vars: std::collections::HashMap<String, Vec<i64>>,
+    lambdas: std::collections::HashMap<String, (Vec<ast::Param>, Vec<ast::Stmt>)>,
+    functions: std::collections::HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
+    lambda_counter: usize,
+}
 
+impl InterpreterState {
+    fn new() -> Self {
+        Self {
+            vars: std::collections::HashMap::new(),
+            str_vars: std::collections::HashMap::new(),
+            arr_vars: std::collections::HashMap::new(),
+            lambdas: std::collections::HashMap::new(),
+            functions: std::collections::HashMap::new(),
+            lambda_counter: 0,
+        }
+    }
+
+    fn is_string(&self, name: &str) -> bool {
+        self.str_vars.contains_key(name)
+    }
+
+    fn get_string(&self, name: &str) -> Option<&str> {
+        self.str_vars.get(name).map(|s| s.as_str())
+    }
+
+    fn is_array(&self, name: &str) -> bool {
+        self.arr_vars.contains_key(name)
+    }
+
+    fn get_array(&self, name: &str) -> Option<&Vec<i64>> {
+        self.arr_vars.get(name)
+    }
+
+    fn print_value(&self, expr: &ast::Expr) {
+        match expr {
+            ast::Expr::Ident(n) => {
+                if let Some(s) = self.str_vars.get(n) {
+                    println!("{}", s);
+                } else if let Some(arr) = self.arr_vars.get(n) {
+                    let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                    println!("[{}]", elems.join(", "));
+                } else {
+                    let val = self.vars.get(n.as_str()).unwrap_or(&0);
+                    println!("{}", val);
+                }
+            }
+            ast::Expr::ArrayLiteral(elems) => {
+                let vals: Vec<String> = elems.iter().map(|e| {
+                    match e {
+                        ast::Expr::Str(s) => format!("\"{}\"", s),
+                        _ => "0".to_string(),
+                    }
+                }).collect();
+                println!("[{}]", vals.join(", "));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
     let mut lexer = lexer::Lexer::new(source);
     let tokens = lexer.tokenize().map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
     let mut parser = parser::Parser::new(tokens);
     let program = parser.parse().map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
 
-    let mut vars: HashMap<String, i64> = HashMap::new();
-    let mut str_vars: HashMap<String, String> = HashMap::new();
-
-    let mut functions: HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)> = HashMap::new();
+    let mut state = InterpreterState::new();
     for item in &program.items {
         if let ast::TopLevel::FnDef { name, params, ret, body, .. } = item {
-            functions.insert(name.clone(), (params.clone(), ret.clone(), body.clone()));
+            state.functions.insert(name.clone(), (params.clone(), ret.clone(), body.clone()));
         }
     }
 
-    let main_fn = functions.get("main").cloned()
+    let main_fn = state.functions.get("main").cloned()
         .ok_or_else(|| anyhow::anyhow!("No 'main' function found in {}", filename))?;
 
-    fn exec_stmts(
-        stmts: &[ast::Stmt],
-        vars: &mut HashMap<String, i64>,
-        str_vars: &mut HashMap<String, String>,
-        functions: &HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
-    ) -> anyhow::Result<Option<i64>> {
-        const BREAK_SENTINEL: i64 = -999999;
-        const CONTINUE_SENTINEL: i64 = -999998;
-        for stmt in stmts {
-            match stmt {
-                ast::Stmt::Let { name, value, .. } => {
-                    let val = eval_expr(value, vars, str_vars, functions)?;
-                    vars.insert(name.clone(), val);
-                }
-                ast::Stmt::Assign { name, value } => {
-                    let val = eval_expr(value, vars, str_vars, functions)?;
-                    vars.insert(name.clone(), val);
-                }
-                ast::Stmt::Print(expr) => {
-                    let val = eval_expr(expr, vars, str_vars, functions)?;
-                    if let ast::Expr::Ident(n) = expr {
-                        if let Some(s) = str_vars.get(n) {
-                            println!("{}", s);
-                            continue;
-                        }
-                    }
-                    println!("{}", val);
-                }
-                ast::Stmt::Return(Some(expr)) => {
-                    let val = eval_expr(expr, vars, str_vars, functions)?;
-                    return Ok(Some(val));
-                }
-                ast::Stmt::Return(None) => return Ok(Some(0)),
-                ast::Stmt::Break => return Ok(Some(BREAK_SENTINEL)),
-                ast::Stmt::Continue => return Ok(Some(CONTINUE_SENTINEL)),
-                ast::Stmt::If { condition, then, else_ } => {
-                    let cond = eval_expr(condition, vars, str_vars, functions)?;
-                    if cond != 0 {
-                        if let Some(val) = exec_stmts(then, vars, str_vars, functions)? {
-                            return Ok(Some(val));
-                        }
-                    } else if let Some(else_body) = else_ {
-                        if let Some(val) = exec_stmts(else_body, vars, str_vars, functions)? {
-                            return Ok(Some(val));
-                        }
-                    }
-                }
-                ast::Stmt::While { condition, body } => {
-                    loop {
-                        let cond = eval_expr(condition, vars, str_vars, functions)?;
-                        if cond == 0 { break; }
-                        match exec_stmts(body, vars, str_vars, functions)? {
-                            Some(BREAK_SENTINEL) => break,
-                            Some(CONTINUE_SENTINEL) => continue,
-                            Some(val) => return Ok(Some(val)),
-                            None => {}
-                        }
-                    }
-                }
-                ast::Stmt::For { variable, iterable, body } => {
-                    let count = eval_expr(iterable, vars, str_vars, functions)?;
-                    for i in 0..count {
-                        vars.insert(variable.clone(), i);
-                        match exec_stmts(body, vars, str_vars, functions)? {
-                            Some(BREAK_SENTINEL) => break,
-                            Some(CONTINUE_SENTINEL) => continue,
-                            Some(val) => return Ok(Some(val)),
-                            None => {}
-                        }
-                    }
-                }
-                ast::Stmt::ExprStmt(expr) => {
-                    eval_expr(expr, vars, str_vars, functions)?;
-                }
-                ast::Stmt::IfLet { value, then, else_, .. } => {
-                    let val = eval_expr(value, vars, str_vars, functions)?;
-                    if val != 0 {
-                        if let Some(result) = exec_stmts(then, vars, str_vars, functions)? {
-                            return Ok(Some(result));
-                        }
-                    } else if let Some(else_body) = else_ {
-                        if let Some(result) = exec_stmts(else_body, vars, str_vars, functions)? {
-                            return Ok(Some(result));
-                        }
-                    }
-                }
-            }
-        }
-        Ok(None)
-    }
+    exec_block(&main_fn.2, &mut state)?;
+    Ok(())
+}
 
-    fn eval_expr(
-        expr: &ast::Expr,
-        vars: &mut HashMap<String, i64>,
-        str_vars: &mut HashMap<String, String>,
-        functions: &HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
-    ) -> anyhow::Result<i64> {
-        match expr {
-            ast::Expr::Int(n) => Ok(*n),
-            ast::Expr::Float(n) => Ok(*n as i64),
-            ast::Expr::Bool(b) => Ok(if *b { 1 } else { 0 }),
-            ast::Expr::Str(s) => {
-                let key = format!("__str_{}", str_vars.len());
-                str_vars.insert(key, s.clone());
-                Ok(0)
-            }
-            ast::Expr::Ident(name) => Ok(*vars.get(name.as_str()).unwrap_or(&0)),
-            ast::Expr::BinaryOp { op, left, right } => {
-                let l = eval_expr(left, vars, str_vars, functions)?;
-                let r = eval_expr(right, vars, str_vars, functions)?;
-                match op {
-                    ast::BinOp::Add => Ok(l + r),
-                    ast::BinOp::Sub => Ok(l - r),
-                    ast::BinOp::Mul => Ok(l * r),
-                    ast::BinOp::Div => Ok(if r != 0 { l / r } else { 0 }),
-                    ast::BinOp::Mod => Ok(if r != 0 { l % r } else { 0 }),
-                    ast::BinOp::Eq => Ok(if l == r { 1 } else { 0 }),
-                    ast::BinOp::Neq => Ok(if l != r { 1 } else { 0 }),
-                    ast::BinOp::Lt => Ok(if l < r { 1 } else { 0 }),
-                    ast::BinOp::Gt => Ok(if l > r { 1 } else { 0 }),
-                    ast::BinOp::Le => Ok(if l <= r { 1 } else { 0 }),
-                    ast::BinOp::Ge => Ok(if l >= r { 1 } else { 0 }),
-                    ast::BinOp::And => Ok(if l != 0 && r != 0 { 1 } else { 0 }),
-                    ast::BinOp::Or => Ok(if l != 0 || r != 0 { 1 } else { 0 }),
+fn exec_block(
+    stmts: &[ast::Stmt],
+    state: &mut InterpreterState,
+) -> anyhow::Result<Option<i64>> {
+    const BREAK_SENTINEL: i64 = -999999;
+    const CONTINUE_SENTINEL: i64 = -999998;
+
+    for stmt in stmts {
+        match stmt {
+            ast::Stmt::Let { name, value, .. } => {
+                // Snapshot auto-keys before eval to detect what was created
+                let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
+                let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
+                let lambda_keys_before: std::collections::HashSet<String> = state.lambdas.keys().filter(|k| k.starts_with("__lambda_")).cloned().collect();
+                let int_val = eval_expr(value, state)?;
+                // Find new keys and rename to variable name
+                let new_str_key = state.str_vars.keys().filter(|k| k.starts_with("__auto_") && !str_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_str_key {
+                    if let Some(s) = state.str_vars.remove(&key) {
+                        state.str_vars.insert(name.clone(), s);
+                    }
+                }
+                let new_arr_key = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_") && !arr_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_arr_key {
+                    if let Some(a) = state.arr_vars.remove(&key) {
+                        state.arr_vars.insert(name.clone(), a);
+                    }
+                }
+                let new_lambda_key = state.lambdas.keys().filter(|k| k.starts_with("__lambda_") && !lambda_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_lambda_key {
+                    if let Some(l) = state.lambdas.remove(&key) {
+                        state.lambdas.insert(name.clone(), l);
+                    }
+                }
+                // If no string/array/lambda was produced, store the integer value
+                if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) && !state.lambdas.contains_key(name.as_str()) {
+                    state.vars.insert(name.clone(), int_val);
                 }
             }
-            ast::Expr::UnaryOp { op, expr } => {
-                let val = eval_expr(expr, vars, str_vars, functions)?;
-                match op {
-                    ast::UnOp::Neg => Ok(-val),
-                    ast::UnOp::Not => Ok(if val == 0 { 1 } else { 0 }),
+            ast::Stmt::Assign { name, value } => {
+                let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
+                let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
+                let int_val = eval_expr(value, state)?;
+                let new_str_key = state.str_vars.keys().filter(|k| k.starts_with("__auto_") && !str_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_str_key {
+                    if let Some(s) = state.str_vars.remove(&key) {
+                        state.str_vars.insert(name.clone(), s);
+                    }
+                }
+                let new_arr_key = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_") && !arr_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
+                if let Some(key) = new_arr_key {
+                    if let Some(a) = state.arr_vars.remove(&key) {
+                        state.arr_vars.insert(name.clone(), a);
+                    }
+                }
+                if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) {
+                    state.vars.insert(name.clone(), int_val);
                 }
             }
-            ast::Expr::Call { name, type_args: _, args } => {
-                if name == "print" {
-                    if !args.is_empty() {
-                        let val = eval_expr(&args[0], vars, str_vars, functions)?;
+            ast::Stmt::Print(expr) => {
+                // Smart print: resolve strings/arrays from idents, eval everything else
+                match expr {
+                    ast::Expr::Ident(n) => {
+                        if let Some(s) = state.str_vars.get(n) {
+                            println!("{}", s);
+                        } else if let Some(arr) = state.arr_vars.get(n) {
+                            let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                            println!("[{}]", elems.join(", "));
+                        } else if let Some((params, body)) = state.lambdas.get(n).cloned() {
+                            // Print function pointer for lambdas
+                            print!("<fn|");
+                            for (i, p) in params.iter().enumerate() {
+                                if i > 0 { print!(", "); }
+                                print!("{}: {}", p.name, p.ty);
+                            }
+                            println!("|>");
+                        } else {
+                            let val = state.vars.get(n.as_str()).unwrap_or(&0);
+                            println!("{}", val);
+                        }
+                    }
+                    ast::Expr::Str(s) => println!("{}", s),
+                    ast::Expr::ArrayLiteral(elems) => {
+                        let vals: Vec<String> = elems.iter().map(|e| match e {
+                            ast::Expr::Str(s) => format!("{}", s),
+                            ast::Expr::Int(n) => n.to_string(),
+                            ast::Expr::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+                            _ => "?".to_string(),
+                        }).collect();
+                        println!("[{}]", vals.join(", "));
+                    }
+                    ast::Expr::Call { name, type_args: _, args } => {
+                        if name == "print" {
+                            if let Some(first) = args.first() {
+                                // Nested print — evaluate the inner print's arg
+                                // and just print it
+                                match first {
+                                    ast::Expr::Ident(n) => {
+                                        if let Some(s) = state.str_vars.get(n) {
+                                            println!("{}", s);
+                                        } else {
+                                            let val = state.vars.get(n.as_str()).unwrap_or(&0);
+                                            println!("{}", val);
+                                        }
+                                    }
+                                    ast::Expr::Str(s) => println!("{}", s),
+                                    _ => {
+                                        let val = eval_expr(first, state)?;
+                                        println!("{}", val);
+                                    }
+                                }
+                            }
+                        } else {
+                            let val = eval_expr(expr, state)?;
+                            // Check if the call produced a string (e.g., str_concat)
+                            // For now, print the integer result
+                            println!("{}", val);
+                        }
+                    }
+                    _ => {
+                        let val = eval_expr(expr, state)?;
                         println!("{}", val);
                     }
-                    return Ok(0);
-                }
-                if name == "len" && args.len() == 1 {
-                    match &args[0] {
-                        ast::Expr::Str(s) => return Ok(s.len() as i64),
-                        ast::Expr::Ident(n) => {
-                            if let Some(s) = str_vars.get(n) {
-                                return Ok(s.len() as i64);
-                            }
-                        }
-                        ast::Expr::ArrayLiteral(elems) => return Ok(elems.len() as i64),
-                        _ => {}
-                    }
-                    return Ok(0);
-                }
-                if let Some((params, _ret, body)) = functions.get(name) {
-                    let mut local_vars = HashMap::new();
-                    let mut local_str = HashMap::new();
-                    for (param, arg) in params.iter().zip(args.iter()) {
-                        let val = eval_expr(arg, vars, str_vars, functions)?;
-                        local_vars.insert(param.name.clone(), val);
-                    }
-                    match exec_stmts(body, &mut local_vars, &mut local_str, functions)? {
-                        Some(v) => Ok(v),
-                        None => Ok(0),
-                    }
-                } else {
-                    Ok(0)
                 }
             }
-            _ => Ok(0),
+            ast::Stmt::Return(Some(expr)) => {
+                let val = eval_expr(expr, state)?;
+                return Ok(Some(val));
+            }
+            ast::Stmt::Return(None) => return Ok(Some(0)),
+            ast::Stmt::Break => return Ok(Some(BREAK_SENTINEL)),
+            ast::Stmt::Continue => return Ok(Some(CONTINUE_SENTINEL)),
+            ast::Stmt::If { condition, then, else_ } => {
+                let cond = eval_expr(condition, state)?;
+                if cond != 0 {
+                    if let Some(val) = exec_block(then, state)? {
+                        return Ok(Some(val));
+                    }
+                } else if let Some(else_body) = else_ {
+                    if let Some(val) = exec_block(else_body, state)? {
+                        return Ok(Some(val));
+                    }
+                }
+            }
+            ast::Stmt::While { condition, body } => {
+                loop {
+                    let cond = eval_expr(condition, state)?;
+                    if cond == 0 { break; }
+                    match exec_block(&body, state)? {
+                        Some(BREAK_SENTINEL) => break,
+                        Some(CONTINUE_SENTINEL) => continue,
+                        Some(val) => return Ok(Some(val)),
+                        None => {}
+                    }
+                }
+            }
+            ast::Stmt::For { variable, iterable, body } => {
+                // Check if iterable is a string
+                if let ast::Expr::Ident(n) = iterable {
+                    if let Some(s) = state.str_vars.get(n).cloned() {
+                        let chars: Vec<i64> = s.bytes().map(|b| b as i64).collect();
+                        for c in chars {
+                            state.vars.insert(variable.clone(), c);
+                            state.str_vars.remove(variable);  // shadow string with char
+                            match exec_block(&body, state)? {
+                                Some(BREAK_SENTINEL) => break,
+                                Some(CONTINUE_SENTINEL) => continue,
+                                Some(val) => return Ok(Some(val)),
+                                None => {}
+                            }
+                        }
+                        continue;
+                    }
+                }
+                if let ast::Expr::Str(s) = iterable {
+                    let chars: Vec<i64> = s.bytes().map(|b| b as i64).collect();
+                    for c in chars {
+                        state.vars.insert(variable.clone(), c);
+                        match exec_block(&body, state)? {
+                            Some(BREAK_SENTINEL) => break,
+                            Some(CONTINUE_SENTINEL) => continue,
+                            Some(val) => return Ok(Some(val)),
+                            None => {}
+                        }
+                    }
+                    continue;
+                }
+                // Regular numeric range
+                let count = eval_expr(iterable, state)?;
+                for i in 0..count {
+                    state.vars.insert(variable.clone(), i);
+                    match exec_block(&body, state)? {
+                        Some(BREAK_SENTINEL) => break,
+                        Some(CONTINUE_SENTINEL) => continue,
+                        Some(val) => return Ok(Some(val)),
+                        None => {}
+                    }
+                }
+            }
+            ast::Stmt::ExprStmt(expr) => {
+                eval_expr(expr, state)?;
+            }
+            ast::Stmt::IfLet { value, then, else_, .. } => {
+                let val = eval_expr(value, state)?;
+                if val != 0 {
+                    if let Some(result) = exec_block(then, state)? {
+                        return Ok(Some(result));
+                    }
+                } else if let Some(else_body) = else_ {
+                    if let Some(result) = exec_block(else_body, state)? {
+                        return Ok(Some(result));
+                    }
+                }
+            }
+            _ => {}
         }
     }
+    Ok(None)
+}
 
-    println!("\u{1f680} Interpreting {}...", filename);
-    let mut local_vars = HashMap::new();
-    let mut local_str = HashMap::new();
-    exec_stmts(&main_fn.2, &mut local_vars, &mut local_str, &functions)?;
-    println!("\u{2705} Interpreter finished");
-    Ok(())
+/// Resolve the string value of an expression, if it has one.
+fn resolve_str(expr: &ast::Expr, state: &InterpreterState) -> Option<String> {
+    match expr {
+        ast::Expr::Ident(n) => state.str_vars.get(n).cloned(),
+        ast::Expr::Str(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Resolve the array value of an expression, if it has one.
+fn resolve_arr(expr: &ast::Expr, state: &InterpreterState) -> Option<Vec<i64>> {
+    match expr {
+        ast::Expr::Ident(n) => state.arr_vars.get(n).cloned(),
+        _ => None,
+    }
+}
+
+
+fn eval_expr(
+    expr: &ast::Expr,
+    state: &mut InterpreterState,
+) -> anyhow::Result<i64> {
+    match expr {
+        ast::Expr::Int(n) => Ok(*n),
+        ast::Expr::Float(n) => Ok(*n as i64),
+        ast::Expr::Bool(b) => Ok(if *b { 1 } else { 0 }),
+        ast::Expr::Str(s) => {
+            // Store with auto key — exec_block will rename it to the variable
+            let key = format!("__auto_{}", state.str_vars.len());
+            state.str_vars.insert(key, s.clone());
+            Ok(0)
+        }
+        ast::Expr::Ident(name) => {
+            // Check strings first, then arrays, then integers
+            if state.str_vars.contains_key(name) || state.arr_vars.contains_key(name) || state.lambdas.contains_key(name) {
+                Ok(0) // these types use 0 as the integer representation
+            } else {
+                Ok(*state.vars.get(name.as_str()).unwrap_or(&0))
+            }
+        }
+        ast::Expr::ArrayLiteral(elems) => {
+            let mut vals = Vec::new();
+            for e in elems {
+                let v = eval_expr(e, state)?;
+                vals.push(v);
+            }
+            let key = format!("__auto_arr_{}", state.arr_vars.len());
+            state.arr_vars.insert(key, vals);
+            Ok(0)
+        }
+        ast::Expr::Lambda { params, body, .. } => {
+            let key = format!("__lambda_{}", state.lambda_counter);
+            state.lambda_counter += 1;
+            state.lambdas.insert(key, (params.clone(), body.clone()));
+            Ok(0)
+        }
+        ast::Expr::BinaryOp { op, left, right } => {
+            let l = eval_expr(left, state)?;
+            let r = eval_expr(right, state)?;
+            // Resolve string/array values from both Ident and literal expressions
+            let left_str = resolve_str(left, state);
+            let right_str = resolve_str(right, state);
+            let left_arr = resolve_arr(left, state);
+            let right_arr = resolve_arr(right, state);
+
+            match op {
+                ast::BinOp::Add => {
+                    // String concatenation
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        let combined = format!("{}{}", ls, rs);
+                        let key = format!("__auto_{}", state.str_vars.len());
+                        state.str_vars.insert(key, combined);
+                        return Ok(0);
+                    }
+                    // Array concat
+                    if let (Some(la), Some(ra)) = (&left_arr, &right_arr) {
+                        let mut combined = la.clone();
+                        combined.extend(ra);
+                        let key = format!("__auto_arr_{}", state.arr_vars.len());
+                        state.arr_vars.insert(key, combined);
+                        return Ok(0);
+                    }
+                    Ok(l + r)
+                }
+                ast::BinOp::Sub => Ok(l - r),
+                ast::BinOp::Mul => Ok(l * r),
+                ast::BinOp::Div => Ok(if r != 0 { l / r } else { 0 }),
+                ast::BinOp::Mod => Ok(if r != 0 { l % r } else { 0 }),
+                ast::BinOp::Eq => {
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        Ok(if ls == rs { 1 } else { 0 })
+                    } else {
+                        Ok(if l == r { 1 } else { 0 })
+                    }
+                }
+                ast::BinOp::Neq => {
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        Ok(if ls != rs { 1 } else { 0 })
+                    } else {
+                        Ok(if l != r { 1 } else { 0 })
+                    }
+                }
+                ast::BinOp::Lt => {
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        Ok(if ls < rs { 1 } else { 0 })
+                    } else {
+                        Ok(if l < r { 1 } else { 0 })
+                    }
+                }
+                ast::BinOp::Gt => {
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        Ok(if ls > rs { 1 } else { 0 })
+                    } else {
+                        Ok(if l > r { 1 } else { 0 })
+                    }
+                }
+                ast::BinOp::Le => {
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        Ok(if ls <= rs { 1 } else { 0 })
+                    } else {
+                        Ok(if l <= r { 1 } else { 0 })
+                    }
+                }
+                ast::BinOp::Ge => {
+                    if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
+                        Ok(if ls >= rs { 1 } else { 0 })
+                    } else {
+                        Ok(if l >= r { 1 } else { 0 })
+                    }
+                }
+                ast::BinOp::And => Ok(if l != 0 && r != 0 { 1 } else { 0 }),
+                ast::BinOp::Or => Ok(if l != 0 || r != 0 { 1 } else { 0 }),
+            }
+        }
+        ast::Expr::UnaryOp { op, expr } => {
+            let val = eval_expr(expr, state)?;
+            match op {
+                ast::UnOp::Neg => Ok(-val),
+                ast::UnOp::Not => Ok(if val == 0 { 1 } else { 0 }),
+            }
+        }
+        ast::Expr::Index { target, index } => {
+            let idx = eval_expr(index, state)? as usize;
+            if let ast::Expr::Ident(n) = target.as_ref() {
+                if let Some(arr) = state.arr_vars.get(n) {
+                    return Ok(arr.get(idx).copied().unwrap_or(0));
+                }
+                if let Some(s) = state.str_vars.get(n) {
+                    return Ok(s.as_bytes().get(idx).copied().map(|b| b as i64).unwrap_or(0));
+                }
+            }
+            Ok(0)
+        }
+        ast::Expr::Call { name, type_args: _, args } => {
+            if name == "print" {
+                if !args.is_empty() {
+                    // Inline print resolution for call context
+                    match &args[0] {
+                        ast::Expr::Ident(n) => {
+                            if let Some(s) = state.str_vars.get(n) {
+                                println!("{}", s);
+                            } else if let Some(arr) = state.arr_vars.get(n) {
+                                let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                                println!("[{}]", elems.join(", "));
+                            } else {
+                                let val = state.vars.get(n.as_str()).unwrap_or(&0);
+                                println!("{}", val);
+                            }
+                        }
+                        ast::Expr::Str(s) => println!("{}", s),
+                        ast::Expr::ArrayLiteral(elems) => {
+                            let vals: Vec<String> = elems.iter().map(|e| match e {
+                                ast::Expr::Str(s) => format!("{}", s),
+                                ast::Expr::Int(n) => n.to_string(),
+                                _ => "?".to_string(),
+                            }).collect();
+                            println!("[{}]", vals.join(", "));
+                        }
+                        other => {
+                            let val = eval_expr(other, state)?;
+                            println!("{}", val);
+                        }
+                    }
+                }
+                return Ok(0);
+            }
+            if name == "len" && args.len() == 1 {
+                match &args[0] {
+                    ast::Expr::Str(s) => return Ok(s.len() as i64),
+                    ast::Expr::Ident(n) => {
+                        if let Some(s) = state.str_vars.get(n) {
+                            return Ok(s.len() as i64);
+                        }
+                        if let Some(a) = state.arr_vars.get(n) {
+                            return Ok(a.len() as i64);
+                        }
+                    }
+                    ast::Expr::ArrayLiteral(elems) => return Ok(elems.len() as i64),
+                    _ => {}
+                }
+                return Ok(0);
+            }
+            // Array built-in: map(arr, lambda)
+            if name == "map" && args.len() == 2 {
+                // Get the array
+                let arr = match &args[0] {
+                    ast::Expr::Ident(n) => state.arr_vars.get(n).cloned().unwrap_or_default(),
+                    _ => {
+                        // Evaluate to get array - try to find auto key
+                        eval_expr(&args[0], state)?;
+                        let new_key = state.arr_vars.keys()
+                            .filter(|k| k.starts_with("__auto_arr_"))
+                            .next().cloned();
+                        if let Some(key) = new_key {
+                            state.arr_vars.remove(&key).unwrap_or_default()
+                        } else { vec![] }
+                    }
+                };
+                // Get the lambda
+                let lambda_info = match &args[1] {
+                    ast::Expr::Lambda { params, body, .. } => Some((params.clone(), body.clone())),
+                    ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
+                    _ => None,
+                };
+                if let Some((params, body)) = lambda_info {
+                    let mut result = Vec::new();
+                    for elem in &arr {
+                        let mut local_state = InterpreterState::new();
+                        local_state.functions = state.functions.clone();
+                        if let Some(param) = params.first() {
+                            local_state.vars.insert(param.name.clone(), *elem);
+                        }
+                        match exec_block(&body, &mut local_state)? {
+                            Some(v) => result.push(v),
+                            None => result.push(0),
+                        }
+                    }
+                    let key = format!("__auto_arr_{}", state.arr_vars.len());
+                    state.arr_vars.insert(key, result);
+                    return Ok(0);
+                }
+                return Ok(0);
+            }
+            // Array built-in: filter(arr, lambda)
+            if name == "filter" && args.len() == 2 {
+                let arr = match &args[0] {
+                    ast::Expr::Ident(n) => state.arr_vars.get(n).cloned().unwrap_or_default(),
+                    _ => {
+                        eval_expr(&args[0], state)?;
+                        let new_key = state.arr_vars.keys()
+                            .filter(|k| k.starts_with("__auto_arr_"))
+                            .next().cloned();
+                        if let Some(key) = new_key {
+                            state.arr_vars.remove(&key).unwrap_or_default()
+                        } else { vec![] }
+                    }
+                };
+                let lambda_info = match &args[1] {
+                    ast::Expr::Lambda { params, body, .. } => Some((params.clone(), body.clone())),
+                    ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
+                    _ => None,
+                };
+                if let Some((params, body)) = lambda_info {
+                    let mut result = Vec::new();
+                    for elem in &arr {
+                        let mut local_state = InterpreterState::new();
+                        local_state.functions = state.functions.clone();
+                        if let Some(param) = params.first() {
+                            local_state.vars.insert(param.name.clone(), *elem);
+                        }
+                        let cond = match exec_block(&body, &mut local_state)? {
+                            Some(v) => v,
+                            None => 0,
+                        };
+                        if cond != 0 {
+                            result.push(*elem);
+                        }
+                    }
+                    let key = format!("__auto_arr_{}", state.arr_vars.len());
+                    state.arr_vars.insert(key, result);
+                    return Ok(0);
+                }
+                return Ok(0);
+            }
+            // Array built-in: reduce(arr, lambda, initial)
+            if name == "reduce" && args.len() == 3 {
+                let arr = match &args[0] {
+                    ast::Expr::Ident(n) => state.arr_vars.get(n).cloned().unwrap_or_default(),
+                    _ => {
+                        eval_expr(&args[0], state)?;
+                        let new_key = state.arr_vars.keys()
+                            .filter(|k| k.starts_with("__auto_arr_"))
+                            .next().cloned();
+                        if let Some(key) = new_key {
+                            state.arr_vars.remove(&key).unwrap_or_default()
+                        } else { vec![] }
+                    }
+                };
+                let mut acc = eval_expr(&args[2], state)?;
+                let lambda_info = match &args[1] {
+                    ast::Expr::Lambda { params, body, .. } => Some((params.clone(), body.clone())),
+                    ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
+                    _ => None,
+                };
+                if let Some((params, body)) = lambda_info {
+                    for elem in &arr {
+                        let mut local_state = InterpreterState::new();
+                        local_state.functions = state.functions.clone();
+                        if params.len() >= 2 {
+                            local_state.vars.insert(params[0].name.clone(), acc);
+                            local_state.vars.insert(params[1].name.clone(), *elem);
+                        } else if let Some(param) = params.first() {
+                            local_state.vars.insert(param.name.clone(), *elem);
+                        }
+                        acc = match exec_block(&body, &mut local_state)? {
+                            Some(v) => v,
+                            None => 0,
+                        };
+                    }
+                    return Ok(acc);
+                }
+                return Ok(0);
+            }
+            // Lambda call
+            if let Some((params, body)) = state.lambdas.get(name).cloned() {
+                let mut local_state = InterpreterState::new();
+                local_state.functions = state.functions.clone();
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    let val = eval_expr(arg, state)?;
+                    local_state.vars.insert(param.name.clone(), val);
+                }
+                match exec_block(&body, &mut local_state)? {
+                    Some(v) => Ok(v),
+                    None => Ok(0),
+                }
+            } else if let Some((params, _ret, body)) = state.functions.get(name).cloned() {
+                let mut local_state = InterpreterState::new();
+                local_state.functions = state.functions.clone();
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    let val = eval_expr(arg, state)?;
+                    local_state.vars.insert(param.name.clone(), val);
+                }
+                match exec_block(&body, &mut local_state)? {
+                    Some(v) => Ok(v),
+                    None => Ok(0),
+                }
+            } else {
+                Ok(0)
+            }
+        }
+        _ => Ok(0),
+    }
 }
 
 // ── Phase 4: Documentation Generator ──

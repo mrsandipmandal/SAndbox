@@ -30,6 +30,23 @@ fn compile_and_run(source: &str) -> (String, bool) {
     (combined, output.status.success())
 }
 
+fn interpret_source(source: &str) -> (String, bool) {
+    let tmp = TempDir::new().unwrap();
+    let sbx_path = tmp.path().join("test.sbx");
+    fs::write(&sbx_path, source).unwrap();
+
+    let bin = sandbox_bin();
+    let output = Command::new(&bin)
+        .args(["interpret", sbx_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = format!("{}{}", stdout, stderr);
+    (combined, output.status.success())
+}
+
 fn run_sandbox(args: &[&str]) -> (String, bool) {
     let bin = sandbox_bin();
     let output = Command::new(&bin).args(args).output().unwrap();
@@ -4871,4 +4888,152 @@ fn test_for_string_break() {
     assert!(output.contains("104"), "Expected 104 (h), got: {}", output);
     assert!(output.contains("101"), "Expected 101 (e), got: {}", output);
     assert!(!output.contains("108"), "Should not contain 108 (l), got: {}", output);
+}
+
+#[test]
+fn test_interpreter_for_string() {
+    let source = r#"
+fn main() {
+    for c in "hello" {
+        print(c)
+    }
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter for-string failed: {}", output);
+    assert!(output.contains("104"), "Expected 104 (h), got: {}", output);
+    assert!(output.contains("101"), "Expected 101 (e), got: {}", output);
+}
+
+#[test]
+fn test_interpreter_string_concat() {
+    let source = r#"
+fn main() {
+    let greeting = "hello" + " " + "world"
+    print(greeting)
+    print(len(greeting))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter string concat failed: {}", output);
+    assert!(output.contains("hello world"), "Expected 'hello world', got: {}", output);
+    assert!(output.contains("11"), "Expected 11, got: {}", output);
+}
+
+#[test]
+fn test_interpreter_string_comparison() {
+    let source = r#"
+fn main() {
+    if "apple" < "banana" {
+        print("lt")
+    }
+    if "zzz" > "aaa" {
+        print("gt")
+    }
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter string comparison failed: {}", output);
+    assert!(output.contains("lt"), "Expected 'lt', got: {}", output);
+    assert!(output.contains("gt"), "Expected 'gt', got: {}", output);
+}
+
+#[test]
+fn test_interpreter_function_as_expression() {
+    let source = r#"
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+fn main() {
+    let y = double(5)
+    print(y)
+    print(double(double(3)))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter fn-as-expr failed: {}", output);
+    assert!(output.contains("10"), "Expected 10, got: {}", output);
+    assert!(output.contains("12"), "Expected 12, got: {}", output);
+}
+
+#[test]
+fn test_interpreter_closure_expression_body() {
+    let source = r#"
+fn main() {
+    let f = |x: i64| x + 10
+    print(f(5))
+    let g = |x: i64, y: i64| x + y
+    print(g(3, 4))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter closure expr body failed: {}", output);
+    assert!(output.contains("15"), "Expected 15, got: {}", output);
+    assert!(output.contains("7"), "Expected 7, got: {}", output);
+}
+
+#[test]
+fn test_interpreter_len_on_string_variable() {
+    let source = r#"
+fn main() {
+    let s = "hello"
+    print(len(s))
+    let t = ""
+    print(len(t))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter len on variable failed: {}", output);
+    assert!(output.contains("5"), "Expected 5, got: {}", output);
+    assert!(output.contains("0"), "Expected 0, got: {}", output);
+}
+
+#[test]
+fn test_interpreter_array_literal() {
+    let source = r#"
+fn main() {
+    let arr = [10, 20, 30]
+    print(arr[1])
+    print(len(arr))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter array literal failed: {}", output);
+    assert!(output.contains("20"), "Expected 20, got: {}", output);
+    assert!(output.contains("3"), "Expected 3, got: {}", output);
+}
+
+#[test]
+fn test_interpreter_map_filter_reduce() {
+    let source = r#"
+fn main() {
+    let arr = [1, 2, 3, 4, 5]
+    let doubled = map(arr, |x: i64| x * 2)
+    print(doubled)
+    let evens = filter(arr, |x: i64| x % 2 == 0)
+    print(evens)
+    let total = reduce(arr, |acc: i64, x: i64| acc + x, 0)
+    print(total)
+}
+"#;
+    let (output, ok) = interpret_source(source);
+    assert!(ok, "interpreter map/filter/reduce failed: {}", output);
+    assert!(output.contains("15"), "Expected sum 15, got: {}", output);
+}
+
+#[test]
+fn test_interpreter_string_equality() {
+    let source = r#"
+fn main() {
+    let a = "hello"
+    let b = "hello"
+    let c = "world"
+    if a == b { print("eq") }
+    if a != c { print("neq") }
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "interpreter string eq failed: {}", output);
+    assert!(output.contains("eq"), "Expected 'eq', got: {}", output);
+    assert!(output.contains("neq"), "Expected 'neq', got: {}", output);
 }

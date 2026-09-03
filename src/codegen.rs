@@ -1747,39 +1747,10 @@ impl CodeGen {
                     BinOp::Or => "||",
                 };
 
-                if matches!(op, BinOp::Add) {
-                    let lt = self.infer_c_type(left);
-                    let rt = self.infer_c_type(right);
-                    if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
-                        return format!("__sbx_str_concat({}, {})", l, r);
-                    }
-                }
-                // String equality/inequality: use strcmp
-                if matches!(op, BinOp::Eq | BinOp::Neq) {
-                    let lt = self.infer_c_type(left);
-                    let rt = self.infer_c_type(right);
-                    if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
-                        let cmp = match op {
-                            BinOp::Eq => format!("strcmp({}, {}) == 0", l, r),
-                            BinOp::Neq => format!("strcmp({}, {}) != 0", l, r),
-                            _ => unreachable!(),
-                        };
-                        return format!("(long)({})", cmp);
-                    }
-                }
-                // String ordering: use strcmp for lexicographic comparison
-                if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) {
-                    let lt = self.infer_c_type(left);
-                    let rt = self.infer_c_type(right);
-                    if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
-                        let cmp = match op {
-                            BinOp::Lt => format!("strcmp({}, {}) < 0", l, r),
-                            BinOp::Gt => format!("strcmp({}, {}) > 0", l, r),
-                            BinOp::Le => format!("strcmp({}, {}) <= 0", l, r),
-                            BinOp::Ge => format!("strcmp({}, {}) >= 0", l, r),
-                            _ => unreachable!(),
-                        };
-                        return format!("(long)({})", cmp);
+                // String operations: concat, eq, neq, ordering
+                if self.is_string_binop(left, right) {
+                    if let Some(result) = self.gen_string_binop(op, &l, &r) {
+                        return result;
                     }
                 }
 
@@ -2240,7 +2211,32 @@ impl CodeGen {
         }
     }
 
-    fn is_money_binop(&self, left: &Expr, right: &Expr) -> bool {
+    /// Check if both operands are strings
+    fn is_string_type(ty: &str) -> bool {
+        ty == "const char*" || ty == "char*"
+    }
+
+    fn is_string_binop(&self, left: &Expr, right: &Expr) -> bool {
+        let lt = self.infer_c_type(left);
+        let rt = self.infer_c_type(right);
+        Self::is_string_type(&lt) && Self::is_string_type(&rt)
+    }
+
+    /// Generate C code for a string binary operation
+    fn gen_string_binop(&self, op: &BinOp, l: &str, r: &str) -> Option<String> {
+        match op {
+            BinOp::Add => Some(format!("__sbx_str_concat({}, {})", l, r)),
+            BinOp::Eq => Some(format!("(long)(strcmp({}, {}) == 0)", l, r)),
+            BinOp::Neq => Some(format!("(long)(strcmp({}, {}) != 0)", l, r)),
+            BinOp::Lt => Some(format!("(long)(strcmp({}, {}) < 0)", l, r)),
+            BinOp::Gt => Some(format!("(long)(strcmp({}, {}) > 0)", l, r)),
+            BinOp::Le => Some(format!("(long)(strcmp({}, {}) <= 0)", l, r)),
+            BinOp::Ge => Some(format!("(long)(strcmp({}, {}) >= 0)", l, r)),
+            _ => None,
+        }
+    }
+
+        fn is_money_binop(&self, left: &Expr, right: &Expr) -> bool {
         matches!(left, Expr::MoneyLiteral { .. }) || matches!(right, Expr::MoneyLiteral { .. })
     }
 

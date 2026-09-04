@@ -11,6 +11,13 @@ pub struct CodeGen {
     output: String,
     indent: usize,
     var_types: HashMap<String, String>,
+    /// Tracks which variables have been declared in the current function
+    /// to detect shadowing and emit assignment instead of redeclaration.
+    declared_vars: Vec<String>,
+    /// Tracks the length expression for each array variable (for print support).
+    array_lengths: std::collections::HashMap<String, String>,
+    /// Stack of scope boundaries for declared_vars cleanup on scope exit.
+    scope_stack: Vec<std::collections::HashSet<String>>,
     var_counter: Cell<usize>,
     enums: HashMap<String, Vec<EnumVariantDef>>,
     fn_returns: HashMap<String, String>,
@@ -54,6 +61,9 @@ impl CodeGen {
             var_to_lambda: HashMap::new(),
             fn_sigs: HashMap::new(),
             var_types: HashMap::new(),
+            declared_vars: Vec::new(),
+            scope_stack: Vec::new(),
+            array_lengths: std::collections::HashMap::new(),
             lambda_counter: Cell::new(0),
             pending_lambdas: RefCell::new(Vec::new()),
             lambda_return_idx: Cell::new(0),
@@ -77,6 +87,17 @@ impl CodeGen {
         writeln!(self.output).unwrap();
 
         self.output.push_str(&stdlib::c_preamble());
+        writeln!(self.output).unwrap();
+
+        // Runtime helper: print array of longs
+        writeln!(self.output, "static void __sbx_print_arr(long *arr, long len) {{").unwrap();
+        writeln!(self.output, "    printf(\"[\");").unwrap();
+        writeln!(self.output, "    for (long i = 0; i < len; i++) {{").unwrap();
+        writeln!(self.output, "        if (i > 0) printf(\", \");").unwrap();
+        writeln!(self.output, "        printf(\"%ld\", arr[i]);").unwrap();
+        writeln!(self.output, "    }}").unwrap();
+        writeln!(self.output, "    printf(\"]\\n\");").unwrap();
+        writeln!(self.output, "}}").unwrap();
         writeln!(self.output).unwrap();
 
         // Pre-register function definitions for monomorphization
@@ -850,6 +871,9 @@ impl CodeGen {
     }
 
     fn gen_test_fn(&mut self, fn_name: &str, test_name: &str, body: &[Stmt]) {
+        // Reset function-scoped declaration tracking
+        self.declared_vars.clear();
+        self.scope_stack.clear();
         writeln!(self.output, "int {}() {{", fn_name).unwrap();
         self.indent += 1;
         self.write_indent();
@@ -1212,6 +1236,10 @@ impl CodeGen {
     }
 
     fn gen_fn(&mut self, name: &str, params: &[Param], ret: &Option<Type>, body: &[Stmt]) {
+        // Reset function-scoped declaration tracking
+        self.declared_vars.clear();
+        self.scope_stack.clear();
+        self.array_lengths.clear();
         let has_defaults = params.iter().any(|p| p.default.is_some());
         let fn_name = if has_defaults { format!("{}_inner", name) } else { name.to_string() };
 
@@ -1233,6 +1261,12 @@ impl CodeGen {
         }
         writeln!(self.output, "{} {}({}) {{", ret_str, fn_name, params_str).unwrap();
         self.indent += 1;
+        // Register params as already declared
+        for p in params {
+            if !self.declared_vars.contains(&p.name) {
+                self.declared_vars.push(p.name.clone());
+            }
+        }
 
         for (i, stmt) in body.iter().enumerate() {
             let is_last = i == body.len() - 1;
@@ -1341,8 +1375,14 @@ impl CodeGen {
                     .map_or_else(|| self.infer_c_type(value), |t| self.c_type(t));
                 self.var_types.insert(name.clone(), c_ty.clone());
                 self.write_indent();
-                if matches!(value, Expr::ArrayLiteral(_)) && c_ty.ends_with('*') {
+                let is_shadow = self.declared_vars.contains(name);
+                if is_shadow {
+                    // Variable already declared — emit assignment instead of redeclaration
+                    writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
+                } else if matches!(value, Expr::ArrayLiteral(_)) && c_ty.ends_with('*') {
                     let arr_ty = c_ty.trim_end_matches('*');
+                    let len = if let Expr::ArrayLiteral(elems) = value { elems.len() } else { 0 };
+                    self.array_lengths.insert(name.clone(), format!("{}", len));
                     writeln!(
                         self.output,
                         "{} {}[] = {};",
@@ -1358,10 +1398,33 @@ impl CodeGen {
                 } else {
                     writeln!(self.output, "{} {} = {};", c_ty, name, self.gen_expr(value)).unwrap();
                 }
+                if !is_shadow {
+                    if !self.declared_vars.contains(name) { self.declared_vars.push(name.clone()); }
+                }
             }
             Stmt::Assign { name, value } => {
-                self.write_indent();
-                writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
+                let var_type = self.var_types.get(name.as_str()).map(|s| s.as_str()).unwrap_or("long");
+                if var_type.ends_with('*') && matches!(value, Expr::ArrayLiteral(_)) {
+                    // Array reassignment: copy elements one by one
+                    if let Expr::ArrayLiteral(elems) = value {
+                        let len = elems.len();
+                        self.write_indent();
+                        writeln!(self.output, "// array reassign: {} ({} elements)", name, len).unwrap();
+                        for (i, elem) in elems.iter().enumerate() {
+                            self.write_indent();
+                            writeln!(self.output, "{}[{}] = {};", name, i, self.gen_expr(elem)).unwrap();
+                        }
+                        // Update tracked length
+                        self.array_lengths.insert(name.clone(), format!("{}", len));
+                    }
+                } else {
+                    self.write_indent();
+                    writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
+                    // If assigning an array literal to a pointer, track the new length
+                    if let Expr::ArrayLiteral(elems) = value {
+                        self.array_lengths.insert(name.clone(), format!("{}", elems.len()));
+                    }
+                }
             }
             Stmt::If {
                 condition,
@@ -1370,19 +1433,27 @@ impl CodeGen {
             } => {
                 self.write_indent();
                 writeln!(self.output, "if ({}) {{", self.gen_expr(condition)).unwrap();
+                self.scope_stack.push(self.declared_vars.iter().cloned().collect());
                 self.indent += 1;
                 for s in then {
                     self.gen_stmt(s);
                 }
                 self.indent -= 1;
+                if let Some(saved) = self.scope_stack.pop() {
+                    self.declared_vars = saved.into_iter().collect();
+                }
                 if let Some(else_body) = else_ {
                     self.write_indent();
                     writeln!(self.output, "}} else {{").unwrap();
+                    self.scope_stack.push(self.declared_vars.iter().cloned().collect());
                     self.indent += 1;
                     for s in else_body {
                         self.gen_stmt(s);
                     }
                     self.indent -= 1;
+                    if let Some(saved) = self.scope_stack.pop() {
+                        self.declared_vars = saved.into_iter().collect();
+                    }
                 }
                 self.write_indent();
                 writeln!(self.output, "}}").unwrap();
@@ -1390,11 +1461,15 @@ impl CodeGen {
             Stmt::While { condition, body } => {
                 self.write_indent();
                 writeln!(self.output, "while ({}) {{", self.gen_expr(condition)).unwrap();
+                self.scope_stack.push(self.declared_vars.iter().cloned().collect());
                 self.indent += 1;
                 for s in body {
                     self.gen_stmt(s);
                 }
                 self.indent -= 1;
+                if let Some(saved) = self.scope_stack.pop() {
+                    self.declared_vars = saved.into_iter().collect();
+                }
                 self.write_indent();
                 writeln!(self.output, "}}").unwrap();
             }
@@ -1403,6 +1478,8 @@ impl CodeGen {
                 iterable,
                 body,
             } => {
+                self.scope_stack.push(self.declared_vars.iter().cloned().collect());
+                if !self.declared_vars.contains(&variable) { self.declared_vars.push(variable.clone()); }
                 if let Expr::ArrayLiteral(elems) = iterable {
                     for elem in elems {
                         self.write_indent();
@@ -1493,6 +1570,10 @@ impl CodeGen {
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
                 }
+                // Restore declared_vars after for loop body
+                if let Some(saved) = self.scope_stack.pop() {
+                    self.declared_vars = saved.into_iter().collect();
+                }
             }
             Stmt::Return(expr) => {
                 self.write_indent();
@@ -1565,6 +1646,13 @@ impl CodeGen {
                     writeln!(self.output, "printf(\"%s\\n\", {});", self.gen_expr(expr)).unwrap();
                 } else if var_type == Some("double") {
                     writeln!(self.output, "printf(\"%f\\n\", {});", self.gen_expr(expr)).unwrap();
+                } else if var_type.map(|t| t.ends_with('*')).unwrap_or(false) {
+                    // Array: use __sbx_print_arr if we know the length, else fallback
+                    if let Some(len_expr) = self.array_lengths.get(name.as_str()) {
+                        writeln!(self.output, "__sbx_print_arr({}, {});", self.gen_expr(expr), len_expr).unwrap();
+                    } else {
+                        writeln!(self.output, "printf(\"%ld\\n\", (long){});", self.gen_expr(expr)).unwrap();
+                    }
                 } else {
                     writeln!(
                         self.output,
@@ -1785,7 +1873,9 @@ impl CodeGen {
                     if c_ty == "const char*" || c_ty == "char*" {
                         return format!("(long)strlen({})", self.gen_expr(arg));
                     } else if c_ty.ends_with('*') {
-                        return format!("__sbx_arr_len({})", self.gen_expr(arg));
+                        // For VLA arrays, use sizeof at call site
+                        let arr_val = self.gen_expr(arg);
+                        return format!("(long)(sizeof({av}) / sizeof({av}[0]))", av = arr_val);
                     }
                 }
                 // If type_args are present, queue monomorphization

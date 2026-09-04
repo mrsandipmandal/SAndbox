@@ -958,15 +958,26 @@ fn show_tree() -> anyhow::Result<()> {
 
 /// Tree-walking interpreter that evaluates Sandbox source directly
 /// without compiling to C. Enables instant `sandbox interpret` for dev.
+/// Scope captured by a lambda at creation time.
+#[derive(Clone)]
+struct CapturedScope {
+    vars: std::collections::HashMap<String, i64>,
+    str_vars: std::collections::HashMap<String, String>,
+    arr_vars: std::collections::HashMap<String, Vec<i64>>,
+    struct_instances: std::collections::HashMap<String, Vec<i64>>,
+    struct_type_of: std::collections::HashMap<String, String>,
+}
+
 struct InterpreterState {
     vars: std::collections::HashMap<String, i64>,
     str_vars: std::collections::HashMap<String, String>,
     arr_vars: std::collections::HashMap<String, Vec<i64>>,
-    lambdas: std::collections::HashMap<String, (Vec<ast::Param>, Vec<ast::Stmt>, std::collections::HashMap<String, i64>, std::collections::HashMap<String, String>, std::collections::HashMap<String, Vec<i64>>, std::collections::HashMap<String, Vec<i64>>, std::collections::HashMap<String, String>)>,
+    lambdas: std::collections::HashMap<String, (Vec<ast::Param>, Vec<ast::Stmt>, CapturedScope)>,
     functions: std::collections::HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
     struct_fields: std::collections::HashMap<String, Vec<String>>,
     struct_instances: std::collections::HashMap<String, Vec<i64>>,
     struct_type_of: std::collections::HashMap<String, String>,
+    impl_methods: std::collections::HashMap<String, (Vec<ast::Param>, Option<ast::Type>, Vec<ast::Stmt>)>,
     lambda_counter: usize,
 }
 
@@ -981,6 +992,7 @@ impl InterpreterState {
             struct_fields: std::collections::HashMap::new(),
             struct_instances: std::collections::HashMap::new(),
             struct_type_of: std::collections::HashMap::new(),
+            impl_methods: std::collections::HashMap::new(),
             lambda_counter: 0,
         }
     }
@@ -988,6 +1000,100 @@ impl InterpreterState {
     fn is_string(&self, name: &str) -> bool {
         self.str_vars.contains_key(name)
     }
+
+    /// Snapshot all auto-generated keys with the given prefix.
+    fn snapshot_auto_keys(&self, prefix: &str) -> std::collections::HashSet<String> {
+        self.str_vars.keys()
+            .chain(self.arr_vars.keys())
+            .chain(self.lambdas.keys())
+            .chain(self.struct_instances.keys())
+            .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+
+    /// After evaluating an expression, find the newest auto key (by prefix) that
+    /// wasn't in `before` and transfer it to `name` in the appropriate map.
+    /// Returns true if a key was transferred.
+    fn transfer_new_key(&mut self, prefix: &str, name: &str, before: &std::collections::HashSet<String>) -> bool {
+        // Determine which map to look in based on prefix
+        let new_key = match prefix {
+            p if p.starts_with("__struct_") => {
+                self.struct_instances.keys()
+                    .filter(|k| k.starts_with("__struct_") && !before.contains(*k))
+                    .max_by(|a, b| a.cmp(b))
+                    .cloned()
+            }
+            p if p.starts_with("__auto_arr_") => {
+                self.arr_vars.keys()
+                    .filter(|k| k.starts_with("__auto_arr_") && !before.contains(*k))
+                    .max_by(|a, b| a.cmp(b))
+                    .cloned()
+            }
+            p if p.starts_with("__lambda_") => {
+                self.lambdas.keys()
+                    .filter(|k| k.starts_with("__lambda_") && !before.contains(*k))
+                    .max_by(|a, b| a.cmp(b))
+                    .cloned()
+            }
+            _ => { // "__auto_"
+                self.str_vars.keys()
+                    .filter(|k| k.starts_with("__auto_") && !before.contains(*k))
+                    .max_by(|a, b| a.cmp(b))
+                    .cloned()
+            }
+        };
+        if let Some(key) = new_key {
+            match prefix {
+                p if p.starts_with("__struct_") => {
+                    if let Some(s) = self.struct_instances.remove(&key) {
+                        self.struct_instances.insert(name.to_string(), s);
+                        if let Some(t) = self.struct_type_of.remove(&key) {
+                            self.struct_type_of.insert(name.to_string(), t);
+                        }
+                        return true;
+                    }
+                }
+                p if p.starts_with("__auto_arr_") => {
+                    if let Some(a) = self.arr_vars.remove(&key) {
+                        self.arr_vars.insert(name.to_string(), a);
+                        return true;
+                    }
+                }
+                p if p.starts_with("__lambda_") => {
+                    if let Some(l) = self.lambdas.remove(&key) {
+                        self.lambdas.insert(name.to_string(), l);
+                        return true;
+                    }
+                }
+                _ => {
+                    if let Some(s) = self.str_vars.remove(&key) {
+                        self.str_vars.insert(name.to_string(), s);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if name is bound in any type-specific map (not plain vars).
+    fn is_bound_typed(&self, name: &str) -> bool {
+        self.str_vars.contains_key(name)
+            || self.arr_vars.contains_key(name)
+            || self.lambdas.contains_key(name)
+            || self.struct_instances.contains_key(name)
+    }
+
+    /// Inject a captured scope into this state (for lambda invocation).
+    fn inject_scope(&mut self, scope: &CapturedScope) {
+        self.vars.extend(scope.vars.iter().map(|(k, v)| (k.clone(), *v)));
+        self.str_vars.extend(scope.str_vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+        self.arr_vars.extend(scope.arr_vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+        self.struct_instances.extend(scope.struct_instances.iter().map(|(k, v)| (k.clone(), v.clone())));
+        self.struct_type_of.extend(scope.struct_type_of.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+
 
     fn get_string(&self, name: &str) -> Option<&str> {
         self.str_vars.get(name).map(|s| s.as_str())
@@ -1043,6 +1149,14 @@ fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
             ast::TopLevel::StructDef { name, fields, .. } => {
                 state.struct_fields.insert(name.clone(), fields.iter().map(|f| f.name.clone()).collect());
             }
+            ast::TopLevel::ImplDef { type_name, methods, .. } => {
+                for method in methods {
+                    if let ast::TopLevel::FnDef { name, params, ret, body, .. } = method {
+                        let key = format!("{}::{}", type_name, name);
+                        state.impl_methods.insert(key, (params.clone(), ret.clone(), body.clone()));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1064,51 +1178,23 @@ fn exec_block(
     for stmt in stmts {
         match stmt {
             ast::Stmt::Let { name, value, .. } => {
-                // Snapshot auto-keys before eval to detect what was created
-                let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
-                let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
-                let lambda_keys_before: std::collections::HashSet<String> = state.lambdas.keys().filter(|k| k.starts_with("__lambda_")).cloned().collect();
-                let struct_keys_before: std::collections::HashSet<String> = state.struct_instances.keys().filter(|k| k.starts_with("__struct_")).cloned().collect();
+                // Snapshot auto-keys before eval, clear old bindings, evaluate, transfer new keys
+                let str_before = state.snapshot_auto_keys("__auto_");
+                let arr_before = state.snapshot_auto_keys("__auto_arr_");
+                let lam_before = state.snapshot_auto_keys("__lambda_");
+                let struct_before = state.snapshot_auto_keys("__struct_");
                 let int_val = eval_expr(value, state)?;
-                // Clear old type entries for re-declaration (after eval so old value was accessible)
                 state.str_vars.remove(name);
                 state.arr_vars.remove(name);
                 state.lambdas.remove(name);
-                // Find new keys and rename to variable name
-                let new_str_key = state.str_vars.keys().filter(|k| k.starts_with("__auto_") && !str_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_str_key {
-                    if let Some(s) = state.str_vars.remove(&key) {
-                        state.str_vars.insert(name.clone(), s);
-                    }
-                }
-                let new_arr_key = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_") && !arr_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_arr_key {
-                    if let Some(a) = state.arr_vars.remove(&key) {
-                        state.arr_vars.insert(name.clone(), a);
-                    }
-                }
-                let new_lambda_key = state.lambdas.keys().filter(|k| k.starts_with("__lambda_") && !lambda_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_lambda_key {
-                    if let Some(l) = state.lambdas.remove(&key) {
-                        state.lambdas.insert(name.clone(), l);
-                    }
-                }
-                // Transfer new struct instance to variable name
-                let new_struct_key = state.struct_instances.keys().filter(|k| k.starts_with("__struct_") && !struct_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_struct_key {
-                    if let Some(s) = state.struct_instances.remove(&key) {
-                        state.struct_instances.insert(name.clone(), s);
-                        // Copy type mapping from auto key to variable name
-                        if let Some(type_name) = state.struct_type_of.remove(&key) {
-                            state.struct_type_of.insert(name.clone(), type_name);
-                        }
-                    }
-                }
-                // If no string/array/lambda/struct was produced, store the integer value
-                if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) && !state.lambdas.contains_key(name.as_str()) && !state.struct_instances.contains_key(name.as_str()) {
+                state.transfer_new_key("__auto_", name, &str_before);
+                state.transfer_new_key("__auto_arr_", name, &arr_before);
+                state.transfer_new_key("__lambda_", name, &lam_before);
+                state.transfer_new_key("__struct_", name, &struct_before);
+                if !state.is_bound_typed(name) {
                     state.vars.insert(name.clone(), int_val);
                 }
-                // Clean up intermediate leaked auto keys (from sub-expression string literals)
+                // Clean up leaked intermediate auto keys
                 let leaked: Vec<String> = state.str_vars.keys()
                     .filter(|k| k.starts_with("__auto_") && **k != *name)
                     .cloned()
@@ -1118,42 +1204,22 @@ fn exec_block(
                 }
             }
             ast::Stmt::Assign { name, value } => {
-                // Evaluate FIRST (may reference current value of this variable)
-                let str_keys_before: std::collections::HashSet<String> = state.str_vars.keys().filter(|k| k.starts_with("__auto_")).cloned().collect();
-                let arr_keys_before: std::collections::HashSet<String> = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_")).cloned().collect();
-                let struct_keys_before: std::collections::HashSet<String> = state.struct_instances.keys().filter(|k| k.starts_with("__struct_")).cloned().collect();
+                // Snapshot, eval (old value still accessible), clear old bindings, transfer new
+                let str_before = state.snapshot_auto_keys("__auto_");
+                let arr_before = state.snapshot_auto_keys("__auto_arr_");
+                let struct_before = state.snapshot_auto_keys("__struct_");
                 let int_val = eval_expr(value, state)?;
-                // Now clear old type entries (after eval, so the old value was still accessible)
                 state.str_vars.remove(name);
                 state.arr_vars.remove(name);
                 state.lambdas.remove(name);
                 state.struct_instances.remove(name);
                 state.struct_type_of.remove(name);
-                let new_str_key = state.str_vars.keys().filter(|k| k.starts_with("__auto_") && !str_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_str_key {
-                    if let Some(s) = state.str_vars.remove(&key) {
-                        state.str_vars.insert(name.clone(), s);
-                    }
-                }
-                let new_arr_key = state.arr_vars.keys().filter(|k| k.starts_with("__auto_arr_") && !arr_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_arr_key {
-                    if let Some(a) = state.arr_vars.remove(&key) {
-                        state.arr_vars.insert(name.clone(), a);
-                    }
-                }
-                let new_struct_key = state.struct_instances.keys().filter(|k| k.starts_with("__struct_") && !struct_keys_before.contains(*k)).max_by(|a, b| a.cmp(b)).cloned();
-                if let Some(key) = new_struct_key {
-                    if let Some(s) = state.struct_instances.remove(&key) {
-                        state.struct_instances.insert(name.clone(), s);
-                        if let Some(type_name) = state.struct_type_of.remove(&key) {
-                            state.struct_type_of.insert(name.clone(), type_name);
-                        }
-                    }
-                }
-                if !state.str_vars.contains_key(name.as_str()) && !state.arr_vars.contains_key(name.as_str()) && !state.struct_instances.contains_key(name.as_str()) {
+                state.transfer_new_key("__auto_", name, &str_before);
+                state.transfer_new_key("__auto_arr_", name, &arr_before);
+                state.transfer_new_key("__struct_", name, &struct_before);
+                if !state.is_bound_typed(name) {
                     state.vars.insert(name.clone(), int_val);
                 }
-                // Clean up intermediate leaked auto keys
                 let leaked: Vec<String> = state.str_vars.keys()
                     .filter(|k| k.starts_with("__auto_") && **k != *name)
                     .cloned()
@@ -1171,7 +1237,7 @@ fn exec_block(
                         } else if let Some(arr) = state.arr_vars.get(n) {
                             let elems: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                             println!("[{}]", elems.join(", "));
-                        } else if let Some((params, _body, _cv, _cs, _ca, _, _)) = state.lambdas.get(n).cloned() {
+                        } else if let Some((params, _body, _cap)) = state.lambdas.get(n).cloned() {
                             // Print function pointer for lambdas
                             print!("<fn|");
                             for (i, p) in params.iter().enumerate() {
@@ -1453,15 +1519,15 @@ fn eval_expr(
             Ok(0)
         }
         ast::Expr::Lambda { params, body, .. } => {
-            // Capture enclosing scope variables
-            let captured_vars = state.vars.clone();
-            let captured_strs = state.str_vars.clone();
-            let captured_arrs = state.arr_vars.clone();
             let key = format!("__lambda_{}", state.lambda_counter);
             state.lambda_counter += 1;
-            let captured_structs = state.struct_instances.clone();
-            let captured_struct_types = state.struct_type_of.clone();
-            state.lambdas.insert(key, (params.clone(), body.clone(), captured_vars, captured_strs, captured_arrs, captured_structs, captured_struct_types));
+            state.lambdas.insert(key, (params.clone(), body.clone(), CapturedScope {
+                vars: state.vars.clone(),
+                str_vars: state.str_vars.clone(),
+                arr_vars: state.arr_vars.clone(),
+                struct_instances: state.struct_instances.clone(),
+                struct_type_of: state.struct_type_of.clone(),
+            }));
             Ok(0)
         }
         ast::Expr::BinaryOp { op, left, right } => {
@@ -1692,29 +1758,26 @@ fn eval_expr(
                     }
                 };
                 // Get the lambda
-                let lambda_info = match &args[1] {
+                let lambda_info: Option<(Vec<ast::Param>, Vec<ast::Stmt>, CapturedScope)> = match &args[1] {
                     ast::Expr::Lambda { params, body, .. } => {
-                        let cv = state.vars.clone();
-                        let cs = state.str_vars.clone();
-                        let ca = state.arr_vars.clone();
-                        let csi = state.struct_instances.clone();
-                        let cst = state.struct_type_of.clone();
-                        Some((params.clone(), body.clone(), cv, cs, ca, csi, cst))
+                        Some((params.clone(), body.clone(), CapturedScope {
+                            vars: state.vars.clone(),
+                            str_vars: state.str_vars.clone(),
+                            arr_vars: state.arr_vars.clone(),
+                            struct_instances: state.struct_instances.clone(),
+                            struct_type_of: state.struct_type_of.clone(),
+                        }))
                     },
                     ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
                     _ => None,
                 };
-                if let Some((params, body, cap_vars, cap_strs, cap_arrs, cap_structs, cap_struct_types)) = lambda_info {
+                if let Some((params, body, cap)) = lambda_info {
                     let mut result = Vec::new();
                     for elem in &arr {
                         let mut local_state = InterpreterState::new();
                         local_state.functions = state.functions.clone();
                         local_state.struct_fields = state.struct_fields.clone();
-                        local_state.vars.extend(cap_vars.clone());
-                        local_state.str_vars.extend(cap_strs.clone());
-                        local_state.arr_vars.extend(cap_arrs.clone());
-                        local_state.struct_instances.extend(cap_structs.clone());
-                        local_state.struct_type_of.extend(cap_struct_types.clone());
+                        local_state.inject_scope(&cap);
                         if let Some(param) = params.first() {
                             local_state.vars.insert(param.name.clone(), *elem);
                         }
@@ -1743,29 +1806,26 @@ fn eval_expr(
                         } else { vec![] }
                     }
                 };
-                let lambda_info = match &args[1] {
+                let lambda_info: Option<(Vec<ast::Param>, Vec<ast::Stmt>, CapturedScope)> = match &args[1] {
                     ast::Expr::Lambda { params, body, .. } => {
-                        let cv = state.vars.clone();
-                        let cs = state.str_vars.clone();
-                        let ca = state.arr_vars.clone();
-                        let csi = state.struct_instances.clone();
-                        let cst = state.struct_type_of.clone();
-                        Some((params.clone(), body.clone(), cv, cs, ca, csi, cst))
+                        Some((params.clone(), body.clone(), CapturedScope {
+                            vars: state.vars.clone(),
+                            str_vars: state.str_vars.clone(),
+                            arr_vars: state.arr_vars.clone(),
+                            struct_instances: state.struct_instances.clone(),
+                            struct_type_of: state.struct_type_of.clone(),
+                        }))
                     },
                     ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
                     _ => None,
                 };
-                if let Some((params, body, cap_vars, cap_strs, cap_arrs, cap_structs, cap_struct_types)) = lambda_info {
+                if let Some((params, body, cap)) = lambda_info {
                     let mut result = Vec::new();
                     for elem in &arr {
                         let mut local_state = InterpreterState::new();
                         local_state.functions = state.functions.clone();
                         local_state.struct_fields = state.struct_fields.clone();
-                        local_state.vars.extend(cap_vars.clone());
-                        local_state.str_vars.extend(cap_strs.clone());
-                        local_state.arr_vars.extend(cap_arrs.clone());
-                        local_state.struct_instances.extend(cap_structs.clone());
-                        local_state.struct_type_of.extend(cap_struct_types.clone());
+                        local_state.inject_scope(&cap);
                         if let Some(param) = params.first() {
                             local_state.vars.insert(param.name.clone(), *elem);
                         }
@@ -1798,28 +1858,25 @@ fn eval_expr(
                     }
                 };
                 let mut acc = eval_expr(&args[2], state)?;
-                let lambda_info = match &args[1] {
+                let lambda_info: Option<(Vec<ast::Param>, Vec<ast::Stmt>, CapturedScope)> = match &args[1] {
                     ast::Expr::Lambda { params, body, .. } => {
-                        let cv = state.vars.clone();
-                        let cs = state.str_vars.clone();
-                        let ca = state.arr_vars.clone();
-                        let csi = state.struct_instances.clone();
-                        let cst = state.struct_type_of.clone();
-                        Some((params.clone(), body.clone(), cv, cs, ca, csi, cst))
+                        Some((params.clone(), body.clone(), CapturedScope {
+                            vars: state.vars.clone(),
+                            str_vars: state.str_vars.clone(),
+                            arr_vars: state.arr_vars.clone(),
+                            struct_instances: state.struct_instances.clone(),
+                            struct_type_of: state.struct_type_of.clone(),
+                        }))
                     },
                     ast::Expr::Ident(n) => state.lambdas.get(n).cloned(),
                     _ => None,
                 };
-                if let Some((params, body, cap_vars, cap_strs, cap_arrs, cap_structs, cap_struct_types)) = lambda_info {
+                if let Some((params, body, cap)) = lambda_info {
                     for elem in &arr {
                         let mut local_state = InterpreterState::new();
                         local_state.functions = state.functions.clone();
                         local_state.struct_fields = state.struct_fields.clone();
-                        local_state.vars.extend(cap_vars.clone());
-                        local_state.str_vars.extend(cap_strs.clone());
-                        local_state.arr_vars.extend(cap_arrs.clone());
-                        local_state.struct_instances.extend(cap_structs.clone());
-                        local_state.struct_type_of.extend(cap_struct_types.clone());
+                        local_state.inject_scope(&cap);
                         if params.len() >= 2 {
                             local_state.vars.insert(params[0].name.clone(), acc);
                             local_state.vars.insert(params[1].name.clone(), *elem);
@@ -1836,31 +1893,49 @@ fn eval_expr(
                 return Ok(0);
             }
             // Lambda call
-            if let Some((params, body, cap_vars, cap_strs, cap_arrs, cap_structs, cap_struct_types)) = state.lambdas.get(name).cloned() {
+            if let Some((params, body, cap)) = state.lambdas.get(name).cloned() {
                 let mut local_state = InterpreterState::new();
                 local_state.functions = state.functions.clone();
                 local_state.struct_fields = state.struct_fields.clone();
-                // Inject captured scope
-                local_state.vars.extend(cap_vars);
-                local_state.str_vars.extend(cap_strs);
-                local_state.arr_vars.extend(cap_arrs);
-                local_state.struct_instances.extend(cap_structs);
-                local_state.struct_type_of.extend(cap_struct_types);
+                local_state.inject_scope(&cap);
                 // Inject explicit arguments (override captured if same name)
                 for (param, arg) in params.iter().zip(args.iter()) {
                     let val = eval_expr(arg, state)?;
                     local_state.vars.insert(param.name.clone(), val);
+                    // If arg is an Ident referring to a struct, copy the struct instance data
+                    if let ast::Expr::Ident(arg_name) = arg {
+                        if let Some(inst) = state.struct_instances.get(arg_name.as_str()) {
+                            local_state.struct_instances.insert(param.name.clone(), inst.clone());
+                        }
+                        if let Some(ty) = state.struct_type_of.get(arg_name.as_str()) {
+                            local_state.struct_type_of.insert(param.name.clone(), ty.clone());
+                        }
+                    }
                 }
                 match exec_block(&body, &mut local_state)? {
                     Some(v) => Ok(v),
                     None => Ok(0),
                 }
-            } else if let Some((params, _ret, body)) = state.functions.get(name).cloned() {
+            } else if let Some((params, _ret, body)) = state.functions.get(name).cloned()
+                .or_else(|| state.impl_methods.get(name).cloned()) {
                 let mut local_state = InterpreterState::new();
                 local_state.functions = state.functions.clone();
+                local_state.impl_methods = state.impl_methods.clone();
+                local_state.struct_fields = state.struct_fields.clone();
+                local_state.struct_instances = state.struct_instances.clone();
+                local_state.struct_type_of = state.struct_type_of.clone();
                 for (param, arg) in params.iter().zip(args.iter()) {
                     let val = eval_expr(arg, state)?;
                     local_state.vars.insert(param.name.clone(), val);
+                    // If arg is an Ident referring to a struct, copy the struct instance data
+                    if let ast::Expr::Ident(arg_name) = arg {
+                        if let Some(inst) = state.struct_instances.get(arg_name.as_str()) {
+                            local_state.struct_instances.insert(param.name.clone(), inst.clone());
+                        }
+                        if let Some(ty) = state.struct_type_of.get(arg_name.as_str()) {
+                            local_state.struct_type_of.insert(param.name.clone(), ty.clone());
+                        }
+                    }
                 }
                 match exec_block(&body, &mut local_state)? {
                     Some(v) => Ok(v),

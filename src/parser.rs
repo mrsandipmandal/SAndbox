@@ -1490,8 +1490,9 @@ impl Parser {
                 vec![Stmt::ExprStmt(expr)]
             };
             arms.push(MatchArm { pattern, guard, body });
-            if !self.peek_token(&Token::RBrace) {
-                self.expect_token(&Token::Comma)?;
+            // Comma between arms is optional (required after non-block bodies for clarity)
+            if self.peek_token(&Token::Comma) {
+                self.advance();
             }
         }
         self.expect_token(&Token::RBrace)?;

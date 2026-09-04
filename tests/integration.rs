@@ -13,6 +13,22 @@ fn sandbox_bin() -> String {
     format!("{}/target/debug/sandbox", manifest_dir)
 }
 
+/// Returns true if a line is sandbox compilation progress (not program output).
+fn is_progress_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    // Lines starting with [sandbox] are always progress
+    if trimmed.starts_with("[sandbox]") { return true; }
+    // All other progress lines are indented; program output starts at column 0
+    if line.starts_with(' ') || line.starts_with('\t') {
+        if trimmed.starts_with("\u{2192}") { return true; }  // →
+        if trimmed.starts_with("\u{2713}") { return true; }  // ✓
+        if trimmed.starts_with("\u{26a0}") { return true; }  // ⚠
+        if trimmed.starts_with('[') && trimmed.contains("] FnDef") { return true; }
+        if trimmed.starts_with('[') && trimmed.contains("] Other") { return true; }
+    }
+    false
+}
+
 fn compile_and_run(source: &str) -> (String, bool) {
     let tmp = TempDir::new().unwrap();
     let sbx_path = tmp.path().join("test.sbx");
@@ -27,7 +43,12 @@ fn compile_and_run(source: &str) -> (String, bool) {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
-    (combined, output.status.success())
+    // Strip compilation progress so tests see only program output
+    let filtered: String = combined.lines()
+        .filter(|l| !is_progress_line(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (filtered, output.status.success())
 }
 
 fn interpret_source(source: &str) -> (String, bool) {
@@ -44,7 +65,12 @@ fn interpret_source(source: &str) -> (String, bool) {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
-    (combined, output.status.success())
+    // Strip compilation progress so tests see only program output
+    let filtered: String = combined.lines()
+        .filter(|l| !is_progress_line(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (filtered, output.status.success())
 }
 
 fn run_sandbox(args: &[&str]) -> (String, bool) {
@@ -53,7 +79,12 @@ fn run_sandbox(args: &[&str]) -> (String, bool) {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
-    (combined, output.status.success())
+    // Strip compilation progress so tests see only program output
+    let filtered: String = combined.lines()
+        .filter(|l| !is_progress_line(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (filtered, output.status.success())
 }
 
 fn compile_to_llvm(source: &str) -> String {
@@ -2764,7 +2795,12 @@ fn run_with_vendored(pkg_name: &str, pkg_source: &str, main_source: &str) -> (St
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
-    (combined, output.status.success())
+    // Strip compilation progress so tests see only program output
+    let filtered: String = combined.lines()
+        .filter(|l| !is_progress_line(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (filtered, output.status.success())
 }
 
 #[test]

@@ -2278,6 +2278,7 @@ fn main() {
 
 #[test]
 fn test_file_io_exists() {
+    let _ = std::fs::remove_file("/tmp/sandbox_test_exists.txt"); // clean up from prior runs
     let source = r#"
 fn main() {
     let path = "/tmp/sandbox_test_exists.txt"

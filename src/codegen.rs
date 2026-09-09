@@ -90,7 +90,11 @@ impl CodeGen {
         writeln!(self.output).unwrap();
 
         // Runtime helper: print array of longs
-        writeln!(self.output, "static void __sbx_print_arr(long *arr, long len) {{").unwrap();
+        writeln!(
+            self.output,
+            "static void __sbx_print_arr(long *arr, long len) {{"
+        )
+        .unwrap();
         writeln!(self.output, "    printf(\"[\");").unwrap();
         writeln!(self.output, "    for (long i = 0; i < len; i++) {{").unwrap();
         writeln!(self.output, "        if (i > 0) printf(\", \");").unwrap();
@@ -108,9 +112,16 @@ impl CodeGen {
 
         // Pre-register generic struct definitions (needed before prescan)
         for item in &program.items {
-            if let TopLevel::StructDef { name, type_params, fields, .. } = item {
+            if let TopLevel::StructDef {
+                name,
+                type_params,
+                fields,
+                ..
+            } = item
+            {
                 if !type_params.is_empty() {
-                    self.generic_structs.insert(name.clone(), (type_params.clone(), fields.clone()));
+                    self.generic_structs
+                        .insert(name.clone(), (type_params.clone(), fields.clone()));
                 }
             }
         }
@@ -128,19 +139,27 @@ impl CodeGen {
         let pending: Vec<_> = self.pending_mono.borrow().clone();
         for (mono_name, fn_def, type_args) in &pending {
             if let TopLevel::FnDef { params, ret, .. } = fn_def {
-                let sub: std::collections::HashMap<String, crate::ast::Type> = 
+                let sub: std::collections::HashMap<String, crate::ast::Type> =
                     if let TopLevel::FnDef { type_params, .. } = &fn_def {
-                        type_params.iter().map(|tp| tp.name.clone()).zip(type_args.iter())
+                        type_params
+                            .iter()
+                            .map(|tp| tp.name.clone())
+                            .zip(type_args.iter())
                             .map(|(tp, concrete)| (tp, concrete.clone()))
                             .collect()
-                    } else { std::collections::HashMap::new() };
-                let sub_params: Vec<crate::ast::Param> = params.iter().map(|p| crate::ast::Param {
-                    name: p.name.clone(),
-                    ty: Self::substitute_type_codegen(&p.ty, &sub),
-                    default: None,
-                }).collect();
+                    } else {
+                        std::collections::HashMap::new()
+                    };
+                let sub_params: Vec<crate::ast::Param> = params
+                    .iter()
+                    .map(|p| crate::ast::Param {
+                        name: p.name.clone(),
+                        ty: Self::substitute_type_codegen(&p.ty, &sub),
+                        default: None,
+                    })
+                    .collect();
                 let sub_ret = ret.as_ref().map(|t| Self::substitute_type_codegen(t, &sub));
-                self.gen_fn_decl(&mono_name, &sub_params, &sub_ret);
+                self.gen_fn_decl(mono_name, &sub_params, &sub_ret);
             }
         }
         writeln!(self.output).unwrap();
@@ -149,12 +168,15 @@ impl CodeGen {
 
         // Emit monomorphized function bodies
         let pending: Vec<_> = self.pending_mono.borrow().clone();
-        for (mono_name, fn_def, type_args) in &pending {
-            self.monomorphize_function(&fn_def, type_args);
+        for (_mono_name, fn_def, type_args) in &pending {
+            self.monomorphize_function(fn_def, type_args);
         }
 
         // If there are tests, emit main that runs them
-        let has_tests = program.items.iter().any(|item| matches!(item, TopLevel::TestDef { .. }));
+        let has_tests = program
+            .items
+            .iter()
+            .any(|item| matches!(item, TopLevel::TestDef { .. }));
         if has_tests {
             self.gen_test_main();
         }
@@ -167,7 +189,11 @@ impl CodeGen {
                 // Add capture params
                 let mut all_params = params.clone();
                 for cap in &captures {
-                    all_params.push(Param { name: cap.clone(), ty: Type::I64, default: None });
+                    all_params.push(Param {
+                        name: cap.clone(),
+                        ty: Type::I64,
+                        default: None,
+                    });
                 }
                 // Infer return type from body if not specified
                 let effective_ret = if ret.is_some() {
@@ -239,10 +265,16 @@ impl CodeGen {
             match stmt {
                 Stmt::Let { value, .. } => self.prescan_struct_usage_in_expr(value),
                 Stmt::Assign { value, .. } => self.prescan_struct_usage_in_expr(value),
-                Stmt::If { condition, then, else_ } => {
+                Stmt::If {
+                    condition,
+                    then,
+                    else_,
+                } => {
                     self.prescan_struct_usage_in_expr(condition);
                     self.prescan_struct_usage_in_stmts(then);
-                    if let Some(e) = else_ { self.prescan_struct_usage_in_stmts(e); }
+                    if let Some(e) = else_ {
+                        self.prescan_struct_usage_in_stmts(e);
+                    }
                 }
                 Stmt::While { condition, body } => {
                     self.prescan_struct_usage_in_expr(condition);
@@ -262,7 +294,9 @@ impl CodeGen {
 
     fn prescan_struct_usage_in_expr(&self, expr: &Expr) {
         match expr {
-            Expr::StructLiteral { name, type_args, .. } if !type_args.is_empty() => {
+            Expr::StructLiteral {
+                name, type_args, ..
+            } if !type_args.is_empty() => {
                 self.queue_struct_mono(name, type_args);
             }
             Expr::BinaryOp { left, right, .. } => {
@@ -271,11 +305,15 @@ impl CodeGen {
             }
             Expr::UnaryOp { expr, .. } => self.prescan_struct_usage_in_expr(expr),
             Expr::Call { args, .. } => {
-                for a in args { self.prescan_struct_usage_in_expr(a); }
+                for a in args {
+                    self.prescan_struct_usage_in_expr(a);
+                }
             }
             Expr::MethodCall { target, args, .. } => {
                 self.prescan_struct_usage_in_expr(target);
-                for a in args { self.prescan_struct_usage_in_expr(a); }
+                for a in args {
+                    self.prescan_struct_usage_in_expr(a);
+                }
             }
             Expr::FieldAccess { target, .. } => self.prescan_struct_usage_in_expr(target),
             Expr::Index { target, index } => {
@@ -284,9 +322,16 @@ impl CodeGen {
             }
             Expr::Match { scrutinee, arms } => {
                 self.prescan_struct_usage_in_expr(scrutinee);
-                for arm in arms { self.prescan_struct_usage_in_stmts(&arm.body); }
+                for arm in arms {
+                    self.prescan_struct_usage_in_stmts(&arm.body);
+                }
             }
-            Expr::SomeExpr(e) | Expr::Await(e) | Expr::PanicExpr(e) | Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::TryExpr(e) => {
+            Expr::SomeExpr(e)
+            | Expr::Await(e)
+            | Expr::PanicExpr(e)
+            | Expr::OkExpr(e)
+            | Expr::ErrExpr(e)
+            | Expr::TryExpr(e) => {
                 self.prescan_struct_usage_in_expr(e);
             }
             Expr::FString(parts) => {
@@ -302,14 +347,25 @@ impl CodeGen {
 
     /// Queue a struct monomorphization if needed
     fn queue_struct_mono(&self, name: &str, type_args: &[Type]) {
-
         if let Some((type_params, _fields)) = self.generic_structs.get(name) {
             if type_params.len() == type_args.len() {
-                let type_suffix: Vec<String> = type_args.iter().map(|t| Self::type_id(t)).collect();
+                let type_suffix: Vec<String> = type_args.iter().map(Self::type_id).collect();
                 let mono_name = format!("{}_{}", name, type_suffix.join("_"));
-                let key = format!("{}__{}", name, type_args.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join(","));
+                let key = format!(
+                    "{}__{}",
+                    name,
+                    type_args
+                        .iter()
+                        .map(|t| format!("{}", t))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
                 if !self.mono_structs.contains(&key) {
-                    self.pending_mono_structs.borrow_mut().push((mono_name, name.to_string(), type_args.to_vec()));
+                    self.pending_mono_structs.borrow_mut().push((
+                        mono_name,
+                        name.to_string(),
+                        type_args.to_vec(),
+                    ));
                 }
             }
         }
@@ -317,14 +373,24 @@ impl CodeGen {
 
     /// Generate a monomorphized struct typedef
     fn monomorphize_struct(&mut self, mono_name: &str, original_name: &str, type_args: &[Type]) {
-
-
         if let Some((type_params, fields)) = self.generic_structs.get(original_name).cloned() {
-            let key = format!("{}__{}", original_name, type_args.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join(","));
-            if self.mono_structs.contains(&key) { return; }
+            let key = format!(
+                "{}__{}",
+                original_name,
+                type_args
+                    .iter()
+                    .map(|t| format!("{}", t))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            if self.mono_structs.contains(&key) {
+                return;
+            }
             self.mono_structs.insert(key);
 
-            let sub: std::collections::HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone())
+            let sub: std::collections::HashMap<String, Type> = type_params
+                .iter()
+                .map(|tp| tp.name.clone())
                 .zip(type_args.iter())
                 .map(|(tp, concrete)| (tp, concrete.clone()))
                 .collect();
@@ -344,10 +410,16 @@ impl CodeGen {
             match stmt {
                 Stmt::Let { value, .. } => self.prescan_expr(value),
                 Stmt::Assign { value, .. } => self.prescan_expr(value),
-                Stmt::If { condition, then, else_ } => {
+                Stmt::If {
+                    condition,
+                    then,
+                    else_,
+                } => {
                     self.prescan_expr(condition);
                     self.prescan_stmts(then);
-                    if let Some(e) = else_ { self.prescan_stmts(e); }
+                    if let Some(e) = else_ {
+                        self.prescan_stmts(e);
+                    }
                 }
                 Stmt::While { condition, body } => {
                     self.prescan_expr(condition);
@@ -362,39 +434,72 @@ impl CodeGen {
     }
 
     fn prescan_expr(&self, expr: &Expr) {
-        if let Expr::Call { name, type_args, args } = expr {
+        if let Expr::Call {
+            name,
+            type_args,
+            args,
+        } = expr
+        {
             if !type_args.is_empty() {
                 if let Some(fn_def) = self.fn_defs.get(name.as_str()) {
-                    let type_suffix: Vec<String> = type_args.iter().map(|t| self.c_type(t)).collect();
+                    let type_suffix: Vec<String> =
+                        type_args.iter().map(|t| self.c_type(t)).collect();
                     let mono_name = format!("{}_{}", Self::c_mangle(name), type_suffix.join("_"));
-                    let key = format!("{}__{}",
-                        if let TopLevel::FnDef { name, .. } = fn_def { name } else { "" },
-                        type_args.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join(","));
+                    let key = format!(
+                        "{}__{}",
+                        if let TopLevel::FnDef { name, .. } = fn_def {
+                            name
+                        } else {
+                            ""
+                        },
+                        type_args
+                            .iter()
+                            .map(|t| format!("{}", t))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
                     if !self.mono_fns.contains(&key) {
-                        self.pending_mono.borrow_mut().push((mono_name, fn_def.clone(), type_args.clone()));
+                        self.pending_mono.borrow_mut().push((
+                            mono_name,
+                            fn_def.clone(),
+                            type_args.clone(),
+                        ));
                     }
                 }
             }
-            for a in args { self.prescan_expr(a); }
+            for a in args {
+                self.prescan_expr(a);
+            }
         }
     }
 
     /// Register module::function signatures
     fn register_module_fn_sigs(&mut self, items: &[TopLevel]) {
         for item in items {
-            if let TopLevel::ModuleDef { name: mod_name, items: sub_items, .. } = item {
+            if let TopLevel::ModuleDef {
+                name: mod_name,
+                items: sub_items,
+                ..
+            } = item
+            {
                 for sub in sub_items {
-                    if let TopLevel::FnDef { name, params, ret, .. } = sub {
+                    if let TopLevel::FnDef {
+                        name, params, ret, ..
+                    } = sub
+                    {
                         let c_ret = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
-                        let c_params: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
+                        let c_params: Vec<String> =
+                            params.iter().map(|p| self.c_type(&p.ty)).collect();
                         // Register qualified name (math_add)
                         let qualified = format!("{}_{}", mod_name, name);
                         self.fn_returns.insert(qualified.clone(), c_ret.clone());
-                        self.fn_sigs.insert(qualified, (c_params.clone(), c_ret.clone()));
+                        self.fn_sigs
+                            .insert(qualified, (c_params.clone(), c_ret.clone()));
                         // Also register unqualified name for `use` imports (mangle if needed)
                         let unqual_c = Self::c_mangle(name);
                         self.fn_returns.insert(name.clone(), c_ret.clone());
-                        self.fn_sigs.insert(name.clone(), (c_params.clone(), c_ret.clone()));
+                        self.fn_sigs
+                            .insert(name.clone(), (c_params.clone(), c_ret.clone()));
                         if unqual_c != *name {
                             self.fn_returns.insert(unqual_c.clone(), c_ret.clone());
                             self.fn_sigs.insert(unqual_c, (c_params, c_ret));
@@ -419,7 +524,9 @@ impl CodeGen {
             }
         }
         // Forward-declare test jmp_buf if there are test functions
-        let has_tests = items.iter().any(|item| matches!(item, TopLevel::TestDef { .. }));
+        let has_tests = items
+            .iter()
+            .any(|item| matches!(item, TopLevel::TestDef { .. }));
         if has_tests {
             writeln!(self.output, "jmp_buf __test_jmp;").unwrap();
             writeln!(self.output).unwrap();
@@ -434,10 +541,17 @@ impl CodeGen {
         }
         // Structs — register generic structs, generate concrete ones
         for item in items {
-            if let TopLevel::StructDef { name, type_params, fields, .. } = item {
+            if let TopLevel::StructDef {
+                name,
+                type_params,
+                fields,
+                ..
+            } = item
+            {
                 if !type_params.is_empty() {
                     // Store generic struct definition for later monomorphization
-                    self.generic_structs.insert(name.clone(), (type_params.clone(), fields.clone()));
+                    self.generic_structs
+                        .insert(name.clone(), (type_params.clone(), fields.clone()));
                 } else {
                     self.gen_struct(name, fields);
                 }
@@ -476,30 +590,43 @@ impl CodeGen {
         self.register_module_fn_sigs(items);
         for item in items {
             match item {
-                TopLevel::FnDef { name, params, ret, .. }
-                | TopLevel::AsyncFnDef { name, params, ret, .. } => {
+                TopLevel::FnDef {
+                    name, params, ret, ..
+                }
+                | TopLevel::AsyncFnDef {
+                    name, params, ret, ..
+                } => {
                     let c_ret = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
                     let c_params: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
                     // Store defaults for call-site filling
-                    let defaults: Vec<Option<Expr>> = params.iter().map(|p| p.default.clone()).collect();
+                    let defaults: Vec<Option<Expr>> =
+                        params.iter().map(|p| p.default.clone()).collect();
                     if defaults.iter().any(|d| d.is_some()) {
                         self.fn_defaults.insert(name.clone(), defaults);
                     }
                     self.fn_returns.insert(name.clone(), c_ret.clone());
-                    self.fn_sigs.insert(name.clone(), (c_params.clone(), c_ret.clone()));
+                    self.fn_sigs
+                        .insert(name.clone(), (c_params.clone(), c_ret.clone()));
                     let c_name = Self::c_mangle(name);
                     if c_name != *name {
                         self.fn_returns.insert(c_name.clone(), c_ret.clone());
                         self.fn_sigs.insert(c_name, (c_params, c_ret));
                     }
                 }
-                TopLevel::ImplDef { type_name, methods, .. } => {
+                TopLevel::ImplDef {
+                    type_name, methods, ..
+                } => {
                     for method in methods {
-                        if let TopLevel::FnDef { name, params, ret, .. } = method {
+                        if let TopLevel::FnDef {
+                            name, params, ret, ..
+                        } = method
+                        {
                             let mangled = format!("{}_{}", type_name, name);
                             let c_ret = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
-                            let c_params: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
-                            let defaults: Vec<Option<Expr>> = params.iter().map(|p| p.default.clone()).collect();
+                            let c_params: Vec<String> =
+                                params.iter().map(|p| self.c_type(&p.ty)).collect();
+                            let defaults: Vec<Option<Expr>> =
+                                params.iter().map(|p| p.default.clone()).collect();
                             if defaults.iter().any(|d| d.is_some()) {
                                 self.fn_defaults.insert(mangled.clone(), defaults);
                             }
@@ -520,7 +647,11 @@ impl CodeGen {
                 // Lambda params = original params + capture params (long type)
                 let mut all_params = params.clone();
                 for cap in captures {
-                    all_params.push(Param { name: cap.clone(), ty: Type::I64, default: None });
+                    all_params.push(Param {
+                        name: cap.clone(),
+                        ty: Type::I64,
+                        default: None,
+                    });
                 }
                 // Infer return type from body if not specified
                 let effective_ret = if ret.is_some() {
@@ -540,13 +671,16 @@ impl CodeGen {
         self.gen_fn_bodies(items);
 
         // Generate test runner if there are test functions
-        let test_names: Vec<String> = items.iter().filter_map(|item| {
-            if let TopLevel::TestDef { name, .. } = item {
-                Some(format!("__test_{}", Self::c_mangle(name)))
-            } else {
-                None
-            }
-        }).collect();
+        let test_names: Vec<String> = items
+            .iter()
+            .filter_map(|item| {
+                if let TopLevel::TestDef { name, .. } = item {
+                    Some(format!("__test_{}", Self::c_mangle(name)))
+                } else {
+                    None
+                }
+            })
+            .collect();
         if !test_names.is_empty() {
             self.gen_test_runner(&test_names);
         }
@@ -584,7 +718,8 @@ impl CodeGen {
                         Self::find_captures_in_stmts(body, &param_names, &mut captures);
                         captures.sort();
                         captures.dedup();
-                        self.lambda_captures.insert(lambda_name.clone(), captures.clone());
+                        self.lambda_captures
+                            .insert(lambda_name.clone(), captures.clone());
                         self.var_to_lambda.insert(name.clone(), lambda_name.clone());
                         self.pending_lambdas.borrow_mut().push((
                             lambda_name.clone(),
@@ -595,8 +730,10 @@ impl CodeGen {
                         ));
                         // Register fn signature for call-site lookup
                         let ret_c = ret.as_ref().map_or("long".into(), |t| self.c_type(t));
-                        let param_tys: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
-                        self.fn_sigs.insert(name.clone(), (param_tys, ret_c.clone()));
+                        let param_tys: Vec<String> =
+                            params.iter().map(|p| self.c_type(&p.ty)).collect();
+                        self.fn_sigs
+                            .insert(name.clone(), (param_tys, ret_c.clone()));
                         self.fn_returns.insert(name.clone(), ret_c);
                     } else {
                         self.prescan_lambdas_in_expr(value);
@@ -640,7 +777,8 @@ impl CodeGen {
                 captures.sort();
                 captures.dedup();
                 // Store captures in separate map keyed by lambda name
-                self.lambda_captures.insert(lambda_name.clone(), captures.clone());
+                self.lambda_captures
+                    .insert(lambda_name.clone(), captures.clone());
                 self.pending_lambdas.borrow_mut().push((
                     lambda_name,
                     params.clone(),
@@ -668,7 +806,7 @@ impl CodeGen {
             _ => {}
         }
     }
-/// Find free variables (captures) in a lambda body
+    /// Find free variables (captures) in a lambda body
     fn find_captures_in_stmts(
         stmts: &[Stmt],
         local_scope: &std::collections::HashSet<String>,
@@ -687,16 +825,26 @@ impl CodeGen {
                     }
                     Self::find_captures_in_expr(value, local_scope, captures);
                 }
-                Stmt::If { condition, then, else_ } => {
+                Stmt::If {
+                    condition,
+                    then,
+                    else_,
+                } => {
                     Self::find_captures_in_expr(condition, local_scope, captures);
                     Self::find_captures_in_stmts(then, local_scope, captures);
-                    if let Some(e) = else_ { Self::find_captures_in_stmts(e, local_scope, captures); }
+                    if let Some(e) = else_ {
+                        Self::find_captures_in_stmts(e, local_scope, captures);
+                    }
                 }
                 Stmt::While { condition, body } => {
                     Self::find_captures_in_expr(condition, local_scope, captures);
                     Self::find_captures_in_stmts(body, local_scope, captures);
                 }
-                Stmt::For { variable, iterable, body } => {
+                Stmt::For {
+                    variable,
+                    iterable,
+                    body,
+                } => {
                     Self::find_captures_in_expr(iterable, local_scope, captures);
                     let mut inner = local_scope.clone();
                     inner.insert(variable.clone());
@@ -705,10 +853,14 @@ impl CodeGen {
                 Stmt::Return(Some(e)) => Self::find_captures_in_expr(e, local_scope, captures),
                 Stmt::Print(e) => Self::find_captures_in_expr(e, local_scope, captures),
                 Stmt::ExprStmt(e) => Self::find_captures_in_expr(e, local_scope, captures),
-                Stmt::IfLet { value, then, else_, .. } => {
+                Stmt::IfLet {
+                    value, then, else_, ..
+                } => {
                     Self::find_captures_in_expr(value, local_scope, captures);
                     Self::find_captures_in_stmts(then, local_scope, captures);
-                    if let Some(e) = else_ { Self::find_captures_in_stmts(e, local_scope, captures); }
+                    if let Some(e) = else_ {
+                        Self::find_captures_in_stmts(e, local_scope, captures);
+                    }
                 }
                 _ => {}
             }
@@ -732,22 +884,35 @@ impl CodeGen {
             }
             Expr::UnaryOp { expr, .. } => Self::find_captures_in_expr(expr, local_scope, captures),
             Expr::Call { args, .. } => {
-                for a in args { Self::find_captures_in_expr(a, local_scope, captures); }
+                for a in args {
+                    Self::find_captures_in_expr(a, local_scope, captures);
+                }
             }
             Expr::MethodCall { target, args, .. } => {
                 Self::find_captures_in_expr(target, local_scope, captures);
-                for a in args { Self::find_captures_in_expr(a, local_scope, captures); }
+                for a in args {
+                    Self::find_captures_in_expr(a, local_scope, captures);
+                }
             }
-            Expr::FieldAccess { target, .. } => Self::find_captures_in_expr(target, local_scope, captures),
+            Expr::FieldAccess { target, .. } => {
+                Self::find_captures_in_expr(target, local_scope, captures)
+            }
             Expr::Index { target, index } => {
                 Self::find_captures_in_expr(target, local_scope, captures);
                 Self::find_captures_in_expr(index, local_scope, captures);
             }
             Expr::Match { scrutinee, arms } => {
                 Self::find_captures_in_expr(scrutinee, local_scope, captures);
-                for arm in arms { Self::find_captures_in_stmts(&arm.body, local_scope, captures); }
+                for arm in arms {
+                    Self::find_captures_in_stmts(&arm.body, local_scope, captures);
+                }
             }
-            Expr::SomeExpr(e) | Expr::Await(e) | Expr::PanicExpr(e) | Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::TryExpr(e) => {
+            Expr::SomeExpr(e)
+            | Expr::Await(e)
+            | Expr::PanicExpr(e)
+            | Expr::OkExpr(e)
+            | Expr::ErrExpr(e)
+            | Expr::TryExpr(e) => {
                 Self::find_captures_in_expr(e, local_scope, captures);
             }
             Expr::NoneExpr => {}
@@ -765,25 +930,49 @@ impl CodeGen {
     fn gen_fn_decls(&mut self, items: &[TopLevel]) {
         for item in items {
             match item {
-                TopLevel::FnDef { name, type_params, params, ret, .. }
-                | TopLevel::AsyncFnDef { name, type_params, params, ret, .. } => {
-                    if !type_params.is_empty() { continue; }
+                TopLevel::FnDef {
+                    name,
+                    type_params,
+                    params,
+                    ret,
+                    ..
+                }
+                | TopLevel::AsyncFnDef {
+                    name,
+                    type_params,
+                    params,
+                    ret,
+                    ..
+                } => {
+                    if !type_params.is_empty() {
+                        continue;
+                    }
                     let c_name = Self::c_mangle(name);
                     self.gen_fn_decl(&c_name, params, ret);
                 }
-                TopLevel::ImplDef { type_name, methods, .. } => {
+                TopLevel::ImplDef {
+                    type_name, methods, ..
+                } => {
                     for method in methods {
-                        if let TopLevel::FnDef { name, params, ret, .. } = method {
+                        if let TopLevel::FnDef {
+                            name, params, ret, ..
+                        } = method
+                        {
                             let mangled = format!("{}_{}", type_name, name);
-                            let sub: std::collections::HashMap<String, Type> = vec![
-                                ("Self".to_string(), Type::custom(&type_name)),
-                            ].into_iter().collect();
-                            let resolved_params: Vec<Param> = params.iter().map(|p| Param {
-                                name: p.name.clone(),
-                                ty: Self::substitute_type_codegen(&p.ty, &sub),
-                                default: p.default.clone(),
-                            }).collect();
-                            let resolved_ret = ret.as_ref().map(|t| Self::substitute_type_codegen(t, &sub));
+                            let sub: std::collections::HashMap<String, Type> =
+                                vec![("Self".to_string(), Type::custom(type_name))]
+                                    .into_iter()
+                                    .collect();
+                            let resolved_params: Vec<Param> = params
+                                .iter()
+                                .map(|p| Param {
+                                    name: p.name.clone(),
+                                    ty: Self::substitute_type_codegen(&p.ty, &sub),
+                                    default: p.default.clone(),
+                                })
+                                .collect();
+                            let resolved_ret =
+                                ret.as_ref().map(|t| Self::substitute_type_codegen(t, &sub));
                             self.gen_fn_decl(&mangled, &resolved_params, &resolved_ret);
                         }
                     }
@@ -792,18 +981,30 @@ impl CodeGen {
                     let fn_name = format!("__test_{}", Self::c_mangle(name));
                     writeln!(self.output, "int {}();", fn_name).unwrap();
                 }
-                TopLevel::ModuleDef { name: mod_name, items, .. } => {
+                TopLevel::ModuleDef {
+                    name: mod_name,
+                    items,
+                    ..
+                } => {
                     for sub in items {
                         match sub {
-                            TopLevel::FnDef { name, type_params, params, ret, .. } => {
-                                if !type_params.is_empty() { continue; }
+                            TopLevel::FnDef {
+                                name,
+                                type_params,
+                                params,
+                                ret,
+                                ..
+                            } => {
+                                if !type_params.is_empty() {
+                                    continue;
+                                }
                                 let qualified = format!("{}_{}", mod_name, name);
                                 let c_name = Self::c_mangle(&qualified);
                                 self.gen_fn_decl(&c_name, params, ret);
                             }
                             TopLevel::ModuleDef { .. } => {
                                 // Nested module — recurse (for now, flatten)
-                                self.gen_fn_decls(&[sub.clone()]);
+                                self.gen_fn_decls(std::slice::from_ref(sub));
                             }
                             _ => {}
                         }
@@ -817,26 +1018,56 @@ impl CodeGen {
     fn gen_fn_bodies(&mut self, items: &[TopLevel]) {
         for item in items {
             match item {
-                TopLevel::FnDef { name, type_params, params, ret, body, .. }
-                | TopLevel::AsyncFnDef { name, type_params, params, ret, body, .. } => {
-                    if !type_params.is_empty() { continue; }
+                TopLevel::FnDef {
+                    name,
+                    type_params,
+                    params,
+                    ret,
+                    body,
+                    ..
+                }
+                | TopLevel::AsyncFnDef {
+                    name,
+                    type_params,
+                    params,
+                    ret,
+                    body,
+                    ..
+                } => {
+                    if !type_params.is_empty() {
+                        continue;
+                    }
                     let c_name = Self::c_mangle(name);
                     self.gen_fn(&c_name, params, ret, body);
                 }
-                TopLevel::ImplDef { type_name, methods, .. } => {
+                TopLevel::ImplDef {
+                    type_name, methods, ..
+                } => {
                     for method in methods {
-                        if let TopLevel::FnDef { name, params, ret, body, .. } = method {
+                        if let TopLevel::FnDef {
+                            name,
+                            params,
+                            ret,
+                            body,
+                            ..
+                        } = method
+                        {
                             let mangled = format!("{}_{}", type_name, name);
                             // Substitute Self -> concrete type in params
-                            let sub: std::collections::HashMap<String, Type> = vec![
-                                ("Self".to_string(), Type::custom(&type_name)),
-                            ].into_iter().collect();
-                            let resolved_params: Vec<Param> = params.iter().map(|p| Param {
-                                name: p.name.clone(),
-                                ty: Self::substitute_type_codegen(&p.ty, &sub),
-                                default: p.default.clone(),
-                            }).collect();
-                            let resolved_ret = ret.as_ref().map(|t| Self::substitute_type_codegen(t, &sub));
+                            let sub: std::collections::HashMap<String, Type> =
+                                vec![("Self".to_string(), Type::custom(type_name))]
+                                    .into_iter()
+                                    .collect();
+                            let resolved_params: Vec<Param> = params
+                                .iter()
+                                .map(|p| Param {
+                                    name: p.name.clone(),
+                                    ty: Self::substitute_type_codegen(&p.ty, &sub),
+                                    default: p.default.clone(),
+                                })
+                                .collect();
+                            let resolved_ret =
+                                ret.as_ref().map(|t| Self::substitute_type_codegen(t, &sub));
                             self.gen_fn(&mangled, &resolved_params, &resolved_ret, body);
                         }
                     }
@@ -845,11 +1076,24 @@ impl CodeGen {
                     let fn_name = format!("__test_{}", Self::c_mangle(name));
                     self.gen_test_fn(&fn_name, name, body);
                 }
-                TopLevel::ModuleDef { name: mod_name, items, .. } => {
+                TopLevel::ModuleDef {
+                    name: mod_name,
+                    items,
+                    ..
+                } => {
                     for sub in items {
                         match sub {
-                            TopLevel::FnDef { name, type_params, params, ret, body, .. } => {
-                                if !type_params.is_empty() { continue; }
+                            TopLevel::FnDef {
+                                name,
+                                type_params,
+                                params,
+                                ret,
+                                body,
+                                ..
+                            } => {
+                                if !type_params.is_empty() {
+                                    continue;
+                                }
                                 // Generate with qualified name
                                 let qualified = format!("{}_{}", mod_name, name);
                                 let c_name = Self::c_mangle(&qualified);
@@ -859,7 +1103,7 @@ impl CodeGen {
                                 self.gen_fn(&unqual_c_name, params, ret, body);
                             }
                             TopLevel::ModuleDef { .. } => {
-                                self.gen_fn_bodies(&[sub.clone()]);
+                                self.gen_fn_bodies(std::slice::from_ref(sub));
                             }
                             _ => {}
                         }
@@ -885,20 +1129,35 @@ impl CodeGen {
                     let lambda_code = self.gen_expr(lambda_expr);
                     // Look up captures from pending_lambdas by name
                     let lambdas = self.pending_lambdas.borrow();
-                    if let Some((_, _, _, _, caps)) = lambdas.iter().find(|(n, _, _, _, _)| *n == lambda_code) {
+                    if let Some((_, _, _, _, caps)) =
+                        lambdas.iter().find(|(n, _, _, _, _)| *n == lambda_code)
+                    {
                         (lambda_code, caps.clone())
                     } else {
                         (lambda_code, vec![])
                     }
                 }
                 Expr::Ident(n) => {
-                    let c_name = self.var_to_lambda.get(n.as_str()).cloned().unwrap_or_else(|| n.clone());
-                    let caps = self.lambda_captures.get(&c_name).cloned().unwrap_or_default();
+                    let c_name = self
+                        .var_to_lambda
+                        .get(n.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| n.clone());
+                    let caps = self
+                        .lambda_captures
+                        .get(&c_name)
+                        .cloned()
+                        .unwrap_or_default();
                     (c_name, caps)
                 }
                 _ => {
                     self.write_indent();
-                    writeln!(self.output, "// TODO: unsupported {} argument to {}", fn_name, fn_name).unwrap();
+                    writeln!(
+                        self.output,
+                        "// TODO: unsupported {} argument to {}",
+                        fn_name, fn_name
+                    )
+                    .unwrap();
                     return;
                 }
             }
@@ -939,15 +1198,30 @@ impl CodeGen {
                 if !self.declared_vars.contains(&target.to_string()) {
                     self.declared_vars.push(target.to_string());
                 }
-                self.var_types.insert(target.to_string(), "long*".to_string());
-                self.array_lengths.insert(target.to_string(), arr_len.clone());
+                self.var_types
+                    .insert(target.to_string(), "long*".to_string());
+                self.array_lengths
+                    .insert(target.to_string(), arr_len.clone());
                 self.write_indent();
-                writeln!(self.output, "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
-                    idx = idx, len = arr_len).unwrap();
+                writeln!(
+                    self.output,
+                    "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
+                    idx = idx,
+                    len = arr_len
+                )
+                .unwrap();
                 self.indent += 1;
                 self.write_indent();
-                writeln!(self.output, "{target}[__i_{idx}] = {lambda}({arr}[__i_{idx}]{caps});",
-                    target = target, idx = idx, lambda = lambda_c_name, arr = arr_expr, caps = cap_args_str).unwrap();
+                writeln!(
+                    self.output,
+                    "{target}[__i_{idx}] = {lambda}({arr}[__i_{idx}]{caps});",
+                    target = target,
+                    idx = idx,
+                    lambda = lambda_c_name,
+                    arr = arr_expr,
+                    caps = cap_args_str
+                )
+                .unwrap();
                 self.indent -= 1;
                 self.write_indent();
                 writeln!(self.output, "}}").unwrap();
@@ -963,21 +1237,40 @@ impl CodeGen {
                 if !self.declared_vars.contains(&target.to_string()) {
                     self.declared_vars.push(target.to_string());
                 }
-                self.var_types.insert(target.to_string(), "long*".to_string());
-                self.array_lengths.insert(target.to_string(), format!("__count_{}", idx));
+                self.var_types
+                    .insert(target.to_string(), "long*".to_string());
+                self.array_lengths
+                    .insert(target.to_string(), format!("__count_{}", idx));
                 self.write_indent();
                 writeln!(self.output, "long __count_{idx} = 0;", idx = idx).unwrap();
                 self.write_indent();
-                writeln!(self.output, "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
-                    idx = idx, len = arr_len).unwrap();
+                writeln!(
+                    self.output,
+                    "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
+                    idx = idx,
+                    len = arr_len
+                )
+                .unwrap();
                 self.indent += 1;
                 self.write_indent();
-                writeln!(self.output, "if ({lambda}({arr}[__i_{idx}]{caps})) {{",
-                    lambda = lambda_c_name, arr = arr_expr, caps = cap_args_str).unwrap();
+                writeln!(
+                    self.output,
+                    "if ({lambda}({arr}[__i_{idx}]{caps})) {{",
+                    lambda = lambda_c_name,
+                    arr = arr_expr,
+                    caps = cap_args_str
+                )
+                .unwrap();
                 self.indent += 1;
                 self.write_indent();
-                writeln!(self.output, "{target}[__count_{idx}] = {arr}[__i_{idx}];",
-                    target = target, idx = idx, arr = arr_expr).unwrap();
+                writeln!(
+                    self.output,
+                    "{target}[__count_{idx}] = {arr}[__i_{idx}];",
+                    target = target,
+                    idx = idx,
+                    arr = arr_expr
+                )
+                .unwrap();
                 self.write_indent();
                 writeln!(self.output, "__count_{idx}++;", idx = idx).unwrap();
                 self.indent -= 1;
@@ -987,7 +1280,8 @@ impl CodeGen {
                 self.write_indent();
                 writeln!(self.output, "}}").unwrap();
                 // Track that the actual length is runtime-computed
-                self.array_lengths.insert(target.to_string(), format!("__count_{}", idx));
+                self.array_lengths
+                    .insert(target.to_string(), format!("__count_{}", idx));
             }
             "reduce" => {
                 // long target = init;
@@ -999,12 +1293,24 @@ impl CodeGen {
                     self.declared_vars.push(target.to_string());
                 }
                 self.write_indent();
-                writeln!(self.output, "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
-                    idx = idx, len = arr_len).unwrap();
+                writeln!(
+                    self.output,
+                    "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
+                    idx = idx,
+                    len = arr_len
+                )
+                .unwrap();
                 self.indent += 1;
                 self.write_indent();
-                writeln!(self.output, "{target} = {lambda}({target}, {arr}[__i_{idx}]{caps});",
-                    target = target, lambda = lambda_c_name, arr = arr_expr, caps = cap_args_str).unwrap();
+                writeln!(
+                    self.output,
+                    "{target} = {lambda}({target}, {arr}[__i_{idx}]{caps});",
+                    target = target,
+                    lambda = lambda_c_name,
+                    arr = arr_expr,
+                    caps = cap_args_str
+                )
+                .unwrap();
                 self.indent -= 1;
                 self.write_indent();
                 writeln!(self.output, "}}").unwrap();
@@ -1013,7 +1319,7 @@ impl CodeGen {
         }
     }
 
-    fn gen_test_fn(&mut self, fn_name: &str, test_name: &str, body: &[Stmt]) {
+    fn gen_test_fn(&mut self, fn_name: &str, _test_name: &str, body: &[Stmt]) {
         // Reset function-scoped declaration tracking
         self.declared_vars.clear();
         self.scope_stack.clear();
@@ -1066,16 +1372,24 @@ impl CodeGen {
 
         // Count how many tests actually run (respecting filter)
         let matching_count = if let Some(ref filt) = filter_clone {
-            test_names.iter().filter(|n| {
-                let dn = n.strip_prefix("__test_").unwrap_or(n);
-                dn.contains(filt.as_str())
-            }).count()
+            test_names
+                .iter()
+                .filter(|n| {
+                    let dn = n.strip_prefix("__test_").unwrap_or(n);
+                    dn.contains(filt.as_str())
+                })
+                .count()
         } else {
             test_names.len()
         };
 
         self.write_indent();
-        writeln!(self.output, "printf(\"running {} test(s)\\n\");", matching_count).unwrap();
+        writeln!(
+            self.output,
+            "printf(\"running {} test(s)\\n\");",
+            matching_count
+        )
+        .unwrap();
         self.write_indent();
         writeln!(self.output, "printf(\"\\n\");").unwrap();
 
@@ -1085,13 +1399,19 @@ impl CodeGen {
             // Emit filter check if filter is set
             if filter_clone.is_some() {
                 self.write_indent();
-                writeln!(self.output, "if (strstr(\"{}\", __filter) == NULL) {{ skipped++; goto __skip_{}; }}", display_name, Self::c_mangle(display_name)).unwrap();
+                writeln!(
+                    self.output,
+                    "if (strstr(\"{}\", __filter) == NULL) {{ skipped++; goto __skip_{}; }}",
+                    display_name,
+                    Self::c_mangle(display_name)
+                )
+                .unwrap();
             }
 
             self.write_indent();
             writeln!(self.output, "clock_gettime(CLOCK_MONOTONIC, &__t_start);").unwrap();
             self.write_indent();
-            writeln!(self.output, "if ({name}() == 0) {{", name=name).unwrap();
+            writeln!(self.output, "if ({name}() == 0) {{", name = name).unwrap();
             self.indent += 1;
             self.write_indent();
             writeln!(self.output, "clock_gettime(CLOCK_MONOTONIC, &__t_end);").unwrap();
@@ -1100,7 +1420,12 @@ impl CodeGen {
             self.write_indent();
             writeln!(self.output, "__total_ms += __ms;").unwrap();
             self.write_indent();
-            writeln!(self.output, "printf(\"  \\x1b[32m\\u2713\\x1b[0m {} (\\x1b[90m%.1fms\\x1b[0m)\\n\", __ms);", display_name).unwrap();
+            writeln!(
+                self.output,
+                "printf(\"  \\x1b[32m\\u2713\\x1b[0m {} (\\x1b[90m%.1fms\\x1b[0m)\\n\", __ms);",
+                display_name
+            )
+            .unwrap();
             self.write_indent();
             writeln!(self.output, "passed++;").unwrap();
             self.indent -= 1;
@@ -1114,7 +1439,12 @@ impl CodeGen {
             self.write_indent();
             writeln!(self.output, "__total_ms += __ms;").unwrap();
             self.write_indent();
-            writeln!(self.output, "printf(\"  \\x1b[31m\\u2717\\x1b[0m {} (\\x1b[90m%.1fms\\x1b[0m)\\n\", __ms);", display_name).unwrap();
+            writeln!(
+                self.output,
+                "printf(\"  \\x1b[31m\\u2717\\x1b[0m {} (\\x1b[90m%.1fms\\x1b[0m)\\n\", __ms);",
+                display_name
+            )
+            .unwrap();
             self.write_indent();
             writeln!(self.output, "failed++;").unwrap();
             self.indent -= 1;
@@ -1384,7 +1714,11 @@ impl CodeGen {
         self.scope_stack.clear();
         self.array_lengths.clear();
         let has_defaults = params.iter().any(|p| p.default.is_some());
-        let fn_name = if has_defaults { format!("{}_inner", name) } else { name.to_string() };
+        let fn_name = if has_defaults {
+            format!("{}_inner", name)
+        } else {
+            name.to_string()
+        };
 
         // Emit function signature
         let ret_str = if name == "main" {
@@ -1392,7 +1726,8 @@ impl CodeGen {
         } else {
             ret.as_ref().map_or("void".into(), |t| self.c_type(t))
         };
-        let params_str = params.iter()
+        let params_str = params
+            .iter()
             .map(|p| self.c_param(&p.ty, &p.name))
             .collect::<Vec<_>>()
             .join(", ");
@@ -1449,7 +1784,11 @@ impl CodeGen {
             // Wrapper: same signature, delegates to _inner
             writeln!(self.output, "{} {}({}) {{", ret_str, name, params_str).unwrap();
             self.indent += 1;
-            let args_str = params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+            let args_str = params
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
             if ret.is_some() {
                 self.write_indent();
                 writeln!(self.output, "return {}_inner({});", name, args_str).unwrap();
@@ -1460,18 +1799,23 @@ impl CodeGen {
             self.indent -= 1;
             writeln!(self.output, "}}").unwrap();
             writeln!(self.output).unwrap();
-
         }
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::IfLet { pattern, value, then, else_ } => {
+            Stmt::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+            } => {
                 let val = self.gen_expr(value);
                 // Bind pattern variable
                 match pattern {
                     Pattern::Variable(name) => {
-                        self.var_types.insert(name.clone(), self.infer_c_type(value));
+                        self.var_types
+                            .insert(name.clone(), self.infer_c_type(value));
                         self.write_indent();
                         writeln!(self.output, "long {} = {};", name, val).unwrap();
                     }
@@ -1520,14 +1864,20 @@ impl CodeGen {
                 self.write_indent();
                 let is_shadow = self.declared_vars.contains(name);
                 // ── map / filter / reduce: generate inline C loops ──
-                if let Expr::Call { name: ref fn_name, args: ref fn_args, .. } = value {
+                if let Expr::Call {
+                    name: ref fn_name,
+                    args: ref fn_args,
+                    ..
+                } = value
+                {
                     if fn_name == "map" || fn_name == "filter" || fn_name == "reduce" {
                         if is_shadow {
                             // Shadow: use unique internal name to avoid C type conflicts.
                             // C arrays cannot be reassigned, so shadows of map/filter
                             // results use a unique name. Reduce (scalar) assigns back.
                             let prev_type = self.var_types.get(name.as_str()).cloned();
-                            let is_prev_array = prev_type.map(|t| t.ends_with('*')).unwrap_or(false);
+                            let is_prev_array =
+                                prev_type.map(|t| t.ends_with('*')).unwrap_or(false);
                             if is_prev_array {
                                 // Previous was array — can't reassign in C.
                                 // Use unique name, remove from declared_vars so
@@ -1556,7 +1906,11 @@ impl CodeGen {
                     writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
                 } else if matches!(value, Expr::ArrayLiteral(_)) && c_ty.ends_with('*') {
                     let arr_ty = c_ty.trim_end_matches('*');
-                    let len = if let Expr::ArrayLiteral(elems) = value { elems.len() } else { 0 };
+                    let len = if let Expr::ArrayLiteral(elems) = value {
+                        elems.len()
+                    } else {
+                        0
+                    };
                     self.array_lengths.insert(name.clone(), format!("{}", len));
                     writeln!(
                         self.output,
@@ -1573,21 +1927,31 @@ impl CodeGen {
                 } else {
                     writeln!(self.output, "{} {} = {};", c_ty, name, self.gen_expr(value)).unwrap();
                 }
-                if !is_shadow {
-                    if !self.declared_vars.contains(name) { self.declared_vars.push(name.clone()); }
+                if !is_shadow && !self.declared_vars.contains(name) {
+                    self.declared_vars.push(name.clone());
                 }
             }
             Stmt::Assign { name, value } => {
-                let var_type = self.var_types.get(name.as_str()).map(|s| s.as_str()).unwrap_or("long");
+                let var_type = self
+                    .var_types
+                    .get(name.as_str())
+                    .map(|s| s.as_str())
+                    .unwrap_or("long");
                 if var_type.ends_with('*') && matches!(value, Expr::ArrayLiteral(_)) {
                     // Array reassignment: copy elements one by one
                     if let Expr::ArrayLiteral(elems) = value {
                         let len = elems.len();
                         self.write_indent();
-                        writeln!(self.output, "// array reassign: {} ({} elements)", name, len).unwrap();
+                        writeln!(
+                            self.output,
+                            "// array reassign: {} ({} elements)",
+                            name, len
+                        )
+                        .unwrap();
                         for (i, elem) in elems.iter().enumerate() {
                             self.write_indent();
-                            writeln!(self.output, "{}[{}] = {};", name, i, self.gen_expr(elem)).unwrap();
+                            writeln!(self.output, "{}[{}] = {};", name, i, self.gen_expr(elem))
+                                .unwrap();
                         }
                         // Update tracked length
                         self.array_lengths.insert(name.clone(), format!("{}", len));
@@ -1597,7 +1961,8 @@ impl CodeGen {
                     writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
                     // If assigning an array literal to a pointer, track the new length
                     if let Expr::ArrayLiteral(elems) = value {
-                        self.array_lengths.insert(name.clone(), format!("{}", elems.len()));
+                        self.array_lengths
+                            .insert(name.clone(), format!("{}", elems.len()));
                     }
                 }
             }
@@ -1608,7 +1973,8 @@ impl CodeGen {
             } => {
                 self.write_indent();
                 writeln!(self.output, "if ({}) {{", self.gen_expr(condition)).unwrap();
-                self.scope_stack.push(self.declared_vars.iter().cloned().collect());
+                self.scope_stack
+                    .push(self.declared_vars.iter().cloned().collect());
                 self.indent += 1;
                 for s in then {
                     self.gen_stmt(s);
@@ -1620,7 +1986,8 @@ impl CodeGen {
                 if let Some(else_body) = else_ {
                     self.write_indent();
                     writeln!(self.output, "}} else {{").unwrap();
-                    self.scope_stack.push(self.declared_vars.iter().cloned().collect());
+                    self.scope_stack
+                        .push(self.declared_vars.iter().cloned().collect());
                     self.indent += 1;
                     for s in else_body {
                         self.gen_stmt(s);
@@ -1636,7 +2003,8 @@ impl CodeGen {
             Stmt::While { condition, body } => {
                 self.write_indent();
                 writeln!(self.output, "while ({}) {{", self.gen_expr(condition)).unwrap();
-                self.scope_stack.push(self.declared_vars.iter().cloned().collect());
+                self.scope_stack
+                    .push(self.declared_vars.iter().cloned().collect());
                 self.indent += 1;
                 for s in body {
                     self.gen_stmt(s);
@@ -1653,8 +2021,11 @@ impl CodeGen {
                 iterable,
                 body,
             } => {
-                self.scope_stack.push(self.declared_vars.iter().cloned().collect());
-                if !self.declared_vars.contains(&variable) { self.declared_vars.push(variable.clone()); }
+                self.scope_stack
+                    .push(self.declared_vars.iter().cloned().collect());
+                if !self.declared_vars.contains(variable) {
+                    self.declared_vars.push(variable.clone());
+                }
                 if let Expr::ArrayLiteral(elems) = iterable {
                     for elem in elems {
                         self.write_indent();
@@ -1701,7 +2072,9 @@ impl CodeGen {
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
-                } else if self.infer_c_type(iterable) == "const char*" || self.infer_c_type(iterable) == "char*" {
+                } else if self.infer_c_type(iterable) == "const char*"
+                    || self.infer_c_type(iterable) == "char*"
+                {
                     // String iteration: iterate over characters
                     let str_val = self.gen_expr(iterable);
                     self.write_indent();
@@ -1824,9 +2197,20 @@ impl CodeGen {
                 } else if var_type.map(|t| t.ends_with('*')).unwrap_or(false) {
                     // Array: use __sbx_print_arr if we know the length, else fallback
                     if let Some(len_expr) = self.array_lengths.get(name.as_str()) {
-                        writeln!(self.output, "__sbx_print_arr({}, {});", self.gen_expr(expr), len_expr).unwrap();
+                        writeln!(
+                            self.output,
+                            "__sbx_print_arr({}, {});",
+                            self.gen_expr(expr),
+                            len_expr
+                        )
+                        .unwrap();
                     } else {
-                        writeln!(self.output, "printf(\"%ld\\n\", (long){});", self.gen_expr(expr)).unwrap();
+                        writeln!(
+                            self.output,
+                            "printf(\"%ld\\n\", (long){});",
+                            self.gen_expr(expr)
+                        )
+                        .unwrap();
                     }
                 } else {
                     writeln!(
@@ -1848,7 +2232,12 @@ impl CodeGen {
                 } else if expr_ty == "double" {
                     writeln!(self.output, "printf(\"%f\\n\", {});", val).unwrap();
                 } else if expr_ty == "int" {
-                    writeln!(self.output, "printf(\"%s\\n\", {} ? \"true\" : \"false\");", val).unwrap();
+                    writeln!(
+                        self.output,
+                        "printf(\"%s\\n\", {} ? \"true\" : \"false\");",
+                        val
+                    )
+                    .unwrap();
                 } else {
                     writeln!(self.output, "printf(\"%ld\\n\", (long){});", val).unwrap();
                 }
@@ -1867,18 +2256,25 @@ impl CodeGen {
             Expr::ArrayLiteral(elems) if !elems.is_empty() => {
                 format!("{}*", self.infer_c_type(&elems[0]))
             }
-            Expr::StructLiteral { name, type_args, .. } => {
+            Expr::StructLiteral {
+                name, type_args, ..
+            } => {
                 if !type_args.is_empty() && self.generic_structs.contains_key(name) {
-                    let type_suffix: Vec<String> = type_args.iter().map(|t| Self::type_id(t)).collect();
+                    let type_suffix: Vec<String> = type_args.iter().map(Self::type_id).collect();
                     format!("{}_{}", name, type_suffix.join("_"))
                 } else {
                     name.clone()
                 }
             }
-            Expr::BinaryOp { op: BinOp::Add, left, right } => {
+            Expr::BinaryOp {
+                op: BinOp::Add,
+                left,
+                right,
+            } => {
                 let lt = self.infer_c_type(left);
                 let rt = self.infer_c_type(right);
-                if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*") {
+                if (lt == "const char*" || lt == "char*") && (rt == "const char*" || rt == "char*")
+                {
                     return "const char*".into();
                 }
                 "long".into()
@@ -1887,7 +2283,11 @@ impl CodeGen {
                 if let Some(b) = stdlib::builtins().get(name.as_str()) {
                     let cty = self.c_type(&b.ret);
                     // C runtime functions return long for booleans, not int
-                    if cty == "int" { "long".into() } else { cty }
+                    if cty == "int" {
+                        "long".into()
+                    } else {
+                        cty
+                    }
                 } else if let Some(ret) = self.fn_returns.get(name.as_str()) {
                     ret.clone()
                 } else {
@@ -1924,9 +2324,6 @@ impl CodeGen {
                 let ret_str = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
                 let params_str: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();
                 format!("{} (*)({})", ret_str, params_str.join(", "))
-            }
-            Expr::Ident(name) => {
-                self.var_types.get(name.as_str()).cloned().unwrap_or_else(|| "long".into())
             }
             Expr::OkExpr(val) => self.infer_c_type(val),
             Expr::ErrExpr(_) => "const char*".into(),
@@ -2038,7 +2435,11 @@ impl CodeGen {
                     UnOp::Not => format!("(!{})", e),
                 }
             }
-            Expr::Call { name, type_args, args } => {
+            Expr::Call {
+                name,
+                type_args,
+                args,
+            } => {
                 // Special-case: len() — dispatch based on argument type
                 if name == "len" && args.len() == 1 {
                     let arg = &args[0];
@@ -2058,22 +2459,28 @@ impl CodeGen {
                 // If type_args are present, queue monomorphization
                 if !type_args.is_empty() {
                     if let Some(fn_def) = self.fn_defs.get(name.as_str()) {
-                        let type_suffix: Vec<String> = type_args.iter().map(|t| self.c_type(t)).collect();
-                        let mono_name = format!("{}_{}", Self::c_mangle(name), type_suffix.join("_"));
+                        let type_suffix: Vec<String> =
+                            type_args.iter().map(|t| self.c_type(t)).collect();
+                        let mono_name =
+                            format!("{}_{}", Self::c_mangle(name), type_suffix.join("_"));
                         // Queue for later emission
-                        self.pending_mono.borrow_mut().push((mono_name.clone(), fn_def.clone(), type_args.clone()));
+                        self.pending_mono.borrow_mut().push((
+                            mono_name.clone(),
+                            fn_def.clone(),
+                            type_args.clone(),
+                        ));
                         let args_str: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
                         return format!("{}({})", mono_name, args_str.join(", "));
                     }
                 }
                 // Fill in default parameters if call has fewer args than params
-                let filled_args: Vec<String> = if let Some(defaults) = self.fn_defaults.get(name.as_str()) {
+                let filled_args: Vec<String> = if let Some(defaults) =
+                    self.fn_defaults.get(name.as_str())
+                {
                     if args.len() < defaults.len() {
                         let mut a: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
-                        for d in &defaults[args.len()..] {
-                            if let Some(ref default_expr) = d {
-                                a.push(self.gen_expr(default_expr));
-                            }
+                        for default_expr in defaults[args.len()..].iter().flatten() {
+                            a.push(self.gen_expr(default_expr));
                         }
                         a
                     } else {
@@ -2083,9 +2490,16 @@ impl CodeGen {
                     args.iter().map(|a| self.gen_expr(a)).collect()
                 };
                 // If calling a lambda with captures, append capture args
-                let lambda_name = self.var_to_lambda.get(name.as_str()).cloned()
+                let lambda_name = self
+                    .var_to_lambda
+                    .get(name.as_str())
+                    .cloned()
                     .unwrap_or_else(|| name.clone());
-                let captures = self.lambda_captures.get(&lambda_name).cloned().unwrap_or_default();
+                let captures = self
+                    .lambda_captures
+                    .get(&lambda_name)
+                    .cloned()
+                    .unwrap_or_default();
                 let mut all_args: Vec<String> = filled_args;
                 for cap in &captures {
                     all_args.push(cap.clone());
@@ -2135,9 +2549,16 @@ impl CodeGen {
                     call
                 }
             }
-            Expr::StructLiteral { name, type_args, fields, .. } => {
-                let actual_name = if !type_args.is_empty() && self.generic_structs.contains_key(name) {
-                    let type_suffix: Vec<String> = type_args.iter().map(|t| Self::type_id(t)).collect();
+            Expr::StructLiteral {
+                name,
+                type_args,
+                fields,
+                ..
+            } => {
+                let actual_name = if !type_args.is_empty()
+                    && self.generic_structs.contains_key(name)
+                {
+                    let type_suffix: Vec<String> = type_args.iter().map(Self::type_id).collect();
                     format!("{}_{}", name, type_suffix.join("_"))
                 } else {
                     name.clone()
@@ -2195,9 +2616,9 @@ impl CodeGen {
                 let tmp = format!("__m{}", idx);
                 let res = format!("__r{}", idx);
                 // Detect if this is an enum match by checking arm patterns
-                let is_enum_match = arms.iter().any(|arm| matches!(&arm.pattern,
-                    Pattern::EnumVariant { .. }
-                ));
+                let is_enum_match = arms
+                    .iter()
+                    .any(|arm| matches!(&arm.pattern, Pattern::EnumVariant { .. }));
                 // For Option types (long), use value directly as tag
                 // For enum types (sbx_enum), use .tag
                 let tag_expr = if is_enum_match {
@@ -2206,14 +2627,17 @@ impl CodeGen {
                     sc.clone()
                 };
                 // Detect if this is a string match (any arm has StrLiteral pattern)
-                let is_string_match = arms.iter().any(|arm| matches!(&arm.pattern,
-                    Pattern::StrLiteral(_)
-                ));
+                let is_string_match = arms
+                    .iter()
+                    .any(|arm| matches!(&arm.pattern, Pattern::StrLiteral(_)));
                 // Detect if the match produces string results (any arm body returns a string literal)
                 let is_string_result = arms.iter().any(|arm| {
-                    arm.body.iter().any(|s| matches!(s,
-                        Stmt::ExprStmt(Expr::Str(_)) | Stmt::Return(Some(Expr::Str(_)))
-                    ))
+                    arm.body.iter().any(|s| {
+                        matches!(
+                            s,
+                            Stmt::ExprStmt(Expr::Str(_)) | Stmt::Return(Some(Expr::Str(_)))
+                        )
+                    })
                 });
                 // GNU statement expression: ({ long __r=0; long __m=tag; if(...) __r=val; ... __r; })
                 let mut c = if is_string_result {
@@ -2224,12 +2648,15 @@ impl CodeGen {
                     format!("({{ double {res} = 0; long {tmp} = {tag_expr}; ")
                 };
                 // Pre-declare pattern binding variables for arms with guards (deduplicated)
-                let mut predeclared: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut predeclared: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 let is_string_scrutinee = sc_ty == "const char*" || sc_ty == "string";
                 for arm in arms.iter() {
                     if arm.guard.is_some() {
                         if let Some(ref b) = match &arm.pattern {
-                            Pattern::EnumVariant { binding: Some(b), .. }
+                            Pattern::EnumVariant {
+                                binding: Some(b), ..
+                            }
                             | Pattern::SomePattern { binding: Some(b) }
                             | Pattern::Variable(b) => Some(b.clone()),
                             _ => None,
@@ -2265,7 +2692,9 @@ impl CodeGen {
                     };
                     // Extract binding info from pattern
                     let binding_name: Option<String> = match &arm.pattern {
-                        Pattern::EnumVariant { binding: Some(b), .. }
+                        Pattern::EnumVariant {
+                            binding: Some(b), ..
+                        }
                         | Pattern::SomePattern { binding: Some(b) }
                         | Pattern::Variable(b) => Some(b.clone()),
                         _ => None,
@@ -2273,14 +2702,18 @@ impl CodeGen {
                     let has_guard = arm.guard.is_some();
                     // Check if this variable was pre-declared by any guarded arm
                     let was_predeclared = if let Some(ref b) = binding_name {
-                        arms.iter().any(|a| a.guard.is_some() && {
-                            let b2 = match &a.pattern {
-                                Pattern::EnumVariant { binding: Some(n), .. }
-                                | Pattern::SomePattern { binding: Some(n) }
-                                | Pattern::Variable(n) => Some(n.as_str()),
-                                _ => None,
-                            };
-                            b2.as_deref() == Some(b.as_str())
+                        arms.iter().any(|a| {
+                            a.guard.is_some() && {
+                                let b2 = match &a.pattern {
+                                    Pattern::EnumVariant {
+                                        binding: Some(n), ..
+                                    }
+                                    | Pattern::SomePattern { binding: Some(n) }
+                                    | Pattern::Variable(n) => Some(n.as_str()),
+                                    _ => None,
+                                };
+                                b2 == Some(b.as_str())
+                            }
                         })
                     } else {
                         false
@@ -2350,11 +2783,12 @@ impl CodeGen {
                                 let val = self.gen_expr(e);
                                 let ty = self.infer_c_type(e);
                                 if ty == "const char*" || ty == "string" {
-                                arm_code.push_str(&format!("printf(\"%s\\n\", {val}); "));
+                                    arm_code.push_str(&format!("printf(\"%s\\n\", {val}); "));
                                 } else if ty == "double" {
-                                arm_code.push_str(&format!("printf(\"%f\\n\", {val}); "));
+                                    arm_code.push_str(&format!("printf(\"%f\\n\", {val}); "));
                                 } else {
-                                arm_code.push_str(&format!("printf(\"%ld\\n\", (long){val}); "));
+                                    arm_code
+                                        .push_str(&format!("printf(\"%ld\\n\", (long){val}); "));
                                 }
                             }
                             _ => {
@@ -2363,9 +2797,7 @@ impl CodeGen {
                             }
                         }
                     }
-                    c.push_str(&format!(
-                        "{kw} ({cond}) {{ {arm_code}}} "
-                    ));
+                    c.push_str(&format!("{kw} ({cond}) {{ {arm_code}}} "));
                 }
                 c.push_str(&format!("{res}; }})"));
                 c
@@ -2374,16 +2806,20 @@ impl CodeGen {
                 let cond = self.gen_expr(condition);
                 let msg = match message {
                     Some(m) => self.gen_expr(m),
-                    None => format!("\"assertion failed\"")
+                    None => "\"assertion failed\"".to_string(),
                 };
                 format!("(({cond}) || (fprintf(stderr, \"Assert failed: %s\\n\", {msg}), longjmp(__test_jmp, 1), 0))")
             }
-            Expr::AssertEqExpr { left, right, message } => {
+            Expr::AssertEqExpr {
+                left,
+                right,
+                message,
+            } => {
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 let msg = match message {
                     Some(m) => self.gen_expr(m),
-                    None => format!("\"assert_eq failed\"")
+                    None => "\"assert_eq failed\"".to_string(),
                 };
                 format!("(({l}) == ({r}) || (fprintf(stderr, \"%s: %ld != %ld\\n\", {msg}, (long)({l}), (long)({r})), longjmp(__test_jmp, 1), 0))")
             }
@@ -2409,7 +2845,11 @@ impl CodeGen {
             Expr::SomeExpr(inner) => self.gen_expr(inner),
             Expr::Await(inner) => self.gen_expr(inner),
             Expr::NoneExpr => "0".to_string(),
-            Expr::MethodCall { target, method, args } => {
+            Expr::MethodCall {
+                target,
+                method,
+                args,
+            } => {
                 let target_ty = self.infer_c_type(target);
                 let t = self.gen_expr(target);
                 let a: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
@@ -2426,7 +2866,10 @@ impl CodeGen {
                 } else {
                     // Struct method: Type_method
                     let type_name = if let Expr::Ident(name) = target.as_ref() {
-                        self.var_types.get(name.as_str()).cloned().unwrap_or_else(|| name.clone())
+                        self.var_types
+                            .get(name.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| name.clone())
                     } else {
                         target_ty.clone()
                     };
@@ -2511,10 +2954,9 @@ impl CodeGen {
         }
     }
 
-        fn is_money_binop(&self, left: &Expr, right: &Expr) -> bool {
+    fn is_money_binop(&self, left: &Expr, right: &Expr) -> bool {
         matches!(left, Expr::MoneyLiteral { .. }) || matches!(right, Expr::MoneyLiteral { .. })
     }
-
 
     /// Substitute type parameters with concrete types for codegen.
     fn substitute_type_codegen(ty: &Type, sub: &std::collections::HashMap<String, Type>) -> Type {
@@ -2523,25 +2965,42 @@ impl CodeGen {
                 sub.get(name).cloned().unwrap_or_else(|| ty.clone())
             }
             Type::Array(inner) => Type::Array(Box::new(Self::substitute_type_codegen(inner, sub))),
-            Type::Option(inner) => Type::Option(Box::new(Self::substitute_type_codegen(inner, sub))),
+            Type::Option(inner) => {
+                Type::Option(Box::new(Self::substitute_type_codegen(inner, sub)))
+            }
             Type::Result(ok, err) => Type::Result(
                 Box::new(Self::substitute_type_codegen(ok, sub)),
                 Box::new(Self::substitute_type_codegen(err, sub)),
             ),
             Type::Fn(params, ret) => Type::Fn(
-                params.iter().map(|p| Self::substitute_type_codegen(p, sub)).collect(),
+                params
+                    .iter()
+                    .map(|p| Self::substitute_type_codegen(p, sub))
+                    .collect(),
                 Box::new(Self::substitute_type_codegen(ret, sub)),
             ),
-            Type::Future(inner) => Type::Future(Box::new(Self::substitute_type_codegen(inner, sub))),
+            Type::Future(inner) => {
+                Type::Future(Box::new(Self::substitute_type_codegen(inner, sub)))
+            }
             _ => ty.clone(),
         }
     }
 
     /// Generate a monomorphized version of a generic function.
     fn monomorphize_function(&mut self, fn_def: &TopLevel, type_args: &[Type]) -> String {
-        if let TopLevel::FnDef { name, type_params, params, ret, body, .. } = fn_def {
+        if let TopLevel::FnDef {
+            name,
+            type_params,
+            params,
+            ret,
+            body,
+            ..
+        } = fn_def
+        {
             // Build substitution map
-            let sub: std::collections::HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone())
+            let sub: std::collections::HashMap<String, Type> = type_params
+                .iter()
+                .map(|tp| tp.name.clone())
                 .zip(type_args.iter())
                 .map(|(tp, concrete)| (tp, concrete.clone()))
                 .collect();
@@ -2551,7 +3010,15 @@ impl CodeGen {
             let mono_name = format!("{}_{}", Self::c_mangle(name), type_suffix.join("_"));
 
             // Check if already generated
-            let key = format!("{}__{}", name, type_args.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join(","));
+            let key = format!(
+                "{}__{}",
+                name,
+                type_args
+                    .iter()
+                    .map(|t| format!("{}", t))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
             if self.mono_fns.contains(&key) {
                 return mono_name;
             }
@@ -2560,11 +3027,14 @@ impl CodeGen {
             self.mono_map.insert(key_clone, mono_name.clone());
 
             // Substitute types in params and return type
-            let sub_params: Vec<Param> = params.iter().map(|p| Param {
-                name: p.name.clone(),
-                ty: Self::substitute_type_codegen(&p.ty, &sub),
-                default: None,
-            }).collect();
+            let sub_params: Vec<Param> = params
+                .iter()
+                .map(|p| Param {
+                    name: p.name.clone(),
+                    ty: Self::substitute_type_codegen(&p.ty, &sub),
+                    default: None,
+                })
+                .collect();
             let sub_ret = ret.as_ref().map(|t| Self::substitute_type_codegen(t, &sub));
 
             // Generate the monomorphized function
@@ -2609,8 +3079,20 @@ impl CodeGen {
                     BinOp::Add => Some(l + r),
                     BinOp::Sub => Some(l - r),
                     BinOp::Mul => Some(l * r),
-                    BinOp::Div => if r == 0 { None } else { Some(l / r) },
-                    BinOp::Mod => if r == 0 { None } else { Some(l % r) },
+                    BinOp::Div => {
+                        if r == 0 {
+                            None
+                        } else {
+                            Some(l / r)
+                        }
+                    }
+                    BinOp::Mod => {
+                        if r == 0 {
+                            None
+                        } else {
+                            Some(l % r)
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -2642,18 +3124,16 @@ impl CodeGen {
                     "sbx_enum".into()
                 } else if !type_args.is_empty() && self.generic_structs.contains_key(name) {
                     // Generic struct with type args — use monomorphized name
-                    let type_suffix: Vec<String> = type_args.iter().map(|t| Self::type_id(t)).collect();
+                    let type_suffix: Vec<String> = type_args.iter().map(Self::type_id).collect();
                     let mono_name = format!("{}_{}", name, type_suffix.join("_"));
                     // Queue monomorphization if not already done
                     self.queue_struct_mono(name, type_args);
                     mono_name
-                } else if self.generic_structs.contains_key(name) {
-                    name.clone()
                 } else {
                     name.clone()
                 }
             }
-            Type::Option(_) => "long".into(),  // Tagged: 0 = None, nonzero = Some(payload)
+            Type::Option(_) => "long".into(), // Tagged: 0 = None, nonzero = Some(payload)
             Type::Future(inner) => format!("Future<{}>", self.c_type(inner)),
             Type::TypeParam(name) => name.clone(),
             Type::Result(ok, _) => self.c_type(ok),

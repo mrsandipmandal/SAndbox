@@ -490,33 +490,131 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
     );
 
     // ── assert_eq! (builtin) ──
-    register(&mut m, "assert_eq", vec![("a".into(), Type::I64), ("b".into(), Type::I64)], Type::Void);
+    register(
+        &mut m,
+        "assert_eq",
+        vec![("a".into(), Type::I64), ("b".into(), Type::I64)],
+        Type::Void,
+    );
 
     // ── collections module ──
     // List — opaque pointer handle (i64)
     register(&mut m, "list::new", vec![], Type::I64);
-    register(&mut m, "list::len", vec![("l".into(), Type::I64)], Type::I64);
-    register(&mut m, "list::push", vec![("l".into(), Type::I64), ("v".into(), Type::I64)], Type::Void);
-    register(&mut m, "list::get", vec![("l".into(), Type::I64), ("i".into(), Type::I64)], Type::I64);
-    register(&mut m, "list::set", vec![("l".into(), Type::I64), ("i".into(), Type::I64), ("v".into(), Type::I64)], Type::Void);
-    register(&mut m, "list::contains", vec![("l".into(), Type::I64), ("v".into(), Type::I64)], Type::Bool);
-    register(&mut m, "list::sort", vec![("l".into(), Type::I64)], Type::Void);
-    register(&mut m, "list::remove", vec![("l".into(), Type::I64), ("i".into(), Type::I64)], Type::Void);
-    register(&mut m, "list::is_empty", vec![("l".into(), Type::I64)], Type::Bool);
+    register(
+        &mut m,
+        "list::len",
+        vec![("l".into(), Type::I64)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "list::push",
+        vec![("l".into(), Type::I64), ("v".into(), Type::I64)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "list::get",
+        vec![("l".into(), Type::I64), ("i".into(), Type::I64)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "list::set",
+        vec![
+            ("l".into(), Type::I64),
+            ("i".into(), Type::I64),
+            ("v".into(), Type::I64),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "list::contains",
+        vec![("l".into(), Type::I64), ("v".into(), Type::I64)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "list::sort",
+        vec![("l".into(), Type::I64)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "list::remove",
+        vec![("l".into(), Type::I64), ("i".into(), Type::I64)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "list::is_empty",
+        vec![("l".into(), Type::I64)],
+        Type::Bool,
+    );
     // Map — opaque pointer handle (i64)
     register(&mut m, "map::new", vec![], Type::I64);
     register(&mut m, "map::len", vec![("m".into(), Type::I64)], Type::I64);
-    register(&mut m, "map::insert", vec![("m".into(), Type::I64), ("k".into(), Type::String), ("v".into(), Type::I64)], Type::Void);
-    register(&mut m, "map::get", vec![("m".into(), Type::I64), ("k".into(), Type::String)], Type::I64);
-    register(&mut m, "map::contains", vec![("m".into(), Type::I64), ("k".into(), Type::String)], Type::Bool);
-    register(&mut m, "map::remove", vec![("m".into(), Type::I64), ("k".into(), Type::String)], Type::Void);
-    register(&mut m, "map::keys", vec![("m".into(), Type::I64)], Type::String);
+    register(
+        &mut m,
+        "map::insert",
+        vec![
+            ("m".into(), Type::I64),
+            ("k".into(), Type::String),
+            ("v".into(), Type::I64),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "map::get",
+        vec![("m".into(), Type::I64), ("k".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "map::contains",
+        vec![("m".into(), Type::I64), ("k".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "map::remove",
+        vec![("m".into(), Type::I64), ("k".into(), Type::String)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "map::keys",
+        vec![("m".into(), Type::I64)],
+        Type::String,
+    );
     // Set — opaque pointer handle (i64)
     register(&mut m, "set_of::new", vec![], Type::I64);
-    register(&mut m, "set_of::len", vec![("s".into(), Type::I64)], Type::I64);
-    register(&mut m, "set_of::insert", vec![("s".into(), Type::I64), ("v".into(), Type::String)], Type::Void);
-    register(&mut m, "set_of::contains", vec![("s".into(), Type::I64), ("v".into(), Type::String)], Type::Bool);
-    register(&mut m, "set_of::remove", vec![("s".into(), Type::I64), ("v".into(), Type::String)], Type::Void);
+    register(
+        &mut m,
+        "set_of::len",
+        vec![("s".into(), Type::I64)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "set_of::insert",
+        vec![("s".into(), Type::I64), ("v".into(), Type::String)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "set_of::contains",
+        vec![("s".into(), Type::I64), ("v".into(), Type::String)],
+        Type::Bool,
+    );
+    register(
+        &mut m,
+        "set_of::remove",
+        vec![("s".into(), Type::I64), ("v".into(), Type::String)],
+        Type::Void,
+    );
 
     m
 }

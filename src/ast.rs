@@ -19,7 +19,7 @@ pub enum Type {
     Option(Box<Type>),
     Fn(Vec<Type>, Box<Type>),
     Future(Box<Type>),
-    TypeParam(String),  // Generic type parameter like T, U
+    TypeParam(String), // Generic type parameter like T, U
 }
 
 impl fmt::Display for Type {
@@ -54,11 +54,13 @@ impl fmt::Display for Type {
     }
 }
 
-
 impl Type {
     /// Create a Custom type with no type arguments (backwards-compatible constructor)
     pub fn custom(name: &str) -> Self {
-        Type::Custom { name: name.to_string(), type_args: Vec::new() }
+        Type::Custom {
+            name: name.to_string(),
+            type_args: Vec::new(),
+        }
     }
 
     /// Get the name of a Custom type (panics if not Custom)
@@ -235,7 +237,7 @@ pub enum Stmt {
 pub struct Param {
     pub name: String,
     pub ty: Type,
-    pub default: Option<Expr>,  // default parameter value
+    pub default: Option<Expr>, // default parameter value
 }
 
 #[derive(Debug, Clone)]
@@ -369,7 +371,7 @@ pub enum FStringPart {
 #[derive(Debug, Clone)]
 pub struct TypeParamDef {
     pub name: String,
-    pub bounds: Vec<String>,  // e.g., ["Ord"] for T: Ord
+    pub bounds: Vec<String>, // e.g., ["Ord"] for T: Ord
 }
 
 // ── Top-level items ──
@@ -406,7 +408,7 @@ pub enum TopLevel {
     // Traits
     TraitDef {
         name: String,
-        methods: Vec<TopLevel>,  // FnDefs without bodies (signatures only)
+        methods: Vec<TopLevel>, // FnDefs without bodies (signatures only)
         doc: Option<String>,
     },
     // v1.0: Ledger
@@ -428,7 +430,7 @@ pub enum TopLevel {
     // v2.1: Impl blocks
     ImplDef {
         type_name: String,
-        trait_name: Option<String>,  // if `impl Trait for Type`, this is Some("Trait")
+        trait_name: Option<String>, // if `impl Trait for Type`, this is Some("Trait")
         methods: Vec<TopLevel>,
         doc: Option<String>,
     },

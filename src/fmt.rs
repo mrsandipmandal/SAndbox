@@ -50,14 +50,15 @@ fn tok_str(tok: &Token) -> String {
         Token::TypeI64 => "i64".into(),
         Token::TypeF64 => "f64".into(),
         Token::TypeBool => "bool".into(),
-        Token::TypeString => "string".into(),            Token::TypeMoney => "Money".into(),
-            Token::TypeDecimal => "Decimal".into(),
-            Token::Result => "Result".into(),
-            Token::Option => "Option".into(),
-            Token::Some_ => "Some".into(),
-            Token::None_ => "None".into(),
-            Token::Ok => "Ok".into(),
-            Token::Err => "Err".into(),
+        Token::TypeString => "string".into(),
+        Token::TypeMoney => "Money".into(),
+        Token::TypeDecimal => "Decimal".into(),
+        Token::Result => "Result".into(),
+        Token::Option => "Option".into(),
+        Token::Some_ => "Some".into(),
+        Token::None_ => "None".into(),
+        Token::Ok => "Ok".into(),
+        Token::Err => "Err".into(),
         Token::Database => "database".into(),
         Token::Table => "table".into(),
         Token::Query => "query".into(),
@@ -112,14 +113,46 @@ fn tok_str(tok: &Token) -> String {
 fn is_keyword(tok: &Token) -> bool {
     matches!(
         tok,
-        Token::Fn | Token::Let | Token::Mut | Token::If | Token::Else | Token::While
-            | Token::For | Token::In | Token::Return | Token::Print | Token::Break | Token::Continue | Token::Struct
-            | Token::Enum | Token::Mod | Token::Use | Token::Async | Token::Await
-            | Token::Impl | Token::Trait | Token::Test | Token::Assert | Token::Match
-            | Token::Const | Token::Panic | Token::Database | Token::Table
-            | Token::Query | Token::Ledger | Token::Select | Token::Insert
-            | Token::Update | Token::Delete | Token::Where | Token::From
-            | Token::Into | Token::Values | Token::Set | Token::Debit | Token::Credit
+        Token::Fn
+            | Token::Let
+            | Token::Mut
+            | Token::If
+            | Token::Else
+            | Token::While
+            | Token::For
+            | Token::In
+            | Token::Return
+            | Token::Print
+            | Token::Break
+            | Token::Continue
+            | Token::Struct
+            | Token::Enum
+            | Token::Mod
+            | Token::Use
+            | Token::Async
+            | Token::Await
+            | Token::Impl
+            | Token::Trait
+            | Token::Test
+            | Token::Assert
+            | Token::Match
+            | Token::Const
+            | Token::Panic
+            | Token::Database
+            | Token::Table
+            | Token::Query
+            | Token::Ledger
+            | Token::Select
+            | Token::Insert
+            | Token::Update
+            | Token::Delete
+            | Token::Where
+            | Token::From
+            | Token::Into
+            | Token::Values
+            | Token::Set
+            | Token::Debit
+            | Token::Credit
     )
 }
 
@@ -127,9 +160,19 @@ fn is_keyword(tok: &Token) -> bool {
 fn is_binary_op(tok: &Token) -> bool {
     matches!(
         tok,
-        Token::Plus | Token::Minus | Token::Star | Token::Slash | Token::Percent
-            | Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::Le | Token::Ge
-            | Token::And | Token::Or
+        Token::Plus
+            | Token::Minus
+            | Token::Star
+            | Token::Slash
+            | Token::Percent
+            | Token::Eq
+            | Token::Neq
+            | Token::Lt
+            | Token::Gt
+            | Token::Le
+            | Token::Ge
+            | Token::And
+            | Token::Or
     )
 }
 
@@ -137,8 +180,12 @@ fn is_binary_op(tok: &Token) -> bool {
 fn no_space_before(tok: &Token) -> bool {
     matches!(
         tok,
-        Token::Comma | Token::Semicolon | Token::Colon | Token::RParen
-            | Token::RBracket | Token::RBrace
+        Token::Comma
+            | Token::Semicolon
+            | Token::Colon
+            | Token::RParen
+            | Token::RBracket
+            | Token::RBrace
     )
 }
 
@@ -146,8 +193,12 @@ fn no_space_before(tok: &Token) -> bool {
 fn no_space_after(tok: &Token) -> bool {
     matches!(
         tok,
-        Token::Comma | Token::Semicolon | Token::Colon | Token::LParen
-            | Token::LBracket | Token::Dot
+        Token::Comma
+            | Token::Semicolon
+            | Token::Colon
+            | Token::LParen
+            | Token::LBracket
+            | Token::Dot
     )
 }
 
@@ -166,24 +217,47 @@ struct Formatter<'a> {
 
 impl<'a> Formatter<'a> {
     fn new(tokens: &'a [Spanned]) -> Self {
-        Self { tokens, pos: 0, output: String::new(), indent: 0, match_depth: 0, prev_was_match: false, match_open_stack: Vec::new() }
+        Self {
+            tokens,
+            pos: 0,
+            output: String::new(),
+            indent: 0,
+            match_depth: 0,
+            prev_was_match: false,
+            match_open_stack: Vec::new(),
+        }
     }
 
     fn peek(&self) -> &Token {
-        self.tokens.get(self.pos).map(|s| &s.token).unwrap_or(&Token::Eof)
+        self.tokens
+            .get(self.pos)
+            .map(|s| &s.token)
+            .unwrap_or(&Token::Eof)
     }
 
     fn peek_next(&self) -> &Token {
-        self.tokens.get(self.pos + 1).map(|s| &s.token).unwrap_or(&Token::Eof)
+        self.tokens
+            .get(self.pos + 1)
+            .map(|s| &s.token)
+            .unwrap_or(&Token::Eof)
     }
 
     fn prev(&self) -> &Token {
-        if self.pos == 0 { return &Token::Eof; }
-        self.tokens.get(self.pos - 1).map(|s| &s.token).unwrap_or(&Token::Eof)
+        if self.pos == 0 {
+            return &Token::Eof;
+        }
+        self.tokens
+            .get(self.pos - 1)
+            .map(|s| &s.token)
+            .unwrap_or(&Token::Eof)
     }
 
     fn advance(&mut self) -> Token {
-        let tok = self.tokens.get(self.pos).map(|s| s.token.clone()).unwrap_or(Token::Eof);
+        let tok = self
+            .tokens
+            .get(self.pos)
+            .map(|s| s.token.clone())
+            .unwrap_or(Token::Eof);
         self.pos += 1;
         tok
     }
@@ -201,9 +275,12 @@ impl<'a> Formatter<'a> {
             && !self.output.ends_with('\n')
             && !self.output.ends_with(' ')
             && !self.output.ends_with('{')
-            && !no_space_before(&self.peek())
+            && !no_space_before(self.peek())
             && !no_space_after(prev)
-            && !matches!(prev, Token::LBrace | Token::LBracket | Token::LParen | Token::Dot);
+            && !matches!(
+                prev,
+                Token::LBrace | Token::LBracket | Token::LParen | Token::Dot
+            );
 
         if needs_space {
             self.output.push(' ');
@@ -257,7 +334,10 @@ impl<'a> Formatter<'a> {
                         && !self.output.ends_with('{')
                         && !self.output.ends_with('(')
                         && !self.output.ends_with(' ')
-                        && !matches!(prev, Token::FatArrow | Token::Arrow | Token::Else | Token::Semicolon)
+                        && !matches!(
+                            prev,
+                            Token::FatArrow | Token::Arrow | Token::Else | Token::Semicolon
+                        )
                     {
                         self.output.push(' ');
                     }
@@ -308,7 +388,11 @@ impl<'a> Formatter<'a> {
                     // After }, add newline unless followed by else/comma/;/}
                     let next = self.peek().clone();
                     match next {
-                        Token::Else | Token::Comma | Token::Semicolon | Token::RBrace | Token::Eof => {}
+                        Token::Else
+                        | Token::Comma
+                        | Token::Semicolon
+                        | Token::RBrace
+                        | Token::Eof => {}
                         _ => {
                             self.output.push('\n');
                             self.write_indent();
@@ -408,25 +492,37 @@ impl<'a> Formatter<'a> {
                 Token::DotDot => {
                     let prev = self.prev();
                     if !matches!(prev, Token::LParen | Token::LBracket | Token::Comma) {
-                        while self.output.ends_with(' ') { self.output.pop(); }
+                        while self.output.ends_with(' ') {
+                            self.output.pop();
+                        }
                         self.output.push(' ');
                     }
                     self.output.push_str("..");
                     self.advance();
                     match self.peek() {
-                        Token::RParen | Token::RBracket | Token::Comma | Token::LBrace | Token::Eof => {}
+                        Token::RParen
+                        | Token::RBracket
+                        | Token::Comma
+                        | Token::LBrace
+                        | Token::Eof => {}
                         _ => self.output.push(' '),
                     }
                 }
 
                 // Range ..= — same as above
                 Token::DotDotEq => {
-                    while self.output.ends_with(' ') { self.output.pop(); }
+                    while self.output.ends_with(' ') {
+                        self.output.pop();
+                    }
                     self.output.push(' ');
                     self.output.push_str("..=");
                     self.advance();
                     match self.peek() {
-                        Token::RParen | Token::RBracket | Token::Comma | Token::LBrace | Token::Eof => {}
+                        Token::RParen
+                        | Token::RBracket
+                        | Token::Comma
+                        | Token::LBrace
+                        | Token::Eof => {}
                         _ => self.output.push(' '),
                     }
                 }
@@ -457,7 +553,9 @@ impl<'a> Formatter<'a> {
                         self.output.push('|');
                     } else {
                         // Operator
-                        while self.output.ends_with(' ') { self.output.pop(); }
+                        while self.output.ends_with(' ') {
+                            self.output.pop();
+                        }
                         self.output.push_str(" | ");
                     }
                     self.advance();
@@ -473,10 +571,14 @@ impl<'a> Formatter<'a> {
                         // But not after: "fn main (" -> "fn main("
                         // Actually: no space before ( in function calls/definitions
                         // Remove trailing space
-                        while self.output.ends_with(' ') { self.output.pop(); }
+                        while self.output.ends_with(' ') {
+                            self.output.pop();
+                        }
                         self.output.push('(');
                     } else {
-                        while self.output.ends_with(' ') { self.output.pop(); }
+                        while self.output.ends_with(' ') {
+                            self.output.pop();
+                        }
                         self.output.push('(');
                     }
                     self.advance();
@@ -484,21 +586,27 @@ impl<'a> Formatter<'a> {
 
                 // RParen — no space before
                 Token::RParen => {
-                    while self.output.ends_with(' ') { self.output.pop(); }
+                    while self.output.ends_with(' ') {
+                        self.output.pop();
+                    }
                     self.output.push(')');
                     self.advance();
                 }
 
                 // LBracket — no space
                 Token::LBracket => {
-                    while self.output.ends_with(' ') { self.output.pop(); }
+                    while self.output.ends_with(' ') {
+                        self.output.pop();
+                    }
                     self.output.push('[');
                     self.advance();
                 }
 
                 // RBracket — no space
                 Token::RBracket => {
-                    while self.output.ends_with(' ') { self.output.pop(); }
+                    while self.output.ends_with(' ') {
+                        self.output.pop();
+                    }
                     self.output.push(']');
                     self.advance();
                 }
@@ -507,11 +615,7 @@ impl<'a> Formatter<'a> {
                 t if is_keyword(t) => {
                     self.emit(&tok_str(&tok));
                     // Track match keyword for arm formatting
-                    if matches!(t, Token::Match) {
-                        self.prev_was_match = true;
-                    } else {
-                        self.prev_was_match = false;
-                    }
+                    self.prev_was_match = matches!(t, Token::Match);
                     // Ensure space after keyword
                     if !self.output.ends_with(' ') && !matches!(self.peek(), Token::LBrace) {
                         self.output.push(' ');
@@ -520,17 +624,29 @@ impl<'a> Formatter<'a> {
                 }
 
                 // Type tokens — emit like keywords
-                Token::TypeI64 | Token::TypeF64 | Token::TypeBool | Token::TypeString
-                | Token::TypeMoney | Token::TypeDecimal => {
+                Token::TypeI64
+                | Token::TypeF64
+                | Token::TypeBool
+                | Token::TypeString
+                | Token::TypeMoney
+                | Token::TypeDecimal => {
                     self.emit(&tok_str(&tok));
                     self.advance();
                 }
 
                 // Literals and identifiers
-                Token::Ident(_) | Token::Int(_) | Token::Float(_)
-                | Token::Str(_) | Token::Bool(_) | Token::Currency(_)
-                | Token::FString(_) | Token::Some_ | Token::None_
-                | Token::Ok | Token::Err | Token::Self_ => {
+                Token::Ident(_)
+                | Token::Int(_)
+                | Token::Float(_)
+                | Token::Str(_)
+                | Token::Bool(_)
+                | Token::Currency(_)
+                | Token::FString(_)
+                | Token::Some_
+                | Token::None_
+                | Token::Ok
+                | Token::Err
+                | Token::Self_ => {
                     let prev = self.prev();
                     let needs_space = !self.output.is_empty()
                         && !self.output.ends_with('\n')
@@ -538,21 +654,19 @@ impl<'a> Formatter<'a> {
                         && !self.output.ends_with('{')
                         && !matches!(
                             prev,
-                            Token::LBrace | Token::LParen | Token::LBracket
-                                | Token::Comma | Token::Dot | Token::Colon
-                                | Token::Arrow | Token::FatArrow
+                            Token::LBrace
+                                | Token::LParen
+                                | Token::LBracket
+                                | Token::Comma
+                                | Token::Dot
+                                | Token::Colon
+                                | Token::Arrow
+                                | Token::FatArrow
                         );
                     if needs_space {
                         self.output.push(' ');
                     }
                     self.output.push_str(&tok_str(&tok));
-                    self.advance();
-                }
-
-                // Doc comments (handled above, but just in case)
-                Token::DocComment(text) => {
-                    self.write_indent();
-                    self.output.push_str(&format!("/// {}\n", text));
                     self.advance();
                 }
 

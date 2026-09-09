@@ -3,8 +3,8 @@ use anyhow::Result;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::hint::Hinter;
-use rustyline::validate::Validator;
 use rustyline::history::History;
+use rustyline::validate::Validator;
 use rustyline::{CompletionType, Config, Context, DefaultEditor};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -12,27 +12,91 @@ use std::rc::Rc;
 // ── Tab completion ──
 
 const SANDBOX_KEYWORDS: &[&str] = &[
-    "fn", "let", "if", "else", "while", "for", "in", "return", "struct", "enum",
-    "mod", "use", "assert", "assert_eq", "print", "test", "async", "impl", "trait",
-    "self", "Self", "true", "false", "null", "pub", "break", "continue",
-    "match", "as", "type",
+    "fn",
+    "let",
+    "if",
+    "else",
+    "while",
+    "for",
+    "in",
+    "return",
+    "struct",
+    "enum",
+    "mod",
+    "use",
+    "assert",
+    "assert_eq",
+    "print",
+    "test",
+    "async",
+    "impl",
+    "trait",
+    "self",
+    "Self",
+    "true",
+    "false",
+    "null",
+    "pub",
+    "break",
+    "continue",
+    "match",
+    "as",
+    "type",
 ];
 
 const SANDBOX_BUILTINS: &[&str] = &[
     // Math
-    "abs", "sqrt", "pow", "min", "max", "ceil", "floor", "round",
+    "abs",
+    "sqrt",
+    "pow",
+    "min",
+    "max",
+    "ceil",
+    "floor",
+    "round",
     // String
-    "len", "to_upper", "to_lower", "trim", "replace", "contains",
-    "starts_with", "ends_with", "split", "join", "parse_int", "parse_float",
+    "len",
+    "to_upper",
+    "to_lower",
+    "trim",
+    "replace",
+    "contains",
+    "starts_with",
+    "ends_with",
+    "split",
+    "join",
+    "parse_int",
+    "parse_float",
     // Array
-    "push", "pop", "sort", "reverse", "map", "filter", "reduce",
-    "range", "zip", "enumerate",
+    "push",
+    "pop",
+    "sort",
+    "reverse",
+    "map",
+    "filter",
+    "reduce",
+    "range",
+    "zip",
+    "enumerate",
     // IO / system
-    "type_of", "panic",
+    "type_of",
+    "panic",
     // Modules
-    "db", "http", "json", "math", "string", "array",
+    "db",
+    "http",
+    "json",
+    "math",
+    "string",
+    "array",
     // Types
-    "i64", "f64", "string", "bool", "void", "Money", "Array", "Option",
+    "i64",
+    "f64",
+    "string",
+    "bool",
+    "void",
+    "Money",
+    "Array",
+    "Option",
 ];
 
 const REPL_COMMANDS: &[&str] = &[
@@ -178,7 +242,8 @@ fn extract_user_names(definitions: &str, eval_body: &str) -> Vec<String> {
 
 fn find_word_at_cursor(line: &str, pos: usize) -> (usize, &str) {
     let before = &line[..pos];
-    let start = before.rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
+    let start = before
+        .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
         .map(|i| i + 1)
         .unwrap_or(0);
     (start, &line[start..pos])
@@ -220,11 +285,7 @@ pub fn run_repl() -> Result<()> {
 
     loop {
         // Prompt
-        let prompt = if brace_depth > 0 {
-            "  ... "
-        } else {
-            "sbx> "
-        };
+        let prompt = if brace_depth > 0 { "  ... " } else { "sbx> " };
 
         match rl.readline(prompt) {
             Ok(line) => {
@@ -250,14 +311,18 @@ pub fn run_repl() -> Result<()> {
                             println!("    :show         Show accumulated code");
                             println!("    :defs         Show only definitions");
                             println!("    :help         Show this help");
-                        println!();
-                        println!("  Shortcuts:");
-                        println!("    Tab           Complete keywords, built-ins, and defined names");
-                        println!("    Ctrl+R        Reverse search through history");
-                        println!("    Ctrl+C        Cancel current input (or exit if idle)");
-                        println!("    Ctrl+D        Exit");
                             println!();
-                            println!("  Multiline: open a block with {{ and press Enter to continue.");
+                            println!("  Shortcuts:");
+                            println!(
+                                "    Tab           Complete keywords, built-ins, and defined names"
+                            );
+                            println!("    Ctrl+R        Reverse search through history");
+                            println!("    Ctrl+C        Cancel current input (or exit if idle)");
+                            println!("    Ctrl+D        Exit");
+                            println!();
+                            println!(
+                                "  Multiline: open a block with {{ and press Enter to continue."
+                            );
                             println!("  Tab: complete keywords and built-in functions.");
                             continue;
                         }

@@ -44,19 +44,15 @@ impl TypeChecker {
                     expr.clone()
                 }
             }
-            Expr::BinaryOp { left, op, right } => {
-                Expr::BinaryOp {
-                    op: op.clone(),
-                    left: Box::new(Self::substitute_const_expr(left, constants)),
-                    right: Box::new(Self::substitute_const_expr(right, constants)),
-                }
-            }
-            Expr::UnaryOp { op, expr } => {
-                Expr::UnaryOp {
-                    op: op.clone(),
-                    expr: Box::new(Self::substitute_const_expr(expr, constants)),
-                }
-            }
+            Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+                op: op.clone(),
+                left: Box::new(Self::substitute_const_expr(left, constants)),
+                right: Box::new(Self::substitute_const_expr(right, constants)),
+            },
+            Expr::UnaryOp { op, expr } => Expr::UnaryOp {
+                op: op.clone(),
+                expr: Box::new(Self::substitute_const_expr(expr, constants)),
+            },
             _ => expr.clone(),
         }
     }
@@ -73,8 +69,20 @@ impl TypeChecker {
                     BinOp::Add => Some(l + r),
                     BinOp::Sub => Some(l - r),
                     BinOp::Mul => Some(l * r),
-                    BinOp::Div => if r == 0 { None } else { Some(l / r) },
-                    BinOp::Mod => if r == 0 { None } else { Some(l % r) },
+                    BinOp::Div => {
+                        if r == 0 {
+                            None
+                        } else {
+                            Some(l / r)
+                        }
+                    }
+                    BinOp::Mod => {
+                        if r == 0 {
+                            None
+                        } else {
+                            Some(l % r)
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -90,13 +98,14 @@ impl TypeChecker {
     }
 
     /// Substitute type parameters with concrete types (static version for typechecker)
-
     /// Infer a type parameter from a raw type pattern and a concrete type.
     /// E.g., infer_type_param(TypeParam("T"), "T", Type::I64) => Some(Type::I64)
     fn infer_type_param(raw_pattern: &Type, param_name: &str, concrete: &Type) -> Option<Type> {
         match raw_pattern {
             Type::TypeParam(name) if name == param_name => Some(concrete.clone()),
-            Type::Custom { name, type_args } if name == param_name && type_args.is_empty() => Some(concrete.clone()),
+            Type::Custom { name, type_args } if name == param_name && type_args.is_empty() => {
+                Some(concrete.clone())
+            }
             Type::Array(inner) => {
                 if let Type::Array(concrete_inner) = concrete {
                     Self::infer_type_param(inner, param_name, concrete_inner)
@@ -117,15 +126,19 @@ impl TypeChecker {
 
     fn substitute_type_static(ty: &Type, sub: &std::collections::HashMap<String, Type>) -> Type {
         match ty {
-            Type::TypeParam(name) => {
-                sub.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
+            Type::TypeParam(name) => sub.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Type::Custom { name, type_args } => {
                 if let Some(replacement) = sub.get(name) {
                     replacement.clone()
                 } else {
-                    let new_args: Vec<Type> = type_args.iter().map(|a| Self::substitute_type_static(a, sub)).collect();
-                    Type::Custom { name: name.clone(), type_args: new_args }
+                    let new_args: Vec<Type> = type_args
+                        .iter()
+                        .map(|a| Self::substitute_type_static(a, sub))
+                        .collect();
+                    Type::Custom {
+                        name: name.clone(),
+                        type_args: new_args,
+                    }
                 }
             }
             Type::Array(inner) => Type::Array(Box::new(Self::substitute_type_static(inner, sub))),
@@ -135,7 +148,10 @@ impl TypeChecker {
                 Box::new(Self::substitute_type_static(err, sub)),
             ),
             Type::Fn(params, ret) => Type::Fn(
-                params.iter().map(|p| Self::substitute_type_static(p, sub)).collect(),
+                params
+                    .iter()
+                    .map(|p| Self::substitute_type_static(p, sub))
+                    .collect(),
                 Box::new(Self::substitute_type_static(ret, sub)),
             ),
             Type::Future(inner) => Type::Future(Box::new(Self::substitute_type_static(inner, sub))),
@@ -210,14 +226,22 @@ impl TypeChecker {
 
         // Register impl block methods
         for item in &program.items {
-            if let TopLevel::ImplDef { type_name, methods, .. } = item {
+            if let TopLevel::ImplDef {
+                type_name, methods, ..
+            } = item
+            {
                 // Build Self → ConcreteType substitution
-                let self_sub: HashMap<String, Type> = vec![
-                    ("Self".to_string(), Type::custom(&type_name)),
-                ].into_iter().collect();
+                let self_sub: HashMap<String, Type> =
+                    vec![("Self".to_string(), Type::custom(type_name))]
+                        .into_iter()
+                        .collect();
                 for method in methods {
-                    if let TopLevel::FnDef { name, params, ret, .. } = method {
-                        let param_tys: Vec<Type> = params.iter()
+                    if let TopLevel::FnDef {
+                        name, params, ret, ..
+                    } = method
+                    {
+                        let param_tys: Vec<Type> = params
+                            .iter()
                             .map(|p| Self::substitute_type(&p.ty, &self_sub))
                             .collect();
                         let ret_sub = ret.as_ref().map(|t| Self::substitute_type(t, &self_sub));
@@ -230,12 +254,21 @@ impl TypeChecker {
 
         // Check impl block methods
         for item in &program.items {
-            if let TopLevel::ImplDef { type_name, methods, .. } = item {
+            if let TopLevel::ImplDef {
+                type_name, methods, ..
+            } = item
+            {
                 for method in methods {
-                    if let TopLevel::FnDef { name, params, body, .. } = method {
+                    if let TopLevel::FnDef {
+                        name, params, body, ..
+                    } = method
+                    {
                         self.scopes.push(HashMap::new());
                         for p in params {
-                            self.scopes.last_mut().unwrap().insert(p.name.clone(), p.ty.clone());
+                            self.scopes
+                                .last_mut()
+                                .unwrap()
+                                .insert(p.name.clone(), p.ty.clone());
                         }
                         self.check_block(body)?;
                         self.scopes.pop();
@@ -374,12 +407,20 @@ impl TypeChecker {
                     self.check_block(else_body)?;
                 }
             }
-            Stmt::IfLet { pattern, value, then, else_ } => {
+            Stmt::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+            } => {
                 let _val_ty = self.check_expr(value)?;
                 self.scopes.push(HashMap::new());
                 // Bind pattern variables (simplified: variable patterns only)
                 if let Pattern::Variable(name) = pattern {
-                    self.scopes.last_mut().unwrap().insert(name.clone(), _val_ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), _val_ty.clone());
                 }
                 self.check_block(then)?;
                 self.scopes.pop();
@@ -404,8 +445,13 @@ impl TypeChecker {
                 let iter_ty = self.check_expr(iterable)?;
                 let elem_ty = match &iter_ty {
                     Type::Array(inner) => inner.as_ref().clone(),
-                    Type::String => Type::I64,  // string iteration: chars as i64
-                    _ => return Err(anyhow!("For loop requires array or string, got '{}'", iter_ty)),
+                    Type::String => Type::I64, // string iteration: chars as i64
+                    _ => {
+                        return Err(anyhow!(
+                            "For loop requires array or string, got '{}'",
+                            iter_ty
+                        ))
+                    }
                 };
                 self.scopes.push(HashMap::new());
                 self.scopes
@@ -482,11 +528,18 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Call { name, type_args, args } => {
+            Expr::Call {
+                name,
+                type_args,
+                args,
+            } => {
                 // Special-case: len() — polymorphic over strings and arrays
                 if name == "len" && type_args.is_empty() {
                     if args.len() != 1 {
-                        return Err(anyhow!("'len' takes exactly 1 argument, got {}", args.len()));
+                        return Err(anyhow!(
+                            "'len' takes exactly 1 argument, got {}",
+                            args.len()
+                        ));
                     }
                     let arg_ty = self.check_expr(&args[0])?;
                     match &arg_ty {
@@ -497,12 +550,20 @@ impl TypeChecker {
                 // map(arr, lambda) -> Array<result>
                 if name == "map" && type_args.is_empty() {
                     if args.len() != 2 {
-                        return Err(anyhow!("'map' takes exactly 2 arguments (array, lambda), got {}", args.len()));
+                        return Err(anyhow!(
+                            "'map' takes exactly 2 arguments (array, lambda), got {}",
+                            args.len()
+                        ));
                     }
                     let arr_ty = self.check_expr(&args[0])?;
-                    let elem_ty = match &arr_ty {
+                    let _elem_ty = match &arr_ty {
                         Type::Array(inner) => (**inner).clone(),
-                        _ => return Err(anyhow!("'map' first argument must be an array, got '{}'", arr_ty)),
+                        _ => {
+                            return Err(anyhow!(
+                                "'map' first argument must be an array, got '{}'",
+                                arr_ty
+                            ))
+                        }
                     };
                     // Check lambda type
                     self.check_expr(&args[1])?;
@@ -513,7 +574,10 @@ impl TypeChecker {
                 // filter(arr, lambda) -> Array<element>
                 if name == "filter" && type_args.is_empty() {
                     if args.len() != 2 {
-                        return Err(anyhow!("'filter' takes exactly 2 arguments (array, lambda), got {}", args.len()));
+                        return Err(anyhow!(
+                            "'filter' takes exactly 2 arguments (array, lambda), got {}",
+                            args.len()
+                        ));
                     }
                     let arr_ty = self.check_expr(&args[0])?;
                     self.check_expr(&args[1])?;
@@ -522,20 +586,26 @@ impl TypeChecker {
                 // reduce(arr, lambda, initial) -> element
                 if name == "reduce" && type_args.is_empty() {
                     if args.len() != 3 {
-                        return Err(anyhow!("'reduce' takes exactly 3 arguments (array, lambda, initial), got {}", args.len()));
+                        return Err(anyhow!(
+                            "'reduce' takes exactly 3 arguments (array, lambda, initial), got {}",
+                            args.len()
+                        ));
                     }
-                    let arr_ty = self.check_expr(&args[0])?;
+                    let _arr_ty = self.check_expr(&args[0])?;
                     self.check_expr(&args[1])?;
                     let init_ty = self.check_expr(&args[2])?;
                     return Ok(init_ty);
                 }
 
-                let (mut param_tys, mut ret_ty): (Vec<Type>, Option<Type>) = if let Some(sig) =
-                    self.functions.get(name).or_else(|| {
+                let (mut param_tys, mut ret_ty): (Vec<Type>, Option<Type>) = if let Some(sig) = self
+                    .functions
+                    .get(name)
+                    .or_else(|| {
                         name.rfind("::")
                             .map(|i| &name[i + 2..])
                             .and_then(|short| self.functions.get(short))
-                    }).or_else(|| {
+                    })
+                    .or_else(|| {
                         let mangled = name.replace("::", "_");
                         self.functions.get(&mangled)
                     }) {
@@ -558,35 +628,48 @@ impl TypeChecker {
                 // Monomorphize: if type_args are provided, substitute type parameters
                 if !type_args.is_empty() {
                     let lookup_name = name.clone();
-                    if let Some(TopLevel::FnDef { type_params, .. }) = self.fn_defs.get(&lookup_name) {
+                    if let Some(TopLevel::FnDef { type_params, .. }) =
+                        self.fn_defs.get(&lookup_name)
+                    {
                         if type_params.len() != type_args.len() {
                             return Err(anyhow!(
                                 "Function '{}' expects {} type params, got {}",
-                                name, type_params.len(), type_args.len()
+                                name,
+                                type_params.len(),
+                                type_args.len()
                             ));
                         }
                         // Build substitution map: T → concrete type
-                        let sub: HashMap<String, Type> = type_params.iter().map(|tp| tp.name.clone()).zip(type_args.iter())
+                        let sub: HashMap<String, Type> = type_params
+                            .iter()
+                            .map(|tp| tp.name.clone())
+                            .zip(type_args.iter())
                             .map(|(tp, concrete)| (tp, concrete.clone()))
                             .collect();
                         // Substitute in param types and return type
-                        param_tys = param_tys.iter().map(|t| Self::substitute_type(t, &sub)).collect();
+                        param_tys = param_tys
+                            .iter()
+                            .map(|t| Self::substitute_type(t, &sub))
+                            .collect();
                         ret_ty = ret_ty.map(|t| Self::substitute_type(&t, &sub));
-
                     }
                 }
 
                 // Check arg count — allow fewer args if defaults exist
                 let max_params = param_tys.len();
-                let min_params = if let Some(TopLevel::FnDef { params, .. }) = self.fn_defs.get(name) {
-                    params.iter().filter(|p| p.default.is_none()).count()
-                } else {
-                    max_params
-                };
+                let min_params =
+                    if let Some(TopLevel::FnDef { params, .. }) = self.fn_defs.get(name) {
+                        params.iter().filter(|p| p.default.is_none()).count()
+                    } else {
+                        max_params
+                    };
                 if args.len() < min_params || args.len() > max_params {
                     return Err(anyhow!(
                         "Function '{}' expects {}-{} args, got {}",
-                        name, min_params, max_params, args.len()
+                        name,
+                        min_params,
+                        max_params,
+                        args.len()
                     ));
                 }
                 for (i, (arg, expected)) in args.iter().zip(&param_tys).enumerate() {
@@ -603,29 +686,48 @@ impl TypeChecker {
                 }
                 Ok(ret_ty.unwrap_or(Type::Void))
             }
-            Expr::StructLiteral { name, type_args, fields } => {
+            Expr::StructLiteral {
+                name,
+                type_args,
+                fields,
+            } => {
                 if !type_args.is_empty() {
                     // Generic struct literal — register concrete struct and validate fields
-                    let concrete_name = format!("{}_{}", name, type_args.iter()
-                        .map(|t| Self::c_type_name(t))
-                        .collect::<Vec<_>>()
-                        .join("_"));
+                    let concrete_name = format!(
+                        "{}_{}",
+                        name,
+                        type_args
+                            .iter()
+                            .map(Self::c_type_name)
+                            .collect::<Vec<_>>()
+                            .join("_")
+                    );
                     // Look up the generic definition from generic_structs
-                    if let Some((type_params, generic_fields)) = self.generic_structs.get(name).cloned() {
+                    if let Some((type_params, generic_fields)) =
+                        self.generic_structs.get(name).cloned()
+                    {
                         // Build substitution: T -> concrete type
-                        let sub: std::collections::HashMap<String, Type> = type_params.iter()
-                            .map(|tp| tp.name.clone()).zip(type_args.iter())
+                        let sub: std::collections::HashMap<String, Type> = type_params
+                            .iter()
+                            .map(|tp| tp.name.clone())
+                            .zip(type_args.iter())
                             .map(|(tp, concrete)| (tp, concrete.clone()))
                             .collect();
                         // Register the concrete struct with substituted field types
-                        let concrete_fields: Vec<Field> = generic_fields.iter().map(|f| {
-                            let concrete_ty = Self::substitute_type_static(&f.ty, &sub);
-                            Field { name: f.name.clone(), ty: concrete_ty }
-                        }).collect();
+                        let concrete_fields: Vec<Field> = generic_fields
+                            .iter()
+                            .map(|f| {
+                                let concrete_ty = Self::substitute_type_static(&f.ty, &sub);
+                                Field {
+                                    name: f.name.clone(),
+                                    ty: concrete_ty,
+                                }
+                            })
+                            .collect();
                         self.structs.insert(concrete_name.clone(), concrete_fields);
                     }
                     // Validate field values
-                    for (fname, fval) in fields {
+                    for (_fname, fval) in fields {
                         let _ = self.check_expr(fval)?;
                     }
                     Ok(Type::custom(&concrete_name))
@@ -651,7 +753,7 @@ impl TypeChecker {
                             ));
                         }
                     }
-                    Ok(Type::custom(&name))
+                    Ok(Type::custom(name))
                 }
             }
             Expr::FieldAccess { target, field } => {
@@ -694,9 +796,7 @@ impl TypeChecker {
                 let val_ty = self.check_expr(value)?;
                 Ok(Type::Option(Box::new(val_ty)))
             }
-            Expr::NoneExpr => {
-                Ok(Type::Option(Box::new(Type::Void)))
-            }
+            Expr::NoneExpr => Ok(Type::Option(Box::new(Type::Void))),
             Expr::PanicExpr(msg) => {
                 let msg_ty = self.check_expr(msg)?;
                 if msg_ty != Type::String {
@@ -717,13 +817,20 @@ impl TypeChecker {
                 }
                 Ok(Type::Void)
             }
-            Expr::AssertEqExpr { left, right, message } => {
+            Expr::AssertEqExpr {
+                left,
+                right,
+                message,
+            } => {
                 let _left_ty = self.check_expr(left)?;
                 let _right_ty = self.check_expr(right)?;
                 if let Some(msg) = message {
                     let msg_ty = self.check_expr(msg)?;
                     if msg_ty != Type::String {
-                        return Err(anyhow!("assert_eq message must be string, got '{}'", msg_ty));
+                        return Err(anyhow!(
+                            "assert_eq message must be string, got '{}'",
+                            msg_ty
+                        ));
                     }
                 }
                 Ok(Type::Void)
@@ -759,20 +866,28 @@ impl TypeChecker {
                 let generic_info = self.generic_enums.get(enum_name).cloned();
                 let resolved_type_args = if type_args.is_empty() {
                     if let Some((type_params, _)) = &generic_info {
-                        if let (Some(ref payload_expr), Some(ref raw_payload_ty_pat)) = (&payload, &raw_payload_ty) {
+                        if let (Some(ref payload_expr), Some(ref raw_payload_ty_pat)) =
+                            (&payload, &raw_payload_ty)
+                        {
                             let arg_ty = self.check_expr(payload_expr)?;
                             // Try to infer type params from the payload
-                            let mut sub: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+                            let mut sub: std::collections::HashMap<String, Type> =
+                                std::collections::HashMap::new();
                             let mut all_resolved = true;
                             for tp in type_params.iter().map(|tp| tp.name.as_str()) {
-                                if let Some(concrete) = Self::infer_type_param(raw_payload_ty_pat, tp, &arg_ty) {
+                                if let Some(concrete) =
+                                    Self::infer_type_param(raw_payload_ty_pat, tp, &arg_ty)
+                                {
                                     sub.insert(tp.to_string(), concrete);
                                 } else {
                                     all_resolved = false;
                                 }
                             }
                             if all_resolved && sub.len() == type_params.len() {
-                                type_params.iter().map(|tp| sub.get(&tp.name).cloned().unwrap_or(Type::Void)).collect()
+                                type_params
+                                    .iter()
+                                    .map(|tp| sub.get(&tp.name).cloned().unwrap_or(Type::Void))
+                                    .collect()
                             } else {
                                 type_args.clone()
                             }
@@ -787,14 +902,17 @@ impl TypeChecker {
                 };
 
                 // Build substitution from resolved type args
-                let sub: std::collections::HashMap<String, Type> = if let Some((type_params, _)) = &generic_info {
-                    type_params.iter().map(|tp| tp.name.clone())
-                        .zip(resolved_type_args.iter())
-                        .map(|(tp, concrete)| (tp, concrete.clone()))
-                        .collect()
-                } else {
-                    std::collections::HashMap::new()
-                };
+                let sub: std::collections::HashMap<String, Type> =
+                    if let Some((type_params, _)) = &generic_info {
+                        type_params
+                            .iter()
+                            .map(|tp| tp.name.clone())
+                            .zip(resolved_type_args.iter())
+                            .map(|(tp, concrete)| (tp, concrete.clone()))
+                            .collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    };
 
                 // Get the expected payload type (substituted if generic)
                 let expected_payload = if let Some(ref raw_ty) = raw_payload_ty {
@@ -809,9 +927,12 @@ impl TypeChecker {
 
                 match (has_payload, expected_payload, payload) {
                     (false, _, None) => Ok(if resolved_type_args.is_empty() {
-                        Type::custom(&enum_name)
+                        Type::custom(enum_name)
                     } else {
-                        Type::Custom { name: enum_name.clone(), type_args: resolved_type_args }
+                        Type::Custom {
+                            name: enum_name.clone(),
+                            type_args: resolved_type_args,
+                        }
                     }),
                     (true, Some(expected), Some(expr)) => {
                         // For generic enums without explicit type args, check against raw TypeParam
@@ -822,7 +943,10 @@ impl TypeChecker {
                             if !self.types_compatible(&expected, &checked) {
                                 return Err(anyhow!(
                                     "Enum variant '{}::{}': expected payload '{}', got '{}'",
-                                    enum_name, variant, expected, checked
+                                    enum_name,
+                                    variant,
+                                    expected,
+                                    checked
                                 ));
                             }
                             checked
@@ -832,17 +956,25 @@ impl TypeChecker {
                         let final_type_args = if resolved_type_args.is_empty() {
                             if let Some((type_params, _)) = &generic_info {
                                 if let Some(ref raw_ty) = raw_payload_ty {
-                                    let mut sub2: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+                                    let mut sub2: std::collections::HashMap<String, Type> =
+                                        std::collections::HashMap::new();
                                     let mut all_resolved = true;
                                     for tp in type_params.iter().map(|tp| tp.name.as_str()) {
-                                        if let Some(concrete) = Self::infer_type_param(raw_ty, tp, &arg_ty) {
+                                        if let Some(concrete) =
+                                            Self::infer_type_param(raw_ty, tp, &arg_ty)
+                                        {
                                             sub2.insert(tp.to_string(), concrete);
                                         } else {
                                             all_resolved = false;
                                         }
                                     }
                                     if all_resolved && sub2.len() == type_params.len() {
-                                        type_params.iter().map(|tp| sub2.get(&tp.name).cloned().unwrap_or(Type::Void)).collect()
+                                        type_params
+                                            .iter()
+                                            .map(|tp| {
+                                                sub2.get(&tp.name).cloned().unwrap_or(Type::Void)
+                                            })
+                                            .collect()
                                     } else {
                                         return Err(anyhow!(
                                             "Enum variant '{}::{}': cannot infer type parameter from payload '{}' (got '{}')",
@@ -859,7 +991,10 @@ impl TypeChecker {
                             resolved_type_args
                         };
 
-                        Ok(Type::Custom { name: enum_name.clone(), type_args: final_type_args })
+                        Ok(Type::Custom {
+                            name: enum_name.clone(),
+                            type_args: final_type_args,
+                        })
                     }
                     (false, _, Some(_)) => {
                         Err(anyhow!("Variant '{}' does not take a payload", variant))
@@ -907,7 +1042,10 @@ impl TypeChecker {
                         }
                         Pattern::SomePattern { binding: Some(b) } => {
                             if let Type::Option(inner) = &scrutinee_ty {
-                                self.scopes.last_mut().unwrap().insert(b.clone(), inner.as_ref().clone());
+                                self.scopes
+                                    .last_mut()
+                                    .unwrap()
+                                    .insert(b.clone(), inner.as_ref().clone());
                             }
                         }
                         Pattern::SomePattern { binding: None } | Pattern::NonePattern => {}
@@ -961,12 +1099,18 @@ impl TypeChecker {
                 self.scopes.pop();
                 Ok(Type::Fn(param_tys, Box::new(ret_ty)))
             }
-            Expr::MethodCall { target, method, args } => {
+            Expr::MethodCall {
+                target,
+                method,
+                args,
+            } => {
                 // Resolve target type
                 let target_ty = self.check_expr(target)?;
                 // For known types, resolve method as Type_method
                 let full_name = match &target_ty {
-                    Type::Custom { name: type_name, .. } => {
+                    Type::Custom {
+                        name: type_name, ..
+                    } => {
                         format!("{}_{}", type_name, method)
                     }
                     Type::String => {
@@ -984,14 +1128,21 @@ impl TypeChecker {
                 let (param_tys, ret_ty) = if let Some(sig) = self.functions.get(&full_name) {
                     sig.clone()
                 } else {
-                    return Err(anyhow!("Unknown method '{}' for type '{}'", method, target_ty));
+                    return Err(anyhow!(
+                        "Unknown method '{}' for type '{}'",
+                        method,
+                        target_ty
+                    ));
                 };
                 // Check first param matches target type (self param)
                 if let Some(first_param) = param_tys.first() {
                     if !self.types_compatible(first_param, &target_ty) {
                         return Err(anyhow!(
                             "Method '{}.{}': expected self type '{}', got '{}'",
-                            target_ty, method, first_param, target_ty
+                            target_ty,
+                            method,
+                            first_param,
+                            target_ty
                         ));
                     }
                 }
@@ -1001,7 +1152,11 @@ impl TypeChecker {
                     if !self.types_compatible(expected, &arg_ty) {
                         return Err(anyhow!(
                             "Arg {} of '{}.{}': expected '{}', got '{}'",
-                            i + 1, target_ty, method, expected, arg_ty
+                            i + 1,
+                            target_ty,
+                            method,
+                            expected,
+                            arg_ty
                         ));
                     }
                 }
@@ -1042,13 +1197,9 @@ impl TypeChecker {
     /// Substitute type parameters in a type with concrete types.
     fn substitute_type(ty: &Type, sub: &HashMap<String, Type>) -> Type {
         match ty {
-            Type::TypeParam(name) => {
-                sub.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
+            Type::TypeParam(name) => sub.get(name).cloned().unwrap_or_else(|| ty.clone()),
             // Custom("T") is used by parser for generic type params — substitute too
-            Type::Custom { name, .. } => {
-                sub.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
+            Type::Custom { name, .. } => sub.get(name).cloned().unwrap_or_else(|| ty.clone()),
             Type::Array(inner) => Type::Array(Box::new(Self::substitute_type(inner, sub))),
             Type::Option(inner) => Type::Option(Box::new(Self::substitute_type(inner, sub))),
             Type::Result(ok, err) => Type::Result(
@@ -1056,7 +1207,10 @@ impl TypeChecker {
                 Box::new(Self::substitute_type(err, sub)),
             ),
             Type::Fn(params, ret) => Type::Fn(
-                params.iter().map(|p| Self::substitute_type(p, sub)).collect(),
+                params
+                    .iter()
+                    .map(|p| Self::substitute_type(p, sub))
+                    .collect(),
                 Box::new(Self::substitute_type(ret, sub)),
             ),
             Type::Future(inner) => Type::Future(Box::new(Self::substitute_type(inner, sub))),
@@ -1198,14 +1352,20 @@ impl TypeChecker {
 
     fn register_structs(&mut self, item: &TopLevel, prefix: &str) {
         match item {
-            TopLevel::StructDef { name, type_params, fields, .. } => {
+            TopLevel::StructDef {
+                name,
+                type_params,
+                fields,
+                ..
+            } => {
                 if !type_params.is_empty() {
                     let full_name = if prefix.is_empty() {
                         name.clone()
                     } else {
                         format!("{}::{}", prefix, name)
                     };
-                    self.generic_structs.insert(full_name, (type_params.clone(), fields.clone()));
+                    self.generic_structs
+                        .insert(full_name, (type_params.clone(), fields.clone()));
                 }
                 let full_name = if prefix.is_empty() {
                     name.clone()
@@ -1230,14 +1390,20 @@ impl TypeChecker {
 
     fn register_enums(&mut self, item: &TopLevel, prefix: &str) {
         match item {
-            TopLevel::EnumDef { name, type_params, variants, .. } => {
+            TopLevel::EnumDef {
+                name,
+                type_params,
+                variants,
+                ..
+            } => {
                 let full_name = if prefix.is_empty() {
                     name.clone()
                 } else {
                     format!("{}::{}", prefix, name)
                 };
                 if !type_params.is_empty() {
-                    self.generic_enums.insert(full_name.clone(), (type_params.clone(), variants.clone()));
+                    self.generic_enums
+                        .insert(full_name.clone(), (type_params.clone(), variants.clone()));
                 }
                 self.enums.insert(full_name, variants.clone());
             }
@@ -1266,7 +1432,8 @@ impl TypeChecker {
                 } else {
                     format!("{}::{}", prefix, name)
                 };
-                self.functions.insert(full_name.clone(), (param_tys, ret.clone()));
+                self.functions
+                    .insert(full_name.clone(), (param_tys, ret.clone()));
                 self.fn_defs.insert(full_name, item.clone());
             }
             TopLevel::AsyncFnDef {

@@ -461,7 +461,11 @@ impl WasmGen {
                     writeln!(self.output, ")").unwrap();
                 }
             },
-            Expr::Call { name, type_args: _, args } => {
+            Expr::Call {
+                name,
+                type_args: _,
+                args,
+            } => {
                 self.write_indent();
                 // Try to find function name with module prefix stripped
                 let fn_name = name.rfind("::").map_or(name.as_str(), |i| &name[i + 2..]);

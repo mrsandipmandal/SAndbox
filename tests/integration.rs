@@ -17,14 +17,26 @@ fn sandbox_bin() -> String {
 fn is_progress_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     // Lines starting with [sandbox] are always progress
-    if trimmed.starts_with("[sandbox]") { return true; }
+    if trimmed.starts_with("[sandbox]") {
+        return true;
+    }
     // All other progress lines are indented; program output starts at column 0
     if line.starts_with(' ') || line.starts_with('\t') {
-        if trimmed.starts_with("\u{2192}") { return true; }  // →
-        if trimmed.starts_with("\u{2713}") { return true; }  // ✓
-        if trimmed.starts_with("\u{26a0}") { return true; }  // ⚠
-        if trimmed.starts_with('[') && trimmed.contains("] FnDef") { return true; }
-        if trimmed.starts_with('[') && trimmed.contains("] Other") { return true; }
+        if trimmed.starts_with("\u{2192}") {
+            return true;
+        } // →
+        if trimmed.starts_with("\u{2713}") {
+            return true;
+        } // ✓
+        if trimmed.starts_with("\u{26a0}") {
+            return true;
+        } // ⚠
+        if trimmed.starts_with('[') && trimmed.contains("] FnDef") {
+            return true;
+        }
+        if trimmed.starts_with('[') && trimmed.contains("] Other") {
+            return true;
+        }
     }
     false
 }
@@ -44,7 +56,8 @@ fn compile_and_run(source: &str) -> (String, bool) {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
     // Strip compilation progress so tests see only program output
-    let filtered: String = combined.lines()
+    let filtered: String = combined
+        .lines()
         .filter(|l| !is_progress_line(l))
         .collect::<Vec<_>>()
         .join("\n");
@@ -66,7 +79,8 @@ fn interpret_source(source: &str) -> (String, bool) {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
     // Strip compilation progress so tests see only program output
-    let filtered: String = combined.lines()
+    let filtered: String = combined
+        .lines()
         .filter(|l| !is_progress_line(l))
         .collect::<Vec<_>>()
         .join("\n");
@@ -80,7 +94,8 @@ fn run_sandbox(args: &[&str]) -> (String, bool) {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
     // Strip compilation progress so tests see only program output
-    let filtered: String = combined.lines()
+    let filtered: String = combined
+        .lines()
         .filter(|l| !is_progress_line(l))
         .collect::<Vec<_>>()
         .join("\n");
@@ -1467,7 +1482,11 @@ fn main() {
 }
 "#,
     );
-    assert!(out.contains("Hello, World!"), "Expected f-string, got: {}", out);
+    assert!(
+        out.contains("Hello, World!"),
+        "Expected f-string, got: {}",
+        out
+    );
 }
 
 #[test]
@@ -2084,8 +2103,16 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Impl multiple methods failed: {}", output);
-    assert!(output.trim().contains("15"), "Expected area=15, got: {}", output);
-    assert!(output.trim().contains("16"), "Expected perimeter=16, got: {}", output);
+    assert!(
+        output.trim().contains("15"),
+        "Expected area=15, got: {}",
+        output
+    );
+    assert!(
+        output.trim().contains("16"),
+        "Expected perimeter=16, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2139,14 +2166,22 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Impl with match failed: {}", output);
-    assert!(output.trim().contains("1"), "Expected Circle=1, got: {}", output);
-    assert!(output.trim().contains("2"), "Expected Square=2, got: {}", output);
+    assert!(
+        output.trim().contains("1"),
+        "Expected Circle=1, got: {}",
+        output
+    );
+    assert!(
+        output.trim().contains("2"),
+        "Expected Square=2, got: {}",
+        output
+    );
 }
 
 #[test]
 fn test_assert_passes() {
-    let (output, ok) = run_sandbox(&["test", "tests/fixtures/test_pass.sbx"]); // Use inline
-    // Inline test
+    let (_output, _ok) = run_sandbox(&["test", "tests/fixtures/test_pass.sbx"]); // Use inline
+                                                                                 // Inline test
     let source = r#"
 test fn test_addition {
     let result = 2 + 3
@@ -2156,14 +2191,20 @@ test fn test_addition {
     let (output, ok) = compile_and_run(source);
     // Test runner doesn't have main — use sandbox test instead
     // Just verify it compiles and type-checks
-    assert!(ok || output.contains("type-checked"), "Assert test should at least type-check: {}", output);
+    assert!(
+        ok || output.contains("type-checked"),
+        "Assert test should at least type-check: {}",
+        output
+    );
 }
 
 #[test]
 fn test_sandbox_test_command() {
     let tmp = tempfile::TempDir::new().unwrap();
     let sbx = tmp.path().join("tests.sbx");
-    std::fs::write(&sbx, r#"
+    std::fs::write(
+        &sbx,
+        r#"
 test fn test_math {
     let x = 2 + 3
     assert(x == 5, "math should work")
@@ -2172,7 +2213,9 @@ test fn test_math {
 test fn test_bool {
     assert(true, "true is true")
 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -2181,20 +2224,36 @@ test fn test_bool {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(output.status.success(), "sandbox test failed: {}", stdout);
-    assert!(stdout.contains("2 passed"), "Expected 2 passed, got: {}", stdout);
-    assert!(stdout.contains("test_math"), "Missing test_math: {}", stdout);
-    assert!(stdout.contains("test_bool"), "Missing test_bool: {}", stdout);
+    assert!(
+        stdout.contains("2 passed"),
+        "Expected 2 passed, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("test_math"),
+        "Missing test_math: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("test_bool"),
+        "Missing test_bool: {}",
+        stdout
+    );
 }
 
 #[test]
 fn test_sandbox_test_failing() {
     let tmp = tempfile::TempDir::new().unwrap();
     let sbx = tmp.path().join("fail.sbx");
-    std::fs::write(&sbx, r#"
+    std::fs::write(
+        &sbx,
+        r#"
 test fn test_fail {
     assert(false, "this should fail")
 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -2203,18 +2262,25 @@ test fn test_fail {
         .unwrap();
     assert!(!output.status.success(), "Expected test failure");
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    assert!(stderr.contains("failed") || !output.status.success(), "Should report failure");
+    assert!(
+        stderr.contains("failed") || !output.status.success(),
+        "Should report failure"
+    );
 }
 
 #[test]
 fn test_sandbox_test_no_tests() {
     let tmp = tempfile::TempDir::new().unwrap();
     let sbx = tmp.path().join("notest.sbx");
-    std::fs::write(&sbx, r#"
+    std::fs::write(
+        &sbx,
+        r#"
 fn main() {
     print("no tests here")
 }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -2222,7 +2288,11 @@ fn main() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(stdout.contains("No test functions"), "Should warn about no tests: {}", stdout);
+    assert!(
+        stdout.contains("No test functions"),
+        "Should warn about no tests: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -2230,7 +2300,11 @@ fn test_sandbox_help_shows_test() {
     let bin = sandbox_bin();
     let output = Command::new(&bin).args(["--help"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(stdout.contains("test"), "--help should mention test: {}", stdout);
+    assert!(
+        stdout.contains("test"),
+        "--help should mention test: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -2273,7 +2347,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "File I/O failed: {}", output);
-    assert!(output.trim().contains("Hello from Sandbox!"), "Expected file content, got: {}", output);
+    assert!(
+        output.trim().contains("Hello from Sandbox!"),
+        "Expected file content, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2289,7 +2367,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "File exists check failed: {}", output);
-    assert!(output.contains("0") && output.contains("1"), "Expected false then true, got: {}", output);
+    assert!(
+        output.contains("0") && output.contains("1"),
+        "Expected false then true, got: {}",
+        output
+    );
 }
 
 // ==================== Phase 1: String Methods ====================
@@ -2304,7 +2386,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "to_upper failed: {}", output);
-    assert!(output.trim().contains("HELLO WORLD"), "Expected HELLO WORLD, got: {}", output);
+    assert!(
+        output.trim().contains("HELLO WORLD"),
+        "Expected HELLO WORLD, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2317,7 +2403,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "to_lower failed: {}", output);
-    assert!(output.trim().contains("hello world"), "Expected hello world, got: {}", output);
+    assert!(
+        output.trim().contains("hello world"),
+        "Expected hello world, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2330,7 +2420,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "string::replace failed: {}", output);
-    assert!(output.trim().contains("hello there there"), "Expected replacement, got: {}", output);
+    assert!(
+        output.trim().contains("hello there there"),
+        "Expected replacement, got: {}",
+        output
+    );
 }
 
 // ==================== Phase 2: Option<T> ====================
@@ -2368,7 +2462,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(!ok, "Should fail on type error");
-    assert!(output.contains("error") || output.contains("Error"), "Expected error message, got: {}", output);
+    assert!(
+        output.contains("error") || output.contains("Error"),
+        "Expected error message, got: {}",
+        output
+    );
 }
 
 // ==================== Phase 3: Closure Capture ====================
@@ -2422,10 +2520,7 @@ fn test_sandbox_use_registry_packages() {
     // Create a fake package
     let pkg_dir = vendor.join("fakepkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
-    std::fs::write(
-        pkg_dir.join("lib.sbx"),
-        "fn greet() -> i64 { return 42 }",
-    ).unwrap();
+    std::fs::write(pkg_dir.join("lib.sbx"), "fn greet() -> i64 { return 42 }").unwrap();
     assert!(pkg_dir.join("lib.sbx").exists());
 }
 
@@ -2481,9 +2576,21 @@ struct Point {
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(output.status.success(), "Doc generator failed: {}", stdout);
-    assert!(stdout.contains("add"), "Expected 'add' in docs, got: {}", stdout);
-    assert!(stdout.contains("Add two numbers"), "Expected doc comment, got: {}", stdout);
-    assert!(stdout.contains("struct `Point`"), "Expected struct docs, got: {}", stdout);
+    assert!(
+        stdout.contains("add"),
+        "Expected 'add' in docs, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Add two numbers"),
+        "Expected doc comment, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("struct `Point`"),
+        "Expected struct docs, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -2517,7 +2624,8 @@ fn test_vendored_package_use() {
 fn multiply(a: i64, b: i64) -> i64 {
     return a * b
 }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     std::fs::write(
         tmp.path().join("main.sbx"),
@@ -2528,7 +2636,8 @@ fn main() {
     print(add(3, 4))
     print(multiply(5, 6))
 }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -2557,7 +2666,8 @@ fn test_vendored_package_wildcard() {
 fn triple(x: i64) -> i64 {
     return x * 3
 }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     std::fs::write(
         tmp.path().join("main.sbx"),
@@ -2567,7 +2677,8 @@ fn main() {
     print(double(7))
     print(triple(7))
 }"#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -2576,7 +2687,11 @@ fn main() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "Vendor wildcard failed: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Vendor wildcard failed: {}",
+        stdout
+    );
     assert!(stdout.contains("14"), "Expected 14, got: {}", stdout);
     assert!(stdout.contains("21"), "Expected 21, got: {}", stdout);
 }
@@ -2601,9 +2716,17 @@ fn test_list_collection() {
     assert!(ok, "List test failed: {}", output);
     assert!(output.contains("3"), "Expected len 3, got: {}", output);
     assert!(output.contains("5"), "Expected get(0)=5, got: {}", output);
-    assert!(output.contains("1"), "Expected sort first=3→contains=1, got: {}", output);
+    assert!(
+        output.contains("1"),
+        "Expected sort first=3→contains=1, got: {}",
+        output
+    );
     assert!(output.contains("0"), "Expected not empty, got: {}", output);
-    assert!(output.contains("2"), "Expected len after remove=2, got: {}", output);
+    assert!(
+        output.contains("2"),
+        "Expected len after remove=2, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2624,7 +2747,11 @@ fn test_map_collection() {
     assert!(ok, "Map test failed: {}", output);
     assert!(output.contains("10"), "Expected get(x)=10, got: {}", output);
     assert!(output.contains("20"), "Expected get(y)=20, got: {}", output);
-    assert!(output.contains("99"), "Expected overwrite x=99, got: {}", output);
+    assert!(
+        output.contains("99"),
+        "Expected overwrite x=99, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2643,8 +2770,16 @@ fn test_set_collection() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Set test failed: {}", output);
-    assert!(output.contains("2"), "Expected deduped len=2, got: {}", output);
-    assert!(output.contains("0"), "Expected after remove, got: {}", output);
+    assert!(
+        output.contains("2"),
+        "Expected deduped len=2, got: {}",
+        output
+    );
+    assert!(
+        output.contains("0"),
+        "Expected after remove, got: {}",
+        output
+    );
 }
 
 // ==================== Phase 5: Generics, Traits, Multi-file ====================
@@ -2670,7 +2805,11 @@ fn main() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Generics test failed: {}", output);
-    assert!(output.contains("42"), "Expected identity 42, got: {}", output);
+    assert!(
+        output.contains("42"),
+        "Expected identity 42, got: {}",
+        output
+    );
     assert!(output.contains("20"), "Expected max 20, got: {}", output);
 }
 
@@ -2708,7 +2847,8 @@ fn test_multi_file_modules() {
         r#"fn double(x: i64) -> i64 {
     return x * 2
 }"#,
-    ).unwrap();
+    )
+    .unwrap();
     // Create main that uses the module
     fs::write(
         tmp.path().join("main.sbx"),
@@ -2718,7 +2858,8 @@ use math::double;
 fn main() {
     print(double(21))
 }"#,
-    ).unwrap();
+    )
+    .unwrap();
     let bin = sandbox_bin();
     let output = Command::new(&bin)
         .args(["run", tmp.path().join("main.sbx").to_str().unwrap()])
@@ -2726,7 +2867,11 @@ fn main() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "Multi-file test failed: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Multi-file test failed: {}",
+        stdout
+    );
     assert!(stdout.contains("42"), "Expected 42, got: {}", stdout);
 }
 
@@ -2755,7 +2900,11 @@ fn test_assert_eq_builtin() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "assert_eq failed: {}", output);
-    assert!(output.contains("passed"), "Expected passed, got: {}", output);
+    assert!(
+        output.contains("passed"),
+        "Expected passed, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2781,10 +2930,7 @@ fn run_with_vendored(pkg_name: &str, pkg_source: &str, main_source: &str) -> (St
     let tmp = TempDir::new().unwrap();
     let vendor = tmp.path().join(".sandbox").join("vendor").join(pkg_name);
     std::fs::create_dir_all(&vendor).unwrap();
-    std::fs::write(
-        vendor.join(format!("{}.sbx", pkg_name)),
-        pkg_source,
-    ).unwrap();
+    std::fs::write(vendor.join(format!("{}.sbx", pkg_name)), pkg_source).unwrap();
     std::fs::write(tmp.path().join("main.sbx"), main_source).unwrap();
 
     let bin = sandbox_bin();
@@ -2797,7 +2943,8 @@ fn run_with_vendored(pkg_name: &str, pkg_source: &str, main_source: &str) -> (St
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{}{}", stdout, stderr);
     // Strip compilation progress so tests see only program output
-    let filtered: String = combined.lines()
+    let filtered: String = combined
+        .lines()
         .filter(|l| !is_progress_line(l))
         .collect::<Vec<_>>()
         .join("\n");
@@ -2831,18 +2978,40 @@ fn main() {
     assert!(ok, "sandbox_crypto::hash_code failed: {}", output);
     // All three hash lines should be present
     let lines: Vec<&str> = output.lines().collect();
-    let hash_lines: Vec<&str> = lines.iter()
-        .filter(|l| !l.starts_with('[') && !l.starts_with("  ") && !l.contains("Compiling")
-            && !l.contains("Lexing") && !l.contains("Parsing") && !l.contains("Type checking")
-            && !l.contains("Generating") && !l.contains("Loaded") && !l.contains("FnDef")
-            && !l.contains("ModuleDef") && !l.contains("All checks") && !l.contains("lines of C"))
+    let hash_lines: Vec<&str> = lines
+        .iter()
+        .filter(|l| {
+            !l.starts_with('[')
+                && !l.starts_with("  ")
+                && !l.contains("Compiling")
+                && !l.contains("Lexing")
+                && !l.contains("Parsing")
+                && !l.contains("Type checking")
+                && !l.contains("Generating")
+                && !l.contains("Loaded")
+                && !l.contains("FnDef")
+                && !l.contains("ModuleDef")
+                && !l.contains("All checks")
+                && !l.contains("lines of C")
+        })
         .copied()
         .collect();
-    assert!(hash_lines.len() >= 3, "Expected 3 hash outputs, got {}: {:?}", hash_lines.len(), hash_lines);
+    assert!(
+        hash_lines.len() >= 3,
+        "Expected 3 hash outputs, got {}: {:?}",
+        hash_lines.len(),
+        hash_lines
+    );
     // Same input should produce same hash
-    assert_eq!(hash_lines[0], hash_lines[2], "Hash of 'hello' should be deterministic");
+    assert_eq!(
+        hash_lines[0], hash_lines[2],
+        "Hash of 'hello' should be deterministic"
+    );
     // Different inputs should (likely) produce different hashes
-    assert_ne!(hash_lines[0], hash_lines[1], "Different inputs should produce different hashes");
+    assert_ne!(
+        hash_lines[0], hash_lines[1],
+        "Different inputs should produce different hashes"
+    );
 }
 
 #[test]
@@ -2875,8 +3044,14 @@ fn main() {
 }"#;
     let (output, ok) = run_with_vendored("sandbox_crypto", pkg, main);
     assert!(ok, "sandbox_crypto::is_palindrome failed: {}", output);
-    assert!(output.contains("1"), "Expected racecar to be palindrome (1)");
-    assert!(output.contains("0"), "Expected hello to not be palindrome (0)");
+    assert!(
+        output.contains("1"),
+        "Expected racecar to be palindrome (1)"
+    );
+    assert!(
+        output.contains("0"),
+        "Expected hello to not be palindrome (0)"
+    );
 }
 
 #[test]
@@ -2901,8 +3076,16 @@ fn main() {
 }"#;
     let (output, ok) = run_with_vendored("sandbox_crypto", pkg, main);
     assert!(ok, "sandbox_crypto::rotate_string failed: {}", output);
-    assert!(output.contains("efabcd"), "Expected 'efabcd', got: {}", output);
-    assert!(output.contains("ohell"), "Expected 'ohell', got: {}", output);
+    assert!(
+        output.contains("efabcd"),
+        "Expected 'efabcd', got: {}",
+        output
+    );
+    assert!(
+        output.contains("ohell"),
+        "Expected 'ohell', got: {}",
+        output
+    );
 }
 
 #[test]
@@ -2935,12 +3118,16 @@ fn main() {
     assert!(ok, "sandbox_datetime::is_leap_year failed: {}", output);
     let lines: Vec<&str> = output.lines().collect();
     // Filter out compiler progress lines
-    let result_lines: Vec<&str> = lines.iter()
+    let result_lines: Vec<&str> = lines
+        .iter()
         .filter(|l| !l.starts_with('[') && !l.starts_with("  ") && l.len() <= 3)
         .copied()
         .collect();
-    assert_eq!(result_lines, vec!["1", "0", "1", "0"],
-        "Expected [1,0,1,0] for leap years 2024,2023,2000,1900");
+    assert_eq!(
+        result_lines,
+        vec!["1", "0", "1", "0"],
+        "Expected [1,0,1,0] for leap years 2024,2023,2000,1900"
+    );
 }
 
 #[test]
@@ -3087,7 +3274,10 @@ fn main() {
     assert!(ok, "sandbox_math_ext::factorial failed: {}", output);
     assert!(output.contains("1"), "Expected factorial(0) = 1");
     assert!(output.contains("120"), "Expected factorial(5) = 120");
-    assert!(output.contains("3628800"), "Expected factorial(10) = 3628800");
+    assert!(
+        output.contains("3628800"),
+        "Expected factorial(10) = 3628800"
+    );
 }
 
 #[test]
@@ -3391,26 +3581,48 @@ fn main() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "All four packages together failed: {}", stdout);
-    assert!(stdout.contains("261239035"), "Expected hash_code('hello') = 261239035");
-    assert!(stdout.contains("1"), "Expected is_palindrome('racecar') = true");
+    assert!(
+        output.status.success(),
+        "All four packages together failed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("261239035"),
+        "Expected hash_code('hello') = 261239035"
+    );
+    assert!(
+        stdout.contains("1"),
+        "Expected is_palindrome('racecar') = true"
+    );
     assert!(stdout.contains("29"), "Expected days_in_month(2,2024) = 29");
     assert!(stdout.contains("120"), "Expected factorial(5) = 120");
-    assert!(stdout.contains("3"), "Expected count_char('banana','a') = 3");
+    assert!(
+        stdout.contains("3"),
+        "Expected count_char('banana','a') = 3"
+    );
 }
 
 #[test]
 fn test_pkg_verify_command_exists() {
     // Verify the pkg verify subcommand is available in help output
     let bin = sandbox_bin();
-    let output = Command::new(&bin)
-        .args(["pkg", "--help"])
-        .output()
-        .unwrap();
+    let output = Command::new(&bin).args(["pkg", "--help"]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(stdout.contains("verify"), "'sandbox pkg verify' should exist in help: {}", stdout);
-    assert!(stdout.contains("keygen"), "'sandbox pkg keygen' should exist in help: {}", stdout);
-    assert!(stdout.contains("keys"), "'sandbox pkg keys' should exist in help: {}", stdout);
+    assert!(
+        stdout.contains("verify"),
+        "'sandbox pkg verify' should exist in help: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("keygen"),
+        "'sandbox pkg keygen' should exist in help: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("keys"),
+        "'sandbox pkg keys' should exist in help: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3422,8 +3634,11 @@ fn test_install_help_shows_require_signatures() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(stdout.contains("require-signatures"),
-        "'--require-signatures' should appear in install help: {}", stdout);
+    assert!(
+        stdout.contains("require-signatures"),
+        "'--require-signatures' should appear in install help: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3438,7 +3653,8 @@ description = "test"
 
 [dependencies]
 "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -3448,9 +3664,21 @@ description = "test"
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(output.status.success(), "tree failed: {}", stdout);
-    assert!(stdout.contains("myapp"), "Should show package name: {}", stdout);
-    assert!(stdout.contains("2.0.0"), "Should show package version: {}", stdout);
-    assert!(stdout.contains("no dependencies"), "Should show no-deps message: {}", stdout);
+    assert!(
+        stdout.contains("myapp"),
+        "Should show package name: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("2.0.0"),
+        "Should show package version: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("no dependencies"),
+        "Should show no-deps message: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3465,7 +3693,8 @@ description = "test"
 
 [dependencies]
 "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
@@ -3476,8 +3705,11 @@ description = "test"
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(output.status.success(), "tree failed: {}", stdout);
     // Lock info line should be absent when no .sandbox/lock.toml exists
-    assert!(!stdout.contains("package(s) installed"),
-        "Should not show lock info without lock file: {}", stdout);
+    assert!(
+        !stdout.contains("package(s) installed"),
+        "Should not show lock info without lock file: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3498,7 +3730,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Failed to compile: {}", output);
-    assert!(output.contains("1"), "10 % 2 == 0 should be true: {}", output);
+    assert!(
+        output.contains("1"),
+        "10 % 2 == 0 should be true: {}",
+        output
+    );
     assert!(output.contains("7"), "1 + 2 * 3 should be 7: {}", output);
 }
 
@@ -3541,8 +3777,16 @@ fn main() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Failed to compile: {}", output);
     // The compilation log contains extra lines, so check individual values
-    assert!(output.contains("\n1\n"), "true && true should be true: {}", output);
-    assert!(output.contains("\n0\n"), "false values should be 0: {}", output);
+    assert!(
+        output.contains("\n1\n"),
+        "true && true should be true: {}",
+        output
+    );
+    assert!(
+        output.contains("\n0\n"),
+        "false values should be 0: {}",
+        output
+    );
 }
 
 #[test]
@@ -3569,10 +3813,26 @@ test fn multiplication {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(output.status.success(), "sandbox test failed: {}", stdout);
-    assert!(stdout.contains("addition"), "Should show test name: {}", stdout);
-    assert!(stdout.contains("multiplication"), "Should show test name: {}", stdout);
-    assert!(stdout.contains("passed"), "Should show pass count: {}", stdout);
-    assert!(stdout.contains("0.0ms") || stdout.contains("ms"), "Should show timing: {}", stdout);
+    assert!(
+        stdout.contains("addition"),
+        "Should show test name: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("multiplication"),
+        "Should show test name: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("passed"),
+        "Should show pass count: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("0.0ms") || stdout.contains("ms"),
+        "Should show timing: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3606,10 +3866,26 @@ test fn another_pass {
     // Should NOT succeed (has a failing test)
     assert!(!output.status.success(), "Should fail with failing test");
     // The passing test should still show as passed
-    assert!(stdout.contains("pass_test"), "Passing test should still run: {}", stdout);
-    assert!(stdout.contains("another_pass"), "Tests after failure should still run: {}", stdout);
-    assert!(stdout.contains("1 failed"), "Should report 1 failed: {}", stdout);
-    assert!(stdout.contains("2 passed"), "Should report 2 passed: {}", stdout);
+    assert!(
+        stdout.contains("pass_test"),
+        "Passing test should still run: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("another_pass"),
+        "Tests after failure should still run: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1 failed"),
+        "Should report 1 failed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("2 passed"),
+        "Should report 2 passed: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3629,9 +3905,16 @@ fn main() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "Should succeed with no tests: {}", stdout);
-    assert!(stdout.contains("No test functions found") || stdout.contains("no test"),
-        "Should indicate no tests found: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Should succeed with no tests: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("No test functions found") || stdout.contains("no test"),
+        "Should indicate no tests found: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -3674,8 +3957,16 @@ fn main() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Multiple generic calls failed: {}", output);
     let lines: Vec<&str> = output.trim().lines().collect();
-    assert!(lines.iter().any(|l| l.trim() == "100"), "Expected 100, got: {}", output);
-    assert!(lines.iter().any(|l| l.trim() == "200"), "Expected 200, got: {}", output);
+    assert!(
+        lines.iter().any(|l| l.trim() == "100"),
+        "Expected 100, got: {}",
+        output
+    );
+    assert!(
+        lines.iter().any(|l| l.trim() == "200"),
+        "Expected 200, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -3688,7 +3979,11 @@ fn main() {
     print(42)
 }"#;
     let (output, ok) = compile_and_run(source);
-    assert!(ok, "Unused generic function should not cause errors: {}", output);
+    assert!(
+        ok,
+        "Unused generic function should not cause errors: {}",
+        output
+    );
     assert!(output.contains("42"), "Expected 42, got: {}", output);
 }
 
@@ -3756,8 +4051,16 @@ fn main() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Generic struct same type test failed: {}", output);
     let lines: Vec<&str> = output.trim().lines().collect();
-    assert!(lines.iter().any(|l| l.trim() == "100"), "Expected 100, got: {}", output);
-    assert!(lines.iter().any(|l| l.trim() == "200"), "Expected 200, got: {}", output);
+    assert!(
+        lines.iter().any(|l| l.trim() == "100"),
+        "Expected 100, got: {}",
+        output
+    );
+    assert!(
+        lines.iter().any(|l| l.trim() == "200"),
+        "Expected 200, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -3806,10 +4109,13 @@ fn main() {
     print(42)
 }"#;
     let (output, ok) = compile_and_run(source);
-    assert!(ok, "Unused generic struct should not cause errors: {}", output);
+    assert!(
+        ok,
+        "Unused generic struct should not cause errors: {}",
+        output
+    );
     assert!(output.contains("42"), "Expected 42, got: {}", output);
 }
-
 
 #[test]
 fn test_sandbox_test_command_filter() {
@@ -3847,8 +4153,16 @@ test fn test_div {
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(output.status.success(), "All tests should pass: {}", stdout);
-    assert!(stdout.contains("running 4 test(s)"), "Should run 4 tests: {}", stdout);
-    assert!(stdout.contains("4 passed"), "Should report 4 passed: {}", stdout);
+    assert!(
+        stdout.contains("running 4 test(s)"),
+        "Should run 4 tests: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("4 passed"),
+        "Should report 4 passed: {}",
+        stdout
+    );
 
     // Test 2: Filter by "sub" - only test_sub runs
     let output = Command::new(&bin)
@@ -3856,12 +4170,32 @@ test fn test_div {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "Filtered test should pass: {}", stdout);
-    assert!(stdout.contains("running 1 test(s)"), "Should run 1 test: {}", stdout);
-    assert!(stdout.contains("test_sub"), "Should run test_sub: {}", stdout);
+    assert!(
+        output.status.success(),
+        "Filtered test should pass: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("running 1 test(s)"),
+        "Should run 1 test: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("test_sub"),
+        "Should run test_sub: {}",
+        stdout
+    );
     // Note: test names also appear in typechecker output, so we don't assert their absence.
-    assert!(stdout.contains("1 passed"), "Should report 1 passed: {}", stdout);
-    assert!(stdout.contains("3 skipped"), "Should report 3 skipped: {}", stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "Should report 1 passed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("3 skipped"),
+        "Should report 3 skipped: {}",
+        stdout
+    );
     // Note: test names also appear in typechecker output, so we can't assert they're absent from stdout entirely.
     // Instead verify only test_sub was executed (has a checkmark ✓ or ✗ line in test runner output).
 
@@ -3871,9 +4205,21 @@ test fn test_div {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "All filtered tests should pass: {}", stdout);
-    assert!(stdout.contains("running 4 test(s)"), "Should run 4 tests: {}", stdout);
-    assert!(stdout.contains("4 passed"), "Should report 4 passed: {}", stdout);
+    assert!(
+        output.status.success(),
+        "All filtered tests should pass: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("running 4 test(s)"),
+        "Should run 4 tests: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("4 passed"),
+        "Should report 4 passed: {}",
+        stdout
+    );
 
     // Test 4: Filter by "xyz" - no tests run
     let output = Command::new(&bin)
@@ -3881,11 +4227,22 @@ test fn test_div {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "No matches should still succeed: {}", stdout);
-    assert!(stdout.contains("running 0 test(s)"), "Should run 0 tests: {}", stdout);
-    assert!(stdout.contains("0 passed"), "Should report 0 passed: {}", stdout);
+    assert!(
+        output.status.success(),
+        "No matches should still succeed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("running 0 test(s)"),
+        "Should run 0 tests: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("0 passed"),
+        "Should report 0 passed: {}",
+        stdout
+    );
 }
-
 
 #[test]
 fn test_generic_type_in_fn_signature() {
@@ -3944,7 +4301,6 @@ fn main() {
     assert!(output.contains("3"), "Expected 3, got: {}", output);
 }
 
-
 #[test]
 fn test_llvm_generic_struct() {
     let source = r#"struct Pair<T> {
@@ -3968,18 +4324,43 @@ fn main() {
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
-        .args(["llvm", sbx_path.to_str().unwrap(), "-o", ll_path.to_str().unwrap()])
+        .args([
+            "llvm",
+            sbx_path.to_str().unwrap(),
+            "-o",
+            ll_path.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "LLVM generation failed: {}", stdout);
+    assert!(
+        output.status.success(),
+        "LLVM generation failed: {}",
+        stdout
+    );
     assert!(ll_path.exists(), ".ll file not created");
 
     let ll = fs::read_to_string(&ll_path).unwrap();
-    assert!(ll.contains("%Pair_i64 = type"), "Missing monomorphized struct typedef: {}", ll);
-    assert!(ll.contains("@make_pair"), "Missing make_pair function: {}", ll);
-    assert!(ll.contains("alloca %Pair_i64"), "Missing alloca for Pair_i64: {}", ll);
-    assert!(ll.contains("getelementptr %Pair_i64"), "Missing GEP for Pair_i64: {}", ll);
+    assert!(
+        ll.contains("%Pair_i64 = type"),
+        "Missing monomorphized struct typedef: {}",
+        ll
+    );
+    assert!(
+        ll.contains("@make_pair"),
+        "Missing make_pair function: {}",
+        ll
+    );
+    assert!(
+        ll.contains("alloca %Pair_i64"),
+        "Missing alloca for Pair_i64: {}",
+        ll
+    );
+    assert!(
+        ll.contains("getelementptr %Pair_i64"),
+        "Missing GEP for Pair_i64: {}",
+        ll
+    );
 }
 
 #[test]
@@ -4008,17 +4389,33 @@ fn main() {
 
     let bin = sandbox_bin();
     let output = Command::new(&bin)
-        .args(["llvm", sbx_path.to_str().unwrap(), "-o", ll_path.to_str().unwrap()])
+        .args([
+            "llvm",
+            sbx_path.to_str().unwrap(),
+            "-o",
+            ll_path.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(output.status.success(), "LLVM generation failed: {}", stdout);
+    assert!(
+        output.status.success(),
+        "LLVM generation failed: {}",
+        stdout
+    );
 
     let ll = fs::read_to_string(&ll_path).unwrap();
-    assert!(ll.contains("%Pair_i64 = type"), "Missing Pair_i64 typedef: {}", ll);
-    assert!(ll.contains("%Triple_i64 = type"), "Missing Triple_i64 typedef: {}", ll);
+    assert!(
+        ll.contains("%Pair_i64 = type"),
+        "Missing Pair_i64 typedef: {}",
+        ll
+    );
+    assert!(
+        ll.contains("%Triple_i64 = type"),
+        "Missing Triple_i64 typedef: {}",
+        ll
+    );
 }
-
 
 #[test]
 fn test_generic_struct_two_type_params() {
@@ -4082,7 +4479,6 @@ fn main() {
     assert!(output.contains("10"), "Expected 10, got: {}", output);
 }
 
-
 #[test]
 fn test_generic_enum_basic() {
     let source = r#"enum Maybe<T> {
@@ -4126,7 +4522,11 @@ fn main() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Generic enum empty case failed: {}", output);
-    assert!(output.contains("empty"), "Expected 'empty', got: {}", output);
+    assert!(
+        output.contains("empty"),
+        "Expected 'empty', got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4170,8 +4570,16 @@ fn main() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Match guard basic failed: {}", output);
     assert!(output.contains("0"), "Expected 0 for zero, got: {}", output);
-    assert!(output.contains("1"), "Expected 1 for positive, got: {}", output);
-    assert!(output.contains("2"), "Expected 2 for negative, got: {}", output);
+    assert!(
+        output.contains("1"),
+        "Expected 1 for positive, got: {}",
+        output
+    );
+    assert!(
+        output.contains("2"),
+        "Expected 2 for negative, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4191,9 +4599,21 @@ fn main() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Match guard with binding failed: {}", output);
-    assert!(output.contains("5"), "Expected 5 for abs(-5), got: {}", output);
-    assert!(output.contains("3"), "Expected 3 for abs(3), got: {}", output);
-    assert!(output.contains("0"), "Expected 0 for abs(0), got: {}", output);
+    assert!(
+        output.contains("5"),
+        "Expected 5 for abs(-5), got: {}",
+        output
+    );
+    assert!(
+        output.contains("3"),
+        "Expected 3 for abs(3), got: {}",
+        output
+    );
+    assert!(
+        output.contains("0"),
+        "Expected 0 for abs(0), got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4222,8 +4642,16 @@ fn main() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Match guard enum failed: {}", output);
-    assert!(output.contains("2"), "Expected 2 for Val(42), got: {}", output);
-    assert!(output.contains("1"), "Expected 1 for Val(200), got: {}", output);
+    assert!(
+        output.contains("2"),
+        "Expected 2 for Val(42), got: {}",
+        output
+    );
+    assert!(
+        output.contains("1"),
+        "Expected 1 for Val(200), got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4243,9 +4671,21 @@ fn main() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "Match string literal failed: {}", output);
-    assert!(output.contains("Hello, Alice!"), "Expected greeting for Alice, got: {}", output);
-    assert!(output.contains("Hello, Bob!"), "Expected greeting for Bob, got: {}", output);
-    assert!(output.contains("Hello, stranger!"), "Expected greeting for stranger, got: {}", output);
+    assert!(
+        output.contains("Hello, Alice!"),
+        "Expected greeting for Alice, got: {}",
+        output
+    );
+    assert!(
+        output.contains("Hello, Bob!"),
+        "Expected greeting for Bob, got: {}",
+        output
+    );
+    assert!(
+        output.contains("Hello, stranger!"),
+        "Expected greeting for stranger, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4269,8 +4709,16 @@ fn main() {
     assert!(ok, "Match string literal int result failed: {}", output);
     assert!(output.contains("0"), "Expected 0 for quit, got: {}", output);
     assert!(output.contains("1"), "Expected 1 for help, got: {}", output);
-    assert!(output.contains("2"), "Expected 2 for start, got: {}", output);
-    assert!(output.contains("-1"), "Expected -1 for unknown, got: {}", output);
+    assert!(
+        output.contains("2"),
+        "Expected 2 for start, got: {}",
+        output
+    );
+    assert!(
+        output.contains("-1"),
+        "Expected -1 for unknown, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4289,7 +4737,11 @@ fn test_break_while() {
     assert!(ok, "break while failed: {}", output);
     assert!(output.contains("0"), "Expected 0, got: {}", output);
     assert!(output.contains("4"), "Expected 4, got: {}", output);
-    assert!(!output.contains("5"), "Should not contain 5, got: {}", output);
+    assert!(
+        !output.contains("5"),
+        "Should not contain 5, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4309,7 +4761,11 @@ fn test_continue_while() {
     assert!(output.contains("1"), "Expected 1, got: {}", output);
     assert!(output.contains("3"), "Expected 3, got: {}", output);
     assert!(output.contains("9"), "Expected 9, got: {}", output);
-    assert!(!output.contains("\n2\n"), "Should not contain 2 as output, got: {}", output);
+    assert!(
+        !output.contains("\n2\n"),
+        "Should not contain 2 as output, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4326,7 +4782,11 @@ fn test_break_for() {
     assert!(ok, "break for failed: {}", output);
     assert!(output.contains("0"), "Expected 0, got: {}", output);
     assert!(output.contains("4"), "Expected 4, got: {}", output);
-    assert!(!output.contains("5"), "Should not contain 5, got: {}", output);
+    assert!(
+        !output.contains("5"),
+        "Should not contain 5, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4344,8 +4804,16 @@ fn test_continue_for() {
     assert!(output.contains("1"), "Expected 1, got: {}", output);
     assert!(output.contains("3"), "Expected 3, got: {}", output);
     assert!(output.contains("9"), "Expected 9, got: {}", output);
-    assert!(!output.contains("\n0\n"), "Should not contain 0 as output, got: {}", output);
-    assert!(!output.contains("\n2\n"), "Should not contain 2 as output, got: {}", output);
+    assert!(
+        !output.contains("\n0\n"),
+        "Should not contain 0 as output, got: {}",
+        output
+    );
+    assert!(
+        !output.contains("\n2\n"),
+        "Should not contain 2 as output, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4422,7 +4890,11 @@ fn test_else_if_basic() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "else-if basic failed: {}", output);
     assert!(output.contains("2"), "Expected 2, got: {}", output);
-    assert!(!output.contains("\n1\n"), "Should not contain 1, got: {}", output);
+    assert!(
+        !output.contains("\n1\n"),
+        "Should not contain 1, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4490,7 +4962,11 @@ fn test_else_if_single_branch() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "else-if single branch failed: {}", output);
     assert!(output.contains("third"), "Expected third, got: {}", output);
-    assert!(!output.contains("duplicate"), "Should not contain duplicate, got: {}", output);
+    assert!(
+        !output.contains("duplicate"),
+        "Should not contain duplicate, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4517,7 +4993,11 @@ fn test_str_concat_literals() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str concat literals failed: {}", output);
-    assert!(output.contains("foobar"), "Expected foobar, got: {}", output);
+    assert!(
+        output.contains("foobar"),
+        "Expected foobar, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4529,7 +5009,11 @@ fn test_str_concat_variables() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str concat variables failed: {}", output);
-    assert!(output.contains("hello world"), "Expected 'hello world', got: {}", output);
+    assert!(
+        output.contains("hello world"),
+        "Expected 'hello world', got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4550,7 +5034,11 @@ fn test_str_concat_mixed() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str concat mixed failed: {}", output);
-    assert!(output.contains("hello world"), "Expected 'hello world', got: {}", output);
+    assert!(
+        output.contains("hello world"),
+        "Expected 'hello world', got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4605,7 +5093,11 @@ fn test_str_eq_different() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str eq different failed: {}", output);
-    assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
+    assert!(
+        output.contains("not equal"),
+        "Expected not equal, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4621,7 +5113,11 @@ fn test_str_eq_concat() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str eq concat failed: {}", output);
-    assert!(output.contains("equal"), "Expected equal (strcmp), got: {}", output);
+    assert!(
+        output.contains("equal"),
+        "Expected equal (strcmp), got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4637,7 +5133,11 @@ fn test_str_neq() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str neq failed: {}", output);
-    assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
+    assert!(
+        output.contains("not equal"),
+        "Expected not equal, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4653,7 +5153,11 @@ fn test_str_eq_empty() {
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str eq empty failed: {}", output);
     assert!(output.contains("equal"), "Expected equal, got: {}", output);
-    assert!(output.contains("not equal"), "Expected not equal, got: {}", output);
+    assert!(
+        output.contains("not equal"),
+        "Expected not equal, got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4850,8 +5354,16 @@ fn test_str_ordering_variables() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "str ordering variables failed: {}", output);
-    assert!(output.contains("apple < banana"), "Expected 'apple < banana', got: {}", output);
-    assert!(output.contains("banana > apple"), "Expected 'banana > apple', got: {}", output);
+    assert!(
+        output.contains("apple < banana"),
+        "Expected 'apple < banana', got: {}",
+        output
+    );
+    assert!(
+        output.contains("banana > apple"),
+        "Expected 'banana > apple', got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4892,7 +5404,11 @@ fn test_for_string_empty() {
 }"#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "for string empty failed: {}", output);
-    assert!(!output.contains("999"), "Should not print 999, got: {}", output);
+    assert!(
+        !output.contains("999"),
+        "Should not print 999, got: {}",
+        output
+    );
     assert!(output.contains("done"), "Expected done, got: {}", output);
 }
 
@@ -4924,7 +5440,11 @@ fn test_for_string_break() {
     assert!(ok, "for string break failed: {}", output);
     assert!(output.contains("104"), "Expected 104 (h), got: {}", output);
     assert!(output.contains("101"), "Expected 101 (e), got: {}", output);
-    assert!(!output.contains("108"), "Should not contain 108 (l), got: {}", output);
+    assert!(
+        !output.contains("108"),
+        "Should not contain 108 (l), got: {}",
+        output
+    );
 }
 
 #[test]
@@ -4953,7 +5473,11 @@ fn main() {
 "#;
     let (output, ok) = compile_and_run(source);
     assert!(ok, "interpreter string concat failed: {}", output);
-    assert!(output.contains("hello world"), "Expected 'hello world', got: {}", output);
+    assert!(
+        output.contains("hello world"),
+        "Expected 'hello world', got: {}",
+        output
+    );
     assert!(output.contains("11"), "Expected 11, got: {}", output);
 }
 

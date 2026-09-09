@@ -29,9 +29,7 @@ fn dirs() -> PathBuf {
 pub fn get_api_key() -> Result<String> {
     let config_path = config_path();
     if !config_path.exists() {
-        return Err(anyhow!(
-            "Not logged in. Run `sandbox pkg login` first."
-        ));
+        return Err(anyhow!("Not logged in. Run `sandbox pkg login` first."));
     }
     let content = fs::read_to_string(&config_path)?;
     let config: HashMap<String, String> = toml::from_str(&content)?;
@@ -99,11 +97,7 @@ fn http_get(url: &str) -> Result<String> {
         return Err(anyhow!("HTTP {}: registry returned error", status));
     }
 
-    let body = resp
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let body = resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
 
     Ok(body)
 }
@@ -152,11 +146,7 @@ fn http_post_json(url: &str, body: &str, api_key: Option<&str>) -> Result<(u16, 
     stream.read_to_end(&mut buf)?;
     let resp = String::from_utf8_lossy(&buf);
 
-    let status_line = resp
-        .lines()
-        .next()
-        .unwrap_or("HTTP/1.1 000")
-        .to_string();
+    let status_line = resp.lines().next().unwrap_or("HTTP/1.1 000").to_string();
     let status_code = status_line
         .split_whitespace()
         .nth(1)
@@ -164,17 +154,20 @@ fn http_post_json(url: &str, body: &str, api_key: Option<&str>) -> Result<(u16, 
         .parse::<u16>()
         .unwrap_or(0);
 
-    let resp_body = resp
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let resp_body = resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
 
     Ok((status_code, resp_body))
 }
 
 /// Multipart POST for publishing packages
-fn http_post_multipart(url: &str, fields: &HashMap<String, String>, file_field: &str, file_data: &[u8], file_name: &str, api_key: &str) -> Result<(u16, String)> {
+fn http_post_multipart(
+    url: &str,
+    fields: &HashMap<String, String>,
+    file_field: &str,
+    file_data: &[u8],
+    file_name: &str,
+    api_key: &str,
+) -> Result<(u16, String)> {
     let boundary = format!("----SandboxBoundary{:x}", rand::random::<u64>());
 
     let mut body = Vec::new();
@@ -182,7 +175,11 @@ fn http_post_multipart(url: &str, fields: &HashMap<String, String>, file_field: 
     // Add text fields
     for (name, value) in fields {
         write!(body, "--{}\r\n", boundary)?;
-        write!(body, "Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name)?;
+        write!(
+            body,
+            "Content-Disposition: form-data; name=\"{}\"\r\n\r\n",
+            name
+        )?;
         write!(body, "{}\r\n", value)?;
     }
 
@@ -243,11 +240,7 @@ fn http_post_multipart(url: &str, fields: &HashMap<String, String>, file_field: 
         .parse::<u16>()
         .unwrap_or(0);
 
-    let resp_body = resp
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let resp_body = resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
 
     Ok((status_code, resp_body))
 }
@@ -313,7 +306,12 @@ pub fn download_package_bytes(name: &str, version: &str) -> Result<Vec<u8>> {
         .unwrap_or("000");
 
     if status != "200" {
-        return Err(anyhow!("HTTP {}: failed to download {} v{}", status, name, version));
+        return Err(anyhow!(
+            "HTTP {}: failed to download {} v{}",
+            status,
+            name,
+            version
+        ));
     }
 
     // Split headers and body (binary)
@@ -382,24 +380,21 @@ pub fn resolve_version(name: &str, specifier: &str) -> Result<String> {
         ("^", specifier)
     };
 
-    let ver_parts: Vec<u32> = ver_str
-        .split('.')
-        .filter_map(|p| p.parse().ok())
-        .collect();
+    let ver_parts: Vec<u32> = ver_str.split('.').filter_map(|p| p.parse().ok()).collect();
 
     let matches = |v: &str| -> bool {
         let v_parts: Vec<u32> = v.split('.').filter_map(|p| p.parse().ok()).collect();
         match op {
             "^" => {
                 // Compatible: same major, >= minor.patch
-                if v_parts.get(0) != ver_parts.get(0) {
+                if v_parts.first() != ver_parts.first() {
                     return false;
                 }
                 v_parts >= ver_parts
             }
             "~" => {
                 // Approximate: same major.minor, >= patch
-                if v_parts.get(0) != ver_parts.get(0) {
+                if v_parts.first() != ver_parts.first() {
                     return false;
                 }
                 if ver_parts.len() > 1 && v_parts.get(1) != ver_parts.get(1) {
@@ -452,12 +447,20 @@ pub fn pkg_login() -> Result<()> {
 
     if status == 200 {
         let resp: serde_json::Value = serde_json::from_str(&body)?;
-        let api_key = resp["api_key"].as_str().ok_or_else(|| anyhow!("Invalid response"))?;
+        let api_key = resp["api_key"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid response"))?;
         save_api_key(api_key)?;
-        println!("✅ Logged in as {}", resp["username"].as_str().unwrap_or(&username));
+        println!(
+            "✅ Logged in as {}",
+            resp["username"].as_str().unwrap_or(&username)
+        );
     } else {
         let resp: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-        let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("Login failed");
+        let msg = resp
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Login failed");
         println!("❌ Login failed: {}", msg);
     }
 
@@ -498,12 +501,17 @@ pub fn pkg_register() -> Result<()> {
 
     if status == 200 {
         let resp: serde_json::Value = serde_json::from_str(&body)?;
-        let api_key = resp["api_key"].as_str().ok_or_else(|| anyhow!("Invalid response"))?;
+        let api_key = resp["api_key"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid response"))?;
         save_api_key(api_key)?;
         println!("✅ Account created! Logged in as {}", username);
     } else {
         let resp: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-        let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("Registration failed");
+        let msg = resp
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Registration failed");
         println!("❌ Registration failed: {}", msg);
     }
 
@@ -516,8 +524,8 @@ pub fn pkg_publish(file_path: &str) -> Result<()> {
 
     println!("📦 Publishing package...");
 
-    let content = fs::read(file_path)
-        .map_err(|e| anyhow!("Failed to read {}: {}", file_path, e))?;
+    let content =
+        fs::read(file_path).map_err(|e| anyhow!("Failed to read {}: {}", file_path, e))?;
 
     // Try to parse the file for metadata
     // For now, require sandbox.toml for metadata
@@ -533,18 +541,26 @@ pub fn pkg_publish(file_path: &str) -> Result<()> {
     fields.insert("name".to_string(), config.package.name.clone());
     fields.insert("version".to_string(), config.package.version.clone());
     if !config.package.description.is_empty() {
-        fields.insert("description".to_string(), config.package.description.clone());
+        fields.insert(
+            "description".to_string(),
+            config.package.description.clone(),
+        );
     }
     // Send dependencies as a JSON array
     if !config.dependencies.is_empty() {
-        let deps_array: Vec<serde_json::Value> = config.dependencies.iter()
+        let deps_array: Vec<serde_json::Value> = config
+            .dependencies
+            .iter()
             .map(|(name, spec)| serde_json::json!({ "name": name, "spec": spec }))
             .collect();
-        fields.insert("deps".to_string(), serde_json::to_string(&deps_array).unwrap_or_default());
+        fields.insert(
+            "deps".to_string(),
+            serde_json::to_string(&deps_array).unwrap_or_default(),
+        );
     }
 
     // Compute checksum first (server verifies signature against this)
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(&content);
     let checksum = format!("sha256:{}", hex::encode(hasher.finalize()));
@@ -572,15 +588,25 @@ pub fn pkg_publish(file_path: &str) -> Result<()> {
     let registry = registry_url();
     let url = format!("{}/api/v1/packages", registry);
 
-    let (status, body) = http_post_multipart(&url, &fields, "content", &content, &file_name, &api_key)?;
+    let (status, body) =
+        http_post_multipart(&url, &fields, "content", &content, &file_name, &api_key)?;
 
     if status == 200 || status == 201 {
         let resp: serde_json::Value = serde_json::from_str(&body)?;
-        println!("✅ Published {} v{}", config.package.name, config.package.version);
-        println!("   Checksum: {}", resp["checksum"].as_str().unwrap_or("unknown"));
+        println!(
+            "✅ Published {} v{}",
+            config.package.name, config.package.version
+        );
+        println!(
+            "   Checksum: {}",
+            resp["checksum"].as_str().unwrap_or("unknown")
+        );
     } else {
         let resp: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-        let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("Publish failed");
+        let msg = resp
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Publish failed");
         println!("❌ Publish failed (HTTP {}): {}", status, msg);
     }
 
@@ -612,7 +638,11 @@ pub fn pkg_search(query: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!("📦 {} package{} found:\n", packages.len(), if packages.len() == 1 { "" } else { "s" });
+    println!(
+        "📦 {} package{} found:\n",
+        packages.len(),
+        if packages.len() == 1 { "" } else { "s" }
+    );
     for pkg in packages {
         let name = pkg["name"].as_str().unwrap_or("?");
         let version = pkg["latest_version"].as_str().unwrap_or("?");
@@ -650,8 +680,12 @@ pub fn pkg_info(name: &str) -> Result<()> {
         let signed = v.get("signature").and_then(|s| s.as_str()).is_some();
         let signer = v.get("signed_by").and_then(|s| s.as_str()).unwrap_or("");
         let mut suffix = String::new();
-        if yanked { suffix.push_str(" (yanked)"); }
-        if signed { suffix.push_str(&format!(" 🔏 signed by {}", signer)); }
+        if yanked {
+            suffix.push_str(" (yanked)");
+        }
+        if signed {
+            suffix.push_str(&format!(" 🔏 signed by {}", signer));
+        }
         println!("     v{}{}", ver, suffix);
     }
 
@@ -714,9 +748,12 @@ fn main() {{
     fs::write("src/main.sbx", &main_sbx)?;
 
     // Write .gitignore
-    fs::write(".gitignore", ".sandbox/
+    fs::write(
+        ".gitignore",
+        ".sandbox/
 *.sb
-")?;
+",
+    )?;
 
     println!("✅ Created sandbox.toml");
     println!("✅ Created src/main.sbx");
@@ -732,7 +769,6 @@ fn main() {{
 }
 
 /// ── Key Management & Signing ──
-
 /// Path to the keys directory (~/.sandbox/keys/)
 fn keys_dir() -> PathBuf {
     dirs().join("keys")
@@ -740,7 +776,7 @@ fn keys_dir() -> PathBuf {
 
 /// `sandbox pkg keygen` — generate an ed25519 keypair.
 pub fn pkg_keygen() -> Result<()> {
-    use ed25519_dalek::{SigningKey};
+    use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 
     let signing_key = SigningKey::generate(&mut OsRng);
@@ -773,18 +809,23 @@ pub fn pkg_keygen() -> Result<()> {
 /// Read the private key from disk.
 fn read_private_key() -> Result<ed25519_dalek::SigningKey> {
     let path = keys_dir().join("private.key");
-    let hex_key = fs::read_to_string(&path)
-        .map_err(|_| anyhow!("No private key found at {}. Run `sandbox pkg keygen` first.", path.display()))?;
-    let bytes = hex::decode(hex_key.trim())
-        .map_err(|e| anyhow!("Invalid private key format: {}", e))?;
-    let arr: [u8; 32] = bytes.try_into()
+    let hex_key = fs::read_to_string(&path).map_err(|_| {
+        anyhow!(
+            "No private key found at {}. Run `sandbox pkg keygen` first.",
+            path.display()
+        )
+    })?;
+    let bytes =
+        hex::decode(hex_key.trim()).map_err(|e| anyhow!("Invalid private key format: {}", e))?;
+    let arr: [u8; 32] = bytes
+        .try_into()
         .map_err(|_| anyhow!("Private key must be 32 bytes"))?;
     Ok(ed25519_dalek::SigningKey::from_bytes(&arr))
 }
 
 /// Sign a message with the private key, return hex-encoded signature.
 pub fn sign_bytes(data: &[u8]) -> Result<String> {
-    use ed25519_dalek::{Signer};
+    use ed25519_dalek::Signer;
     let signing_key = read_private_key()?;
     let signature = signing_key.sign(data);
     Ok(hex::encode(signature.to_bytes()))
@@ -795,8 +836,12 @@ pub fn pkg_keys_register() -> Result<()> {
     let api_key = get_api_key()?;
 
     let public_key_path = keys_dir().join("public.key");
-    let public_hex = fs::read_to_string(&public_key_path)
-        .map_err(|_| anyhow!("No public key found at {}. Run `sandbox pkg keygen` first.", public_key_path.display()))?;
+    let public_hex = fs::read_to_string(&public_key_path).map_err(|_| {
+        anyhow!(
+            "No public key found at {}. Run `sandbox pkg keygen` first.",
+            public_key_path.display()
+        )
+    })?;
     let public_hex = public_hex.trim().to_string();
 
     let registry = registry_url();
@@ -807,10 +852,17 @@ pub fn pkg_keys_register() -> Result<()> {
 
     if status == 200 {
         println!("✅ Public key registered successfully");
-        println!("   Key: {}...{}", &public_hex[..8], &public_hex[public_hex.len()-8..]);
+        println!(
+            "   Key: {}...{}",
+            &public_hex[..8],
+            &public_hex[public_hex.len() - 8..]
+        );
     } else {
         let resp: serde_json::Value = serde_json::from_str(&resp_body).unwrap_or_default();
-        let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("Key registration failed");
+        let msg = resp
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("Key registration failed");
         println!("❌ Key registration failed (HTTP {}): {}", status, msg);
     }
 
@@ -860,21 +912,6 @@ pub fn pkg_verify(name: &str, version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Fetch the manifest (sandbox.toml) for a specific package version from the registry.
-pub fn fetch_package_manifest(name: &str, version: &str) -> Result<Option<String>> {
-    // The manifest is embedded in the package content.
-    // For now, we fetch the package info which includes a description.
-    // A proper implementation would fetch the manifest separately.
-    let info = fetch_package_info(name)?;
-    let default_versions = vec![];
-    let versions = info["versions"].as_array().unwrap_or(&default_versions);
-    let version_info = versions.iter().find(|v| v["version"].as_str() == Some(version));
-    match version_info {
-        Some(v) => Ok(v["description"].as_str().map(|s| s.to_string())),
-        None => Ok(None),
-    }
-}
-
 /// Fetch the declared dependencies of a specific package version from the registry.
 /// Returns a list of (dep_name, dep_spec) pairs.
 pub fn fetch_package_deps(name: &str, version: &str) -> Result<Vec<(String, String)>> {
@@ -884,8 +921,13 @@ pub fn fetch_package_deps(name: &str, version: &str) -> Result<Vec<(String, Stri
     let val: serde_json::Value = serde_json::from_str(&body)
         .map_err(|e| anyhow!("Invalid deps response for {} v{}: {}", name, version, e))?;
 
-    let deps_array = val["dependencies"].as_array()
-        .ok_or_else(|| anyhow!("Missing 'dependencies' in response for {} v{}", name, version))?;
+    let deps_array = val["dependencies"].as_array().ok_or_else(|| {
+        anyhow!(
+            "Missing 'dependencies' in response for {} v{}",
+            name,
+            version
+        )
+    })?;
 
     let mut result = Vec::new();
     for dep in deps_array {
@@ -926,7 +968,8 @@ pub fn resolve_all_dependencies(
         let checksum = info["versions"]
             .as_array()
             .and_then(|versions| {
-                versions.iter()
+                versions
+                    .iter()
                     .find(|v| v["version"].as_str() == Some(&version))
                     .and_then(|v| v["checksum"].as_str().map(|s| s.to_string()))
             })

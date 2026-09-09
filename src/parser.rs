@@ -111,12 +111,16 @@ impl Parser {
             if self.peek_token(&Token::Star) {
                 self.advance();
                 let wildcard = true;
-                if self.peek_token(&Token::Semicolon) { self.advance(); }
+                if self.peek_token(&Token::Semicolon) {
+                    self.advance();
+                }
                 return Ok(TopLevel::Use { path, wildcard });
             }
             path.push(self.expect_ident()?);
         }
-        if self.peek_token(&Token::Semicolon) { self.advance(); }
+        if self.peek_token(&Token::Semicolon) {
+            self.advance();
+        }
         Ok(TopLevel::Use {
             path,
             wildcard: false,
@@ -218,7 +222,9 @@ impl Parser {
         let mut fields = Vec::new();
         while !self.peek_token(&Token::RBrace) {
             self.skip_doc_comments();
-            if self.peek_token(&Token::RBrace) { break; }
+            if self.peek_token(&Token::RBrace) {
+                break;
+            }
             let field_name = self.expect_ident()?;
             self.expect_token(&Token::Colon)?;
             let ty = self.parse_type()?;
@@ -231,7 +237,12 @@ impl Parser {
             }
         }
         self.expect_token(&Token::RBrace)?;
-        Ok(TopLevel::StructDef { name, type_params, fields, doc })
+        Ok(TopLevel::StructDef {
+            name,
+            type_params,
+            fields,
+            doc,
+        })
     }
 
     fn parse_enum_def_with_doc(&mut self, doc: Option<String>) -> Result<TopLevel> {
@@ -259,7 +270,12 @@ impl Parser {
             }
         }
         self.expect_token(&Token::RBrace)?;
-        Ok(TopLevel::EnumDef { name, type_params, variants, doc })
+        Ok(TopLevel::EnumDef {
+            name,
+            type_params,
+            variants,
+            doc,
+        })
     }
 
     fn parse_module_def_with_doc(&mut self, doc: Option<String>) -> Result<TopLevel> {
@@ -268,7 +284,11 @@ impl Parser {
         // `mod name;` — file-based module (loaded by compiler)
         if self.peek_token(&Token::Semicolon) {
             self.advance();
-            return Ok(TopLevel::ModuleDef { name, items: Vec::new(), doc });
+            return Ok(TopLevel::ModuleDef {
+                name,
+                items: Vec::new(),
+                doc,
+            });
         }
         // `mod name { ... }` — inline module
         self.expect_token(&Token::LBrace)?;
@@ -539,7 +559,13 @@ impl Parser {
         self.advance(); // skip <
         let is_type_start = matches!(
             self.current_token(),
-            Token::Ident(_) | Token::TypeI64 | Token::TypeF64 | Token::TypeBool | Token::TypeString | Token::Some_ | Token::None_
+            Token::Ident(_)
+                | Token::TypeI64
+                | Token::TypeF64
+                | Token::TypeBool
+                | Token::TypeString
+                | Token::Some_
+                | Token::None_
         );
         if is_type_start {
             // After a type token inside <...>, check what follows
@@ -669,15 +695,18 @@ impl Parser {
                         }
                         if self.peek_token(&Token::Gt) {
                             self.advance(); // consume >
-                            // For now, return the generic type as Custom with the first type arg
-                            // The typechecker/codegen will handle the full generic name
+                                            // For now, return the generic type as Custom with the first type arg
+                                            // The typechecker/codegen will handle the full generic name
                             return Ok(Type::Custom { name, type_args });
                         }
                     }
                     // Not type args — reset position
                     self.pos = saved;
                 }
-                Ok(Type::Custom { name, type_args: vec![] })
+                Ok(Type::Custom {
+                    name,
+                    type_args: vec![],
+                })
             }
             ref t => Err(self.error(format!("Expected type, got {:?}", t))),
         }
@@ -860,18 +889,13 @@ impl Parser {
         Ok(left)
     }
 
-
     fn parse_or(&mut self) -> Result<Expr> {
         let mut left = self.parse_and()?;
-        loop {
-            let op = match self.current_token() {
-                Token::Or => BinOp::Or,
-                _ => break,
-            };
+        while self.current_token() == &Token::Or {
             self.advance();
             let right = self.parse_and()?;
             left = Expr::BinaryOp {
-                op,
+                op: BinOp::Or,
                 left: Box::new(left),
                 right: Box::new(right),
             };
@@ -881,15 +905,11 @@ impl Parser {
 
     fn parse_and(&mut self) -> Result<Expr> {
         let mut left = self.parse_comparison()?;
-        loop {
-            let op = match self.current_token() {
-                Token::And => BinOp::And,
-                _ => break,
-            };
+        while self.current_token() == &Token::And {
             self.advance();
             let right = self.parse_unary()?;
             left = Expr::BinaryOp {
-                op,
+                op: BinOp::And,
                 left: Box::new(left),
                 right: Box::new(right),
             };
@@ -951,7 +971,11 @@ impl Parser {
                                 self.advance();
                                 let args = self.parse_args()?;
                                 self.expect_token(&Token::RParen)?;
-                                left = Expr::Call { name, type_args, args };
+                                left = Expr::Call {
+                                    name,
+                                    type_args,
+                                    args,
+                                };
                                 continue;
                             }
                         }
@@ -1041,7 +1065,11 @@ impl Parser {
                                 self.advance();
                                 let args = self.parse_args()?;
                                 self.expect_token(&Token::RParen)?;
-                                expr = Expr::Call { name, type_args, args };
+                                expr = Expr::Call {
+                                    name,
+                                    type_args,
+                                    args,
+                                };
                             }
                         }
                     } else {
@@ -1053,7 +1081,11 @@ impl Parser {
                         self.advance();
                         let args = self.parse_args()?;
                         self.expect_token(&Token::RParen)?;
-                        expr = Expr::Call { name, type_args: Vec::new(), args };
+                        expr = Expr::Call {
+                            name,
+                            type_args: Vec::new(),
+                            args,
+                        };
                     } else {
                         break;
                     }
@@ -1194,7 +1226,10 @@ impl Parser {
                     let variant_name = self.take_module_fn_name()?;
                     // Check if the SECOND name starts with uppercase → enum variant
                     // If it starts with lowercase → module/impl function call
-                    let is_enum = variant_name.chars().next().is_some_and(|c| c.is_uppercase());
+                    let is_enum = variant_name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_uppercase());
                     if is_enum {
                         // Enum variant — check for payload
                         if self.peek_token(&Token::LParen) {
@@ -1228,25 +1263,29 @@ impl Parser {
                         // Peek inside: after {, next should be ident followed by :
                         if self.pos + 2 < self.tokens.len() {
                             matches!(&self.tokens[self.pos + 1].token, Token::Ident(_))
-                            && matches!(&self.tokens[self.pos + 2].token, Token::Colon)
+                                && matches!(&self.tokens[self.pos + 2].token, Token::Colon)
                         } else {
                             false
                         }
                     };
                     if is_struct_literal {
-                    self.expect_token(&Token::LBrace)?;
-                    let mut fields = Vec::new();
-                    while !self.peek_token(&Token::RBrace) {
-                        let field_name = self.expect_ident()?;
-                        self.expect_token(&Token::Colon)?;
-                        let value = self.parse_expr()?;
-                        fields.push((field_name, value));
-                        if !self.peek_token(&Token::RBrace) {
-                            self.expect_token(&Token::Comma)?;
+                        self.expect_token(&Token::LBrace)?;
+                        let mut fields = Vec::new();
+                        while !self.peek_token(&Token::RBrace) {
+                            let field_name = self.expect_ident()?;
+                            self.expect_token(&Token::Colon)?;
+                            let value = self.parse_expr()?;
+                            fields.push((field_name, value));
+                            if !self.peek_token(&Token::RBrace) {
+                                self.expect_token(&Token::Comma)?;
+                            }
                         }
-                    }
-                    self.expect_token(&Token::RBrace)?;
-                    Ok(Expr::StructLiteral { name, type_args, fields })
+                        self.expect_token(&Token::RBrace)?;
+                        Ok(Expr::StructLiteral {
+                            name,
+                            type_args,
+                            fields,
+                        })
                     } else {
                         // No LBrace after type args or name — treat as identifier
                         Ok(Expr::Ident(name))
@@ -1257,7 +1296,11 @@ impl Parser {
                         self.advance(); // skip (
                         let args = self.parse_args()?;
                         self.expect_token(&Token::RParen)?;
-                        Ok(Expr::Call { name, type_args, args })
+                        Ok(Expr::Call {
+                            name,
+                            type_args,
+                            args,
+                        })
                     } else if !type_args.is_empty() {
                         // Type args consumed but no ( — backtrack
                         self.pos = pre_type_args_pos;
@@ -1343,7 +1386,11 @@ impl Parser {
                         let args = self.parse_args()?;
                         self.expect_token(&Token::RParen)?;
                         let full_name = format!("Self::{}", name);
-                        Ok(Expr::Call { name: full_name, type_args: Vec::new(), args })
+                        Ok(Expr::Call {
+                            name: full_name,
+                            type_args: Vec::new(),
+                            args,
+                        })
                     } else {
                         Ok(Expr::Ident(format!("Self::{}", name)))
                     }
@@ -1489,7 +1536,11 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 vec![Stmt::ExprStmt(expr)]
             };
-            arms.push(MatchArm { pattern, guard, body });
+            arms.push(MatchArm {
+                pattern,
+                guard,
+                body,
+            });
             // Comma between arms is optional (required after non-block bodies for clarity)
             if self.peek_token(&Token::Comma) {
                 self.advance();
@@ -1682,9 +1733,17 @@ impl Parser {
             if self.peek_token(&Token::Colon) {
                 self.advance();
                 let ty = self.parse_type()?;
-                params.push(Param { name: "self".to_string(), ty, default: None });
+                params.push(Param {
+                    name: "self".to_string(),
+                    ty,
+                    default: None,
+                });
             } else {
-                params.push(Param { name: "self".to_string(), ty: Type::custom("Self"), default: None });
+                params.push(Param {
+                    name: "self".to_string(),
+                    ty: Type::custom("Self"),
+                    default: None,
+                });
             }
             if !self.peek_token(&Token::RParen) {
                 self.expect_token(&Token::Comma)?;
@@ -1694,7 +1753,11 @@ impl Parser {
             let pname = self.expect_ident()?;
             self.expect_token(&Token::Colon)?;
             let ty = self.parse_type()?;
-            params.push(Param { name: pname, ty, default: None });
+            params.push(Param {
+                name: pname,
+                ty,
+                default: None,
+            });
             if !self.peek_token(&Token::RParen) {
                 self.expect_token(&Token::Comma)?;
             }
@@ -1734,7 +1797,12 @@ impl Parser {
             methods.push(self.parse_impl_method()?);
         }
         self.expect_token(&Token::RBrace)?;
-        Ok(TopLevel::ImplDef { type_name, trait_name, methods, doc })
+        Ok(TopLevel::ImplDef {
+            type_name,
+            trait_name,
+            methods,
+            doc,
+        })
     }
 
     fn parse_impl_method(&mut self) -> Result<TopLevel> {
@@ -1743,16 +1811,24 @@ impl Parser {
         self.expect_token(&Token::LParen)?;
         let mut params = Vec::new();
         // Check for 'self' parameter
-        let has_self = if matches!(self.current_token(), Token::Ident(s) if s == "self") {
+        let _has_self = if matches!(self.current_token(), Token::Ident(s) if s == "self") {
             self.advance();
             // Handle self: Type syntax
             if self.peek_token(&Token::Colon) {
                 self.advance(); // skip colon
                 let ty = self.parse_type()?;
-                params.push(Param { name: "self".to_string(), ty, default: None });
+                params.push(Param {
+                    name: "self".to_string(),
+                    ty,
+                    default: None,
+                });
             } else {
                 // bare 'self' — infer type later
-                params.push(Param { name: "self".to_string(), ty: Type::custom("Self"), default: None });
+                params.push(Param {
+                    name: "self".to_string(),
+                    ty: Type::custom("Self"),
+                    default: None,
+                });
             }
             if !self.peek_token(&Token::RParen) {
                 self.expect_token(&Token::Comma)?;
@@ -1765,7 +1841,11 @@ impl Parser {
             let pname = self.expect_ident()?;
             self.expect_token(&Token::Colon)?;
             let ty = self.parse_type()?;
-            params.push(Param { name: pname, ty, default: None });
+            params.push(Param {
+                name: pname,
+                ty,
+                default: None,
+            });
             if !self.peek_token(&Token::RParen) {
                 self.expect_token(&Token::Comma)?;
             }
@@ -1798,7 +1878,11 @@ impl Parser {
         }
         let name = self.expect_ident()?;
         let body = self.parse_block()?;
-        Ok(TopLevel::TestDef { name, body, doc: _doc })
+        Ok(TopLevel::TestDef {
+            name,
+            body,
+            doc: _doc,
+        })
     }
 
     fn parse_const_def(&mut self) -> Result<TopLevel> {

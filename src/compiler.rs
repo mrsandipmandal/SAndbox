@@ -35,7 +35,11 @@ impl Compiler {
                         source_dir.join(&mod_name).join("mod.sbx"),
                     ];
                     if let Some(path) = possible_paths.iter().find_map(|p| {
-                        if p.exists() { Some(p.clone()) } else { None }
+                        if p.exists() {
+                            Some(p.clone())
+                        } else {
+                            None
+                        }
                     }) {
                         if let Ok(source) = fs::read_to_string(&path) {
                             if let Ok(mod_program) = Self::parse_vendor_source(&source) {
@@ -54,13 +58,17 @@ impl Compiler {
     fn load_vendored_packages(program: &mut Program, source_file: &str) {
         // Collect unique package names from use statements
         let mut seen = std::collections::HashSet::new();
-        let pkg_names: Vec<String> = program.items.iter().filter_map(|item| {
-            if let TopLevel::Use { path, .. } = item {
-                path.first().cloned().filter(|n| seen.insert(n.clone()))
-            } else {
-                None
-            }
-        }).collect();
+        let pkg_names: Vec<String> = program
+            .items
+            .iter()
+            .filter_map(|item| {
+                if let TopLevel::Use { path, .. } = item {
+                    path.first().cloned().filter(|n| seen.insert(n.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Resolve vendor root relative to the source file's directory
         let source_dir = Path::new(source_file).parent().unwrap_or(Path::new("."));
@@ -72,15 +80,21 @@ impl Compiler {
                 vendor_root.join(pkg_name).join(format!("{}.sbx", pkg_name)),
                 vendor_root.join(pkg_name).join("lib.sbx"),
                 vendor_root.join(pkg_name).join("src").join("main.sbx"),
-                vendor_root.join(pkg_name).join(pkg_name).join(format!("{}.sbx", pkg_name)),
+                vendor_root
+                    .join(pkg_name)
+                    .join(pkg_name)
+                    .join(format!("{}.sbx", pkg_name)),
                 // Fallback to CWD-relative paths
-                PathBuf::from(format!(".sandbox/vendor/{}/{}/{}.sbx", pkg_name, pkg_name, pkg_name)),
+                PathBuf::from(format!(
+                    ".sandbox/vendor/{}/{}/{}.sbx",
+                    pkg_name, pkg_name, pkg_name
+                )),
                 PathBuf::from(format!(".sandbox/vendor/{}/lib.sbx", pkg_name)),
             ];
 
-            let vendor_source = possible_paths.iter().find_map(|p| {
-                fs::read_to_string(p).ok()
-            });
+            let vendor_source = possible_paths
+                .iter()
+                .find_map(|p| fs::read_to_string(p).ok());
 
             if let Some(source) = vendor_source {
                 // Parse the vendored source and wrap in a ModuleDef
@@ -102,7 +116,7 @@ impl Compiler {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.tokenize()?;
         let mut parser = Parser::new(tokens);
-        Ok(parser.parse()?)
+        parser.parse()
     }
 
     /// Parse source and load vendored packages (common path for all commands)
@@ -115,7 +129,10 @@ impl Compiler {
         Self::load_file_modules(&mut program, &self.filename);
         Self::load_vendored_packages(&mut program, &self.filename);
         if print && program.items.len() > vendor_count {
-            println!("  ✓ Loaded {} vendored/package(s)", program.items.len() - vendor_count);
+            println!(
+                "  ✓ Loaded {} vendored/package(s)",
+                program.items.len() - vendor_count
+            );
         }
         Ok(program)
     }
@@ -134,7 +151,9 @@ impl Compiler {
         for (i, item) in program.items.iter().enumerate() {
             match item {
                 TopLevel::FnDef { name, .. } => println!("    [{}] FnDef {}", i, name),
-                TopLevel::ModuleDef { name, items, .. } => println!("    [{}] ModuleDef {} ({} items)", i, name, items.len()),
+                TopLevel::ModuleDef { name, items, .. } => {
+                    println!("    [{}] ModuleDef {} ({} items)", i, name, items.len())
+                }
                 TopLevel::Use { path, .. } => println!("    [{}] Use {}", i, path.join("::")),
                 _ => println!("    [{}] Other", i),
             }
@@ -325,7 +344,10 @@ impl Compiler {
         println!("  ✓ {} lines of C", c_code.lines().count());
 
         // Check if there are test functions
-        let has_tests = program.items.iter().any(|item| matches!(item, crate::ast::TopLevel::TestDef { .. }));
+        let has_tests = program
+            .items
+            .iter()
+            .any(|item| matches!(item, crate::ast::TopLevel::TestDef { .. }));
         if !has_tests {
             println!("  ⚠ No test functions found. Use 'test fn name {{ ... }}' to define tests.");
             return Ok(());
@@ -403,7 +425,10 @@ impl Compiler {
         let runtime_path = format!("{}.runtime.c", output);
         fs::write(&runtime_path, &runtime)?;
         println!("  Runtime C source -> {}", runtime_path);
-        println!("  Compile with: clang {} {} -o output -lm -lpthread", output, runtime_path);
+        println!(
+            "  Compile with: clang {} {} -o output -lm -lpthread",
+            output, runtime_path
+        );
         Ok(())
     }
 
@@ -450,8 +475,8 @@ fn strip_static_funcs(c_code: String) -> String {
         .map(|line| {
             // Only strip `static ` from function definitions (not static variables/arrays).
             // Pattern: `static <type> <name>(` → `<type> <name>(`
-            if line.starts_with("static ") {
-                let rest = &line[7..]; // skip "static "
+            if let Some(rest) = line.strip_prefix("static ") {
+                // skip "static "
                 // Check if it looks like a function definition: has `(` (params)
                 // and isn't a struct/typedef/variable declaration.
                 // We strip static from ALL function defs, including `const char* func(...)`.

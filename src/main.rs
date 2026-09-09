@@ -2,6 +2,7 @@ mod ast;
 mod codegen;
 mod compiler;
 mod fmt;
+mod interpreter;
 mod lexer;
 mod llvmgen;
 mod lsp;
@@ -12,7 +13,6 @@ mod stdlib;
 mod token;
 mod typechecker;
 mod wasmgen;
-mod interpreter;
 
 use clap::{Parser as ClapParser, Subcommand};
 use std::fs;
@@ -248,7 +248,12 @@ fn main() -> anyhow::Result<()> {
         Commands::Init { name } => {
             init_project(&name)?;
         }
-        Commands::Fmt { path, check, diff, verify } => {
+        Commands::Fmt {
+            path,
+            check,
+            diff,
+            verify,
+        } => {
             run_fmt(&path, check, diff, verify)?;
         }
         Commands::Add { package, version } => {
@@ -434,7 +439,12 @@ fn run_fmt(path: &PathBuf, check_only: bool, show_diff: bool, verify: bool) -> a
     Ok(())
 }
 
-fn fmt_single_file(path: &PathBuf, check_only: bool, show_diff: bool, verify: bool) -> anyhow::Result<bool> {
+fn fmt_single_file(
+    path: &PathBuf,
+    check_only: bool,
+    show_diff: bool,
+    verify: bool,
+) -> anyhow::Result<bool> {
     let source = fs::read_to_string(path)?;
     let formatted = simple_fmt(&source);
 
@@ -500,7 +510,9 @@ fn print_unified_diff(original: &str, formatted: &str) {
             while j < max_lines {
                 let o = orig_lines.get(j).copied().unwrap_or("");
                 let f = fmt_lines.get(j).copied().unwrap_or("");
-                if o == f { break; }
+                if o == f {
+                    break;
+                }
                 j += 1;
             }
             // Print context (1 line before if possible)
@@ -508,16 +520,20 @@ fn print_unified_diff(original: &str, formatted: &str) {
                 println!(" {}", orig_lines[i - 1]);
             }
             // Print removed lines
-            for k in i..j.min(orig_lines.len()) {
-                println!("-{}", orig_lines[k]);
+            for line in &orig_lines[i..j.min(orig_lines.len())] {
+                println!("-{}", line);
             }
             // Print added lines
-            for k in i..j.min(fmt_lines.len()) {
-                println!("+{}", fmt_lines[k]);
+            for line in &fmt_lines[i..j.min(fmt_lines.len())] {
+                println!("+{}", line);
             }
             // Print context (1 line after if possible)
             if j < max_lines {
-                let after = orig_lines.get(j).or(fmt_lines.get(j)).copied().unwrap_or("");
+                let after = orig_lines
+                    .get(j)
+                    .or(fmt_lines.get(j))
+                    .copied()
+                    .unwrap_or("");
                 println!(" {}", after);
             }
             i = j + 1;
@@ -652,7 +668,7 @@ fn pkg_install_single(package: &str) -> anyhow::Result<()> {
         } else {
             format!("{} = \"*\"", name)
         };
-        if content.contains(&format!("[dependencies]")) {
+        if content.contains(&"[dependencies]".to_string()) {
             content.push_str(&format!("\n{}", dep_line));
         } else {
             content.push_str(&format!("\n[dependencies]\n{}\n", dep_line));
@@ -732,7 +748,7 @@ fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {
         match registry_client::download_package_bytes(name, version) {
             Ok(data) => {
                 // Verify checksum
-                use sha2::{Sha256, Digest};
+                use sha2::{Digest, Sha256};
                 let mut hasher = Sha256::new();
                 hasher.update(&data);
                 let actual = format!("sha256:{}", hex::encode(hasher.finalize()));
@@ -741,7 +757,10 @@ fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {
                     println!("❌ checksum mismatch!");
                     println!("     expected: {}", checksum);
                     println!("     actual:   {}", actual);
-                    lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", status = \"mismatch\" }}\n", name, version, actual));
+                    lock.push_str(&format!(
+                        "{} = {{ version = \"{}\", checksum = \"{}\", status = \"mismatch\" }}\n",
+                        name, version, actual
+                    ));
                     continue;
                 }
 
@@ -759,11 +778,17 @@ fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {
                     Ok(status) if status.signed && !status.valid => {
                         sig_status_str = "INVALID signature".to_string();
                         if require_signatures {
-                            println!("❌ {} v{} has an INVALID signature — aborting (signed by {})", name, version, status.signed_by);
+                            println!(
+                                "❌ {} v{} has an INVALID signature — aborting (signed by {})",
+                                name, version, status.signed_by
+                            );
                             lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", status = \"invalid_signature\" }}\n", name, version, actual));
                             continue;
                         }
-                        println!("⚠  WARNING: {} v{} has an INVALID signature (signed by {})", name, version, status.signed_by);
+                        println!(
+                            "⚠  WARNING: {} v{} has an INVALID signature (signed by {})",
+                            name, version, status.signed_by
+                        );
                     }
                     Ok(_status) => {
                         // not signed
@@ -778,13 +803,19 @@ fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {
                     }
                 }
 
-                lock.push_str(&format!("{} = {{ version = \"{}\", checksum = \"{}\", signature = \"{}\" }}\n", name, version, actual, sig_status_str));
+                lock.push_str(&format!(
+                    "{} = {{ version = \"{}\", checksum = \"{}\", signature = \"{}\" }}\n",
+                    name, version, actual, sig_status_str
+                ));
                 println!("✓ {} bytes, verified, {}", data.len(), sig_status_str);
                 any_fetched = true;
             }
             Err(e) => {
                 println!("⚠ {}", e);
-                lock.push_str(&format!("{} = {{ version = \"{}\", status = \"failed\" }}\n", name, version));
+                lock.push_str(&format!(
+                    "{} = {{ version = \"{}\", status = \"failed\" }}\n",
+                    name, version
+                ));
             }
         }
     }
@@ -799,7 +830,6 @@ fn install_dependencies(require_signatures: bool) -> anyhow::Result<()> {
     println!("✅ All dependencies installed (see .sandbox/vendor/ and .sandbox/lock.toml)");
     Ok(())
 }
-
 
 fn show_tree() -> anyhow::Result<()> {
     let content = find_sandbox_toml()?;
@@ -833,9 +863,16 @@ fn show_tree() -> anyhow::Result<()> {
                 resolved_versions
                     .entry(name.to_string())
                     .or_default()
-                    .push((spec.to_string(), resolved.clone(), config.package.name.clone()));
+                    .push((
+                        spec.to_string(),
+                        resolved.clone(),
+                        config.package.name.clone(),
+                    ));
 
-                println!("  {} {} v{} (resolved: {})", connector, name, spec, resolved);
+                println!(
+                    "  {} {} v{} (resolved: {})",
+                    connector, name, spec, resolved
+                );
 
                 // Fetch and display transitive dependencies
                 match registry_client::fetch_package_deps(name, &resolved) {
@@ -849,7 +886,7 @@ fn show_tree() -> anyhow::Result<()> {
 
                             // Check for conflicts
                             if let Some(existing) = resolved_versions.get(dep_name) {
-                                for (prev_spec, prev_resolved, prev_by) in existing {
+                                for (_prev_spec, prev_resolved, prev_by) in existing {
                                     if prev_resolved != dep_spec {
                                         // Different specifiers might resolve to different versions
                                         match registry_client::resolve_version(dep_name, dep_spec) {
@@ -870,25 +907,53 @@ fn show_tree() -> anyhow::Result<()> {
                                     resolved_versions
                                         .entry(dep_name.to_string())
                                         .or_default()
-                                        .push((dep_spec.to_string(), dep_resolved.clone(), name.to_string()));
+                                        .push((
+                                            dep_spec.to_string(),
+                                            dep_resolved.clone(),
+                                            name.to_string(),
+                                        ));
 
-                                    println!("  {}  {} {} v{} (resolved: {})",
-                                        continuation, dep_connector, dep_name, dep_spec, dep_resolved);
+                                    println!(
+                                        "  {}  {} {} v{} (resolved: {})",
+                                        continuation,
+                                        dep_connector,
+                                        dep_name,
+                                        dep_spec,
+                                        dep_resolved
+                                    );
 
                                     // Fetch depth-2 transitive deps
-                                    match registry_client::fetch_package_deps(dep_name, &dep_resolved) {
+                                    match registry_client::fetch_package_deps(
+                                        dep_name,
+                                        &dep_resolved,
+                                    ) {
                                         Ok(deep_deps) if !deep_deps.is_empty() => {
                                             let mut deep_sorted = deep_deps;
                                             deep_sorted.sort_by_key(|(k, _)| k.clone());
-                                            for (k, (deep_name, deep_spec)) in deep_sorted.iter().enumerate() {
+                                            for (k, (deep_name, deep_spec)) in
+                                                deep_sorted.iter().enumerate()
+                                            {
                                                 let deep_last = k == deep_sorted.len() - 1;
-                                                let deep_connector = if deep_last { "└──" } else { "├──" };
+                                                let deep_connector = if deep_last {
+                                                    "└──"
+                                                } else {
+                                                    "├──"
+                                                };
 
-                                                if let Some(existing) = resolved_versions.get(deep_name) {
-                                                    for (prev_spec, prev_resolved, prev_by) in existing {
+                                                if let Some(existing) =
+                                                    resolved_versions.get(deep_name)
+                                                {
+                                                    for (_prev_spec, prev_resolved, prev_by) in
+                                                        existing
+                                                    {
                                                         if prev_resolved != deep_spec {
-                                                            match registry_client::resolve_version(deep_name, deep_spec) {
-                                                                Ok(d_resolved) if d_resolved != *prev_resolved => {
+                                                            match registry_client::resolve_version(
+                                                                deep_name, deep_spec,
+                                                            ) {
+                                                                Ok(d_resolved)
+                                                                    if d_resolved
+                                                                        != *prev_resolved =>
+                                                                {
                                                                     conflicts.push(format!(
                                                                         "  ⚠ Conflict: {} requires v{}, but {} requires v{}",
                                                                         dep_name, d_resolved, prev_by, prev_resolved
@@ -900,17 +965,38 @@ fn show_tree() -> anyhow::Result<()> {
                                                     }
                                                 }
 
-                                                match registry_client::resolve_version(deep_name, deep_spec) {
+                                                match registry_client::resolve_version(
+                                                    deep_name, deep_spec,
+                                                ) {
                                                     Ok(d_resolved) => {
                                                         resolved_versions
                                                             .entry(deep_name.to_string())
                                                             .or_default()
-                                                            .push((deep_spec.to_string(), d_resolved.clone(), dep_name.to_string()));
-                                                        println!("  {}  {}  {} {} v{} (resolved: {})",
-                                                            continuation, dep_cont, deep_connector, deep_name, deep_spec, d_resolved);
+                                                            .push((
+                                                                deep_spec.to_string(),
+                                                                d_resolved.clone(),
+                                                                dep_name.to_string(),
+                                                            ));
+                                                        println!(
+                                                            "  {}  {}  {} {} v{} (resolved: {})",
+                                                            continuation,
+                                                            dep_cont,
+                                                            deep_connector,
+                                                            deep_name,
+                                                            deep_spec,
+                                                            d_resolved
+                                                        );
                                                     }
                                                     Err(e) => {
-                                                        println!("  {}  {}  {} ⚠ {} v{}: {}", continuation, dep_cont, deep_connector, deep_name, deep_spec, e);
+                                                        println!(
+                                                            "  {}  {}  {} ⚠ {} v{}: {}",
+                                                            continuation,
+                                                            dep_cont,
+                                                            deep_connector,
+                                                            deep_name,
+                                                            deep_spec,
+                                                            e
+                                                        );
                                                     }
                                                 }
                                             }
@@ -919,7 +1005,10 @@ fn show_tree() -> anyhow::Result<()> {
                                     }
                                 }
                                 Err(e) => {
-                                    println!("  {}  {} ⚠ {} v{}: {}", continuation, dep_connector, dep_name, dep_spec, e);
+                                    println!(
+                                        "  {}  {} ⚠ {} v{}: {}",
+                                        continuation, dep_connector, dep_name, dep_spec, e
+                                    );
                                 }
                             }
                         }
@@ -945,10 +1034,14 @@ fn show_tree() -> anyhow::Result<()> {
     let lock_path = std::path::Path::new(".sandbox/lock.toml");
     if lock_path.exists() {
         if let Ok(lock_content) = std::fs::read_to_string(lock_path) {
-            let installed = lock_content.lines()
+            let installed = lock_content
+                .lines()
                 .filter(|l| l.contains("version") && !l.starts_with('#'))
                 .count();
-            println!("\n🔒 {} package(s) installed (see .sandbox/lock.toml)", installed);
+            println!(
+                "\n🔒 {} package(s) installed (see .sandbox/lock.toml)",
+                installed
+            );
         }
     }
 
@@ -959,9 +1052,13 @@ fn show_tree() -> anyhow::Result<()> {
 
 fn generate_docs(source: &str) -> anyhow::Result<()> {
     let mut lexer = lexer::Lexer::new(source);
-    let tokens = lexer.tokenize().map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
+    let tokens = lexer
+        .tokenize()
+        .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
     let mut parser = parser::Parser::new(tokens);
-    let program = parser.parse().map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+    let program = parser
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
 
     println!("# API Documentation");
     println!();
@@ -975,20 +1072,29 @@ fn generate_docs(source: &str) -> anyhow::Result<()> {
 
     for item in &program.items {
         match item {
-            ast::TopLevel::FnDef { name, params, ret, doc, .. } => {
+            ast::TopLevel::FnDef {
+                name,
+                params,
+                ret,
+                doc,
+                ..
+            } => {
                 if let Some(d) = doc {
                     for line in d.lines() {
                         println!("// {}", line);
                     }
                 }
-                let params_str: Vec<String> = params.iter()
+                let params_str: Vec<String> = params
+                    .iter()
                     .map(|p| format!("{}: {}", p.name, p.ty))
                     .collect();
                 let ret_str = ret.as_ref().map_or("void".to_string(), |t| t.to_string());
                 println!("## `{}({}) -> {}`", name, params_str.join(", "), ret_str);
                 println!();
             }
-            ast::TopLevel::StructDef { name, fields, doc, .. } => {
+            ast::TopLevel::StructDef {
+                name, fields, doc, ..
+            } => {
                 if let Some(d) = doc {
                     for line in d.lines() {
                         println!("// {}", line);
@@ -1003,7 +1109,12 @@ fn generate_docs(source: &str) -> anyhow::Result<()> {
                 }
                 println!();
             }
-            ast::TopLevel::EnumDef { name, variants, doc, .. } => {
+            ast::TopLevel::EnumDef {
+                name,
+                variants,
+                doc,
+                ..
+            } => {
                 if let Some(d) = doc {
                     for line in d.lines() {
                         println!("// {}", line);
@@ -1012,7 +1123,9 @@ fn generate_docs(source: &str) -> anyhow::Result<()> {
                 println!("## enum `{}`", name);
                 println!();
                 for v in variants {
-                    let payload_str = v.payload.as_ref()
+                    let payload_str = v
+                        .payload
+                        .as_ref()
                         .map_or(String::new(), |t| format!("({})", t));
                     println!("- `{}{}`", v.name, payload_str);
                 }
@@ -1023,26 +1136,45 @@ fn generate_docs(source: &str) -> anyhow::Result<()> {
                 println!();
                 for sub in items {
                     if let ast::TopLevel::FnDef { params, ret, .. } = sub {
-                        let params_str: Vec<String> = params.iter()
+                        let params_str: Vec<String> = params
+                            .iter()
                             .map(|p| format!("{}: {}", p.name, p.ty))
                             .collect();
                         let ret_str = ret.as_ref().map_or("void".to_string(), |t| t.to_string());
-                        println!("### `{}::{}({}) -> {}`", name, sub_name(sub), params_str.join(", "), ret_str);
+                        println!(
+                            "### `{}::{}({}) -> {}`",
+                            name,
+                            sub_name(sub),
+                            params_str.join(", "),
+                            ret_str
+                        );
                     }
                 }
                 println!();
             }
-            ast::TopLevel::ImplDef { type_name, methods, .. } => {
+            ast::TopLevel::ImplDef {
+                type_name, methods, ..
+            } => {
                 println!("## impl `{}`", type_name);
                 println!();
                 for method in methods {
-                    if let ast::TopLevel::FnDef { name, params, ret, .. } = method {
-                        let params_str: Vec<String> = params.iter()
+                    if let ast::TopLevel::FnDef {
+                        name, params, ret, ..
+                    } = method
+                    {
+                        let params_str: Vec<String> = params
+                            .iter()
                             .filter(|p| p.name != "self")
                             .map(|p| format!("{}: {}", p.name, p.ty))
                             .collect();
                         let ret_str = ret.as_ref().map_or("void".to_string(), |t| t.to_string());
-                        println!("### `{}::{}({}) -> {}`", type_name, name, params_str.join(", "), ret_str);
+                        println!(
+                            "### `{}::{}({}) -> {}`",
+                            type_name,
+                            name,
+                            params_str.join(", "),
+                            ret_str
+                        );
                     }
                 }
                 println!();

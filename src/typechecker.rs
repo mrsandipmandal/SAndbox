@@ -1106,6 +1106,80 @@ impl TypeChecker {
             } => {
                 // Resolve target type
                 let target_ty = self.check_expr(target)?;
+
+                // Builtin method sugar: s.to_upper() ≡ string::to_upper(s),
+                // nums.map(f) ≡ map(nums, f). Checked against the stdlib
+                // builtin registry so signatures stay single-sourced.
+                const STRING_METHODS: &[&str] = &[
+                    "to_upper",
+                    "to_lower",
+                    "trim",
+                    "replace",
+                    "contains",
+                    "starts_with",
+                    "ends_with",
+                    "find",
+                    "substring",
+                    "char_at",
+                    "repeat",
+                    "equals",
+                    "len",
+                    "is_empty",
+                ];
+                const ARRAY_LAMBDA_METHODS: &[&str] = &["map", "filter"];
+                match (&target_ty, method.as_str()) {
+                    (Type::String, m) if STRING_METHODS.contains(&m) => {
+                        // 'len' is sugar for the stdlib's 'length'
+                        let builtin_name = if m == "len" {
+                            "string::length".to_string()
+                        } else {
+                            format!("string::{m}")
+                        };
+                        let sig = stdlib::builtins()
+                            .get(builtin_name.as_str())
+                            .cloned()
+                            .expect("string method registered in stdlib");
+                        let param_tys: Vec<Type> = sig.params.iter().map(|p| p.1.clone()).collect();
+                        if args.len() + 1 != param_tys.len() {
+                            return Err(anyhow!(
+                                "String method '{}.{}' takes {} argument(s), got {}",
+                                target_ty,
+                                m,
+                                param_tys.len() - 1,
+                                args.len()
+                            ));
+                        }
+                        for (i, (arg, expected)) in
+                            args.iter().zip(param_tys.iter().skip(1)).enumerate()
+                        {
+                            let arg_ty = self.check_expr(arg)?;
+                            if !self.types_compatible(expected, &arg_ty) {
+                                return Err(anyhow!(
+                                    "Arg {} of '{}.{}': expected '{}', got '{}'",
+                                    i + 1,
+                                    target_ty,
+                                    m,
+                                    expected,
+                                    arg_ty
+                                ));
+                            }
+                        }
+                        return Ok(sig.ret.clone());
+                    }
+                    (Type::Array(_), m) if ARRAY_LAMBDA_METHODS.contains(&m) => {
+                        // nums.map(f) / nums.filter(f): mirror free-form rules
+                        self.check_expr(&args[0])?; // lambda
+                        if m == "map" {
+                            return Ok(Type::Array(Box::new(Type::I64)));
+                        }
+                        return Ok(target_ty);
+                    }
+                    (Type::Array(_), "reduce") if args.len() == 2 => {
+                        self.check_expr(&args[0])?; // lambda
+                        return self.check_expr(&args[1]); // initial
+                    }
+                    _ => {}
+                }
                 // For known types, resolve method as Type_method
                 let full_name = match &target_ty {
                     Type::Custom {

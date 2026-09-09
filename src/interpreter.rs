@@ -191,14 +191,10 @@ impl InterpreterState {
 }
 
 pub fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
-    let mut lexer = lexer::Lexer::new(source);
-    let tokens = lexer
-        .tokenize()
-        .map_err(|e| anyhow::anyhow!("Lexer error: {}", e))?;
-    let mut parser = parser::Parser::new(tokens);
-    let program = parser
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+    let mut lexer = lexer::Lexer::new(source).with_source(filename);
+    let tokens = lexer.tokenize()?;
+    let mut parser = parser::Parser::new(tokens).with_source(source, filename);
+    let program = parser.parse()?;
 
     let mut state = InterpreterState::new();
     for item in &program.items {
@@ -350,6 +346,8 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                         }
                     }
                     ast::Expr::Str(s) => println!("{}", s),
+                    // C backend prints bool literals as true/false
+                    ast::Expr::Bool(b) => println!("{}", if *b { "true" } else { "false" }),
                     ast::Expr::ArrayLiteral(elems) => {
                         let vals: Vec<String> = elems
                             .iter()
@@ -375,6 +373,11 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                     } => {
                         if name == "print" {
                             if let Some(first) = args.first() {
+                                // C backend prints bool literals as true/false
+                                if let ast::Expr::Bool(b) = first {
+                                    println!("{}", if *b { "true" } else { "false" });
+                                    return Ok(Some(0));
+                                }
                                 // Snapshot str_vars before to detect new strings
                                 let str_before: std::collections::HashSet<String> =
                                     state.str_vars.keys().cloned().collect();
@@ -559,6 +562,22 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                         }
                     }
                     continue;
+                }
+                // Named array variable iteration
+                if let ast::Expr::Ident(n) = iterable {
+                    if let Some(arr) = state.arr_vars.get(n).cloned() {
+                        for v in arr {
+                            state.vars.insert(variable.clone(), v);
+                            state.arr_vars.remove(variable); // shadow array with element
+                            match exec_block(body, state)? {
+                                Some(BREAK_SENTINEL) => break,
+                                Some(CONTINUE_SENTINEL) => continue,
+                                Some(val) => return Ok(Some(val)),
+                                None => {}
+                            }
+                        }
+                        continue;
+                    }
                 }
                 // Regular numeric range
                 let count = eval_expr(iterable, state)?;
@@ -1008,6 +1027,8 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                             }
                         }
                         ast::Expr::Str(s) => println!("{}", s),
+                        // C backend prints bool literals as true/false
+                        ast::Expr::Bool(b) => println!("{}", if *b { "true" } else { "false" }),
                         ast::Expr::ArrayLiteral(elems) => {
                             let vals: Vec<String> = elems
                                 .iter()
@@ -1383,6 +1404,182 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                 }
             }
             Ok(0)
+        }
+        ast::Expr::MethodCall {
+            target,
+            method,
+            args,
+        } => {
+            // Built-in method sugar. Struct/trait methods resolve elsewhere;
+            // here we handle string and array builtins natively.
+            // Chained targets (s.trim().to_lower()) carry their value in a fresh
+            // __auto_ string key: resolve the target first so chains work.
+            let mut chain_target: Option<ast::Expr> = None;
+            if !matches!(target.as_ref(), ast::Expr::Ident(_)) {
+                let before: std::collections::HashSet<String> =
+                    state.str_vars.keys().cloned().collect();
+                eval_expr(target, state)?;
+                if let Some(k) = state
+                    .str_vars
+                    .keys()
+                    .filter(|k| k.starts_with("__auto_") && !before.contains(*k))
+                    .max_by(|x, y| x.cmp(y))
+                    .cloned()
+                {
+                    chain_target = Some(ast::Expr::Ident(k));
+                }
+            }
+            let target = chain_target.map(Box::new).unwrap_or_else(|| target.clone());
+            let is_array_target =
+                matches!(target.as_ref(), ast::Expr::Ident(n) if state.arr_vars.contains_key(n));
+            let is_string_target =
+                matches!(target.as_ref(), ast::Expr::Ident(n) if state.str_vars.contains_key(n));
+            if is_array_target {
+                match method.as_str() {
+                    "map" | "filter" if args.len() == 1 => {
+                        let call = ast::Expr::Call {
+                            name: method.clone(),
+                            type_args: vec![],
+                            args: vec![target.as_ref().clone(), args[0].clone()],
+                        };
+                        return eval_expr(&call, state);
+                    }
+                    "reduce" if args.len() == 2 => {
+                        let call = ast::Expr::Call {
+                            name: "reduce".to_string(),
+                            type_args: vec![],
+                            args: vec![target.as_ref().clone(), args[0].clone(), args[1].clone()],
+                        };
+                        return eval_expr(&call, state);
+                    }
+                    "push" if args.len() == 1 => {
+                        let v = eval_expr(&args[0], state)?;
+                        if let ast::Expr::Ident(n) = target.as_ref() {
+                            if let Some(a) = state.arr_vars.get_mut(n) {
+                                a.push(v);
+                            }
+                        }
+                        return Ok(0);
+                    }
+                    "pop" if args.is_empty() => {
+                        if let ast::Expr::Ident(n) = target.as_ref() {
+                            if let Some(a) = state.arr_vars.get_mut(n) {
+                                return Ok(a.pop().unwrap_or(0));
+                            }
+                        }
+                        return Ok(0);
+                    }
+                    "sort" if args.is_empty() => {
+                        if let ast::Expr::Ident(n) = target.as_ref() {
+                            if let Some(a) = state.arr_vars.get_mut(n) {
+                                a.sort();
+                            }
+                        }
+                        return Ok(0);
+                    }
+                    "reverse" if args.is_empty() => {
+                        if let ast::Expr::Ident(n) = target.as_ref() {
+                            if let Some(a) = state.arr_vars.get_mut(n) {
+                                a.reverse();
+                            }
+                        }
+                        return Ok(0);
+                    }
+                    _ => return Ok(0),
+                }
+            }
+            if is_string_target {
+                let s = match target.as_ref() {
+                    ast::Expr::Ident(n) => state.str_vars.get(n).cloned().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                // Evaluate string-method args (all are strings or ints)
+                let mut arg_vals: Vec<i64> = Vec::new();
+                let mut arg_strs: Vec<String> = Vec::new();
+                for a in args {
+                    // Strings come back via __auto_ keys; ints via value
+                    let before: std::collections::HashSet<String> =
+                        state.str_vars.keys().cloned().collect();
+                    let v = eval_expr(a, state)?;
+                    let new_key = state
+                        .str_vars
+                        .keys()
+                        .filter(|k| k.starts_with("__auto_") && !before.contains(*k))
+                        .max_by(|x, y| x.cmp(y))
+                        .cloned();
+                    if let Some(k) = new_key {
+                        arg_strs.push(state.str_vars.get(&k).cloned().unwrap_or_default());
+                        state.str_vars.remove(&k);
+                    } else if let ast::Expr::Str(sv) = a {
+                        arg_strs.push(sv.clone());
+                    } else {
+                        arg_strs.push(String::new());
+                        arg_vals.push(v);
+                    }
+                }
+                let result: String = match method.as_str() {
+                    "to_upper" => s.to_uppercase(),
+                    "to_lower" => s.to_lowercase(),
+                    "trim" => s.trim().to_string(),
+                    "replace" if arg_strs.len() == 2 => s.replace(&arg_strs[0], &arg_strs[1]),
+                    "substring" if arg_vals.len() == 2 => {
+                        let start = arg_vals[0].max(0) as usize;
+                        let end = (start + arg_vals[1].max(0) as usize).min(s.len());
+                        s.chars()
+                            .skip(start)
+                            .take(end.saturating_sub(start))
+                            .collect()
+                    }
+                    "char_at" if arg_vals.len() == 1 => {
+                        // C runtime returns the char code; keep backends in parity
+                        s.chars()
+                            .nth(arg_vals[0].max(0) as usize)
+                            .map(|c| (c as i64).to_string())
+                            .unwrap_or_else(|| "0".to_string())
+                    }
+                    "repeat" if arg_vals.len() == 1 => s.repeat(arg_vals[0].max(0) as usize),
+                    _ => {
+                        // Boolean/int-valued methods: compute and return as int
+                        let b: i64 = match method.as_str() {
+                            "contains" if arg_strs.len() == 1 => s.contains(&arg_strs[0]) as i64,
+                            "starts_with" if arg_strs.len() == 1 => {
+                                s.starts_with(&arg_strs[0]) as i64
+                            }
+                            "ends_with" if arg_strs.len() == 1 => s.ends_with(&arg_strs[0]) as i64,
+                            "equals" if arg_strs.len() == 1 => (s == arg_strs[0]) as i64,
+                            "is_empty" if args.is_empty() => s.is_empty() as i64,
+                            "len" => s.chars().count() as i64,
+                            "find" if arg_strs.len() == 1 => {
+                                s.find(&arg_strs[0]).map(|i| i as i64).unwrap_or(-1)
+                            }
+                            _ => return Err(anyhow::anyhow!("Unknown string method '{}'", method)),
+                        };
+                        return Ok(b);
+                    }
+                };
+                let key = format!("__auto_{}", state.str_vars.len());
+                state.str_vars.insert(key, result);
+                return Ok(0);
+            }
+            // Not a builtin target: fall back to struct/trait method call
+            let method_name = if let ast::Expr::Ident(n) = target.as_ref() {
+                // Try Type_method for struct instances
+                if let Some(ty) = state.struct_type_of.get(n) {
+                    format!("{}_{}", ty, method)
+                } else {
+                    method.clone()
+                }
+            } else {
+                method.clone()
+            };
+            let mut call_args = vec![target.as_ref().clone()];
+            call_args.extend(args.iter().cloned());
+            let call = ast::Expr::Call {
+                name: method_name,
+                type_args: vec![],
+                args: call_args,
+            };
+            eval_expr(&call, state)
         }
         ast::Expr::FString(parts) => {
             // Build the f-string by evaluating each part

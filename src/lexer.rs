@@ -6,6 +6,8 @@ pub struct Lexer {
     pos: usize,
     line: usize,
     col: usize,
+    source: String,
+    filename: String,
 }
 
 impl Lexer {
@@ -15,7 +17,26 @@ impl Lexer {
             pos: 0,
             line: 1,
             col: 1,
+            source: input.to_string(),
+            filename: "<input>".to_string(),
         }
+    }
+
+    /// Attach the original source so errors can render the offending line
+    /// with a caret pointer.
+    pub fn with_source(mut self, filename: &str) -> Self {
+        self.filename = filename.to_string();
+        self
+    }
+
+    fn error(&self, line: usize, col: usize, msg: String) -> anyhow::Error {
+        anyhow!(crate::diagnostic::render(
+            &self.source,
+            &self.filename,
+            line,
+            col,
+            &msg
+        ))
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Spanned>> {
@@ -129,7 +150,7 @@ impl Lexer {
                     self.advance();
                     Ok(Spanned::new(Token::And, line, col))
                 } else {
-                    Err(anyhow!("Unexpected character '&' at {}:{}", line, col))
+                    Err(self.error(line, col, "Unexpected character '&'".to_string()))
                 }
             }
             '|' => {
@@ -191,7 +212,7 @@ impl Lexer {
                 self.advance();
                 Ok(Spanned::new(Token::RBracket, line, col))
             }
-            _ => Err(anyhow!("Unexpected character '{}' at {}:{}", ch, line, col)),
+            _ => Err(self.error(line, col, format!("Unexpected character '{}'", ch))),
         }
     }
 
@@ -200,7 +221,7 @@ impl Lexer {
         let mut s = String::new();
         loop {
             if self.pos >= self.input.len() {
-                return Err(anyhow!("Unterminated string at {}:{}", self.line, self.col));
+                return Err(self.error(self.line, self.col, "Unterminated string".to_string()));
             }
             let ch = self.input[self.pos];
             if ch == '"' {
@@ -210,7 +231,7 @@ impl Lexer {
             if ch == '\\' {
                 self.advance();
                 if self.pos >= self.input.len() {
-                    return Err(anyhow!("Unterminated escape at {}:{}", self.line, self.col));
+                    return Err(self.error(self.line, self.col, "Unterminated escape".to_string()));
                 }
                 let esc = self.input[self.pos];
                 match esc {
@@ -241,11 +262,7 @@ impl Lexer {
         let mut depth: i32 = 0;
         loop {
             if self.pos >= self.input.len() {
-                return Err(anyhow!(
-                    "Unterminated f-string at {}:{}",
-                    self.line,
-                    self.col
-                ));
+                return Err(self.error(self.line, self.col, "Unterminated f-string".to_string()));
             }
             let ch = self.input[self.pos];
             if depth == 0 && ch == '"' {
@@ -282,10 +299,10 @@ impl Lexer {
             } else if ch == '\\' {
                 self.advance();
                 if self.pos >= self.input.len() {
-                    return Err(anyhow!(
-                        "Unterminated escape in f-string at {}:{}",
+                    return Err(self.error(
                         self.line,
-                        self.col
+                        self.col,
+                        "Unterminated escape in f-string".to_string(),
                     ));
                 }
                 let esc = self.input[self.pos];

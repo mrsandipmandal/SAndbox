@@ -42,6 +42,34 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  # ── Backend Parity ──────────────────────────────────────────────────────────
+  parity:
+    name: Backend Parity (C / LLVM / interpreter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: sandbox-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: sandbox-${{ runner.os }}-cargo-
+
+      - name: Verify clang (LLVM backend compiler)
+        run: clang --version
+
+      # Fails on any backend output mismatch or backend regression beyond
+      # the known-gap allowlist documented in tests/parity.rs.
+      - name: Run backend parity harness
+        run: cargo test --test parity -- --nocapture
+
   # ── Registry Server ─────────────────────────────────────────────────────────
   registry:
     name: Check & Test (Registry)
@@ -79,7 +107,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [check, registry]
+    needs: [check, parity, registry]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4

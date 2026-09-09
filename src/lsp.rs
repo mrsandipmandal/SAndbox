@@ -96,7 +96,7 @@ fn analyze_source(source: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     match Lexer::new(source).tokenize() {
-        Ok(tokens) => match Parser::new(tokens).parse() {
+        Ok(tokens) => match Parser::new(tokens).with_source(source, "<input>").parse() {
             Ok(program) => {
                 let mut checker = TypeChecker::new();
                 if let Err(e) = checker.check(&program) {
@@ -164,15 +164,35 @@ fn analyze_source(source: &str) -> Vec<Diagnostic> {
 }
 
 fn parse_error_location(msg: &str) -> (u32, u32) {
+    // New format: "<file>:<line>:<col>: message" (first line of the
+    // rendered diagnostic).
+    if let Some(first_line) = msg.lines().next() {
+        if let Some(colon) = first_line.find(':') {
+            let rest = &first_line[colon + 1..];
+            if let Some(second) = rest.find(':') {
+                if let Ok(line) = rest[..second].parse::<u32>() {
+                    let after = &rest[second + 1..];
+                    let digits_end = after
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(after.len());
+                    if let Ok(col) = after[..digits_end].parse::<u32>() {
+                        return (line.saturating_sub(1), col.saturating_sub(1));
+                    }
+                }
+            }
+        }
+    }
+    // Legacy format: "message at <line>:<col>"
     if let Some(pos) = msg.find(" at ") {
         let rest = &msg[pos + 4..];
         if let Some(colon) = rest.find(':') {
             if let Ok(line) = rest[..colon].parse::<u32>() {
                 let after_colon = &rest[colon + 1..];
-                if let Some(end) = after_colon.find(|c: char| !c.is_ascii_digit()) {
-                    if let Ok(col) = after_colon[..end].parse::<u32>() {
-                        return (line.saturating_sub(1), col.saturating_sub(1));
-                    }
+                let digits_end = after_colon
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(after_colon.len());
+                if let Ok(col) = after_colon[..digits_end].parse::<u32>() {
+                    return (line.saturating_sub(1), col.saturating_sub(1));
                 }
             }
         }
@@ -285,3 +305,27 @@ fn get_hover_info() -> HoverContents {
 }
 
 use lsp_server::Response;
+
+#[cfg(test)]
+mod tests {
+    use super::parse_error_location;
+
+    #[test]
+    fn parses_new_diagnostic_format() {
+        let msg = "/tmp/foo.sbx:4:16: Unexpected token Print\n    print(y)\n        ^";
+        assert_eq!(parse_error_location(msg), (3, 15));
+    }
+
+    #[test]
+    fn parses_legacy_at_format() {
+        assert_eq!(
+            parse_error_location("Unexpected token Print at 4:16"),
+            (3, 15)
+        );
+    }
+
+    #[test]
+    fn no_position_yields_origin() {
+        assert_eq!(parse_error_location("Unknown function 'foo'"), (0, 0));
+    }
+}

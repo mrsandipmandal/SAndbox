@@ -121,9 +121,9 @@ impl Compiler {
 
     /// Parse source and load vendored packages (common path for all commands)
     fn parse_with_vendors(&self, source: &str, print: bool) -> Result<Program> {
-        let mut lexer = Lexer::new(source);
+        let mut lexer = Lexer::new(source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::new(tokens).with_source(source, &self.filename);
         let mut program = parser.parse()?;
         let vendor_count = program.items.len();
         Self::load_file_modules(&mut program, &self.filename);
@@ -141,7 +141,7 @@ impl Compiler {
         println!("[sandbox] Compiling {}", self.filename);
 
         println!("  → Lexing...");
-        let mut lexer = Lexer::new(&self.source);
+        let mut lexer = Lexer::new(&self.source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
         println!("  ✓ {} tokens", tokens.len());
 
@@ -185,7 +185,7 @@ impl Compiler {
         println!("[sandbox] Compiling {}", self.filename);
 
         println!("  → Lexing...");
-        let mut lexer = Lexer::new(&self.source);
+        let mut lexer = Lexer::new(&self.source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
         println!("  ✓ {} tokens", tokens.len());
 
@@ -306,7 +306,7 @@ impl Compiler {
     pub fn check(&self) -> Result<()> {
         println!("[sandbox] Checking {}", self.filename);
 
-        let mut lexer = Lexer::new(&self.source);
+        let mut lexer = Lexer::new(&self.source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
         println!("  ✓ {} tokens", tokens.len());
 
@@ -325,12 +325,12 @@ impl Compiler {
         println!("[sandbox] Running tests in {}", self.filename);
 
         println!("  → Lexing...");
-        let mut lexer = Lexer::new(&self.source);
+        let mut lexer = Lexer::new(&self.source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
         println!("  ✓ {} tokens", tokens.len());
 
         println!("  → Parsing...");
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::new(tokens).with_source(&self.source, &self.filename);
         let program = parser.parse()?;
         println!("  ✓ {} top-level items", program.items.len());
 

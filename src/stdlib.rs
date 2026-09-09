@@ -2,6 +2,7 @@ use crate::ast::Type;
 use std::collections::HashMap;
 
 /// Represents a built-in standard library function
+#[derive(Clone)]
 pub struct StdlibFn {
     pub params: Vec<(String, Type)>,
     pub ret: Type,

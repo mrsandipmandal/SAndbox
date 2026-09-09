@@ -18,6 +18,10 @@ pub struct CodeGen {
     array_lengths: std::collections::HashMap<String, String>,
     /// Stack of scope boundaries for declared_vars cleanup on scope exit.
     scope_stack: Vec<std::collections::HashSet<String>>,
+    /// Maps source variable names to their current C symbol when a shadowing
+    /// map/filter/reduce result must live under a different C name (the old C
+    /// symbol's type cannot be re-assigned). Resolved by all reference emit paths.
+    c_symbol_map: HashMap<String, String>,
     var_counter: Cell<usize>,
     enums: HashMap<String, Vec<EnumVariantDef>>,
     fn_returns: HashMap<String, String>,
@@ -63,6 +67,7 @@ impl CodeGen {
             var_types: HashMap::new(),
             declared_vars: Vec::new(),
             scope_stack: Vec::new(),
+            c_symbol_map: HashMap::new(),
             array_lengths: std::collections::HashMap::new(),
             lambda_counter: Cell::new(0),
             pending_lambdas: RefCell::new(Vec::new()),
@@ -1120,6 +1125,25 @@ impl CodeGen {
         let idx = self.var_counter.get();
         self.var_counter.set(idx + 1);
 
+        // Chained call (e.g. reduce(map(nums, f), g, 0) after method-sugar
+        // desugar): the source is itself a map/filter call, which has no C
+        // value expression. Materialize it into a temp array first, then
+        // proceed with the temp as the source (recursively handles any depth).
+        if let Expr::Call {
+            name: ref inner_name,
+            args: ref inner_args,
+            ..
+        } = args[0]
+        {
+            if (inner_name == "map" || inner_name == "filter") && inner_args.len() >= 2 {
+                let temp = format!("__chain_{}", idx);
+                self.gen_map_filter_reduce(&temp, inner_name, inner_args);
+                let mut new_args: Vec<Expr> = vec![Expr::Ident(temp)];
+                new_args.extend(args.iter().skip(1).cloned());
+                return self.gen_map_filter_reduce(target, fn_name, &new_args);
+            }
+        }
+
         // Resolve the lambda: inline Lambda or named identifier
         let (lambda_c_name, lambda_captures) = if let Some(lambda_expr) = args.get(1) {
             match lambda_expr {
@@ -1316,6 +1340,105 @@ impl CodeGen {
                 writeln!(self.output, "}}").unwrap();
             }
             _ => {}
+        }
+    }
+
+    /// Like gen_map_filter_reduce but emits assignment to an existing scalar
+    /// instead of a declaration (used when a scalar shadow is re-assigned).
+    fn gen_map_filter_reduce_assign(&mut self, target: &str, fn_name: &str, args: &[Expr]) {
+        let idx = self.var_counter.get();
+        self.var_counter.set(idx + 1);
+
+        // Resolve the lambda exactly as in gen_map_filter_reduce
+        let (lambda_c_name, lambda_captures) = if let Some(lambda_expr) = args.get(1) {
+            match lambda_expr {
+                Expr::Lambda { .. } => {
+                    let lambda_code = self.gen_expr(lambda_expr);
+                    let lambdas = self.pending_lambdas.borrow();
+                    if let Some((_, _, _, _, caps)) =
+                        lambdas.iter().find(|(n, _, _, _, _)| *n == lambda_code)
+                    {
+                        (lambda_code, caps.clone())
+                    } else {
+                        (lambda_code, vec![])
+                    }
+                }
+                Expr::Ident(n) => {
+                    let c_name = self
+                        .var_to_lambda
+                        .get(n.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| n.clone());
+                    let caps = self
+                        .lambda_captures
+                        .get(&c_name)
+                        .cloned()
+                        .unwrap_or_default();
+                    (c_name, caps)
+                }
+                _ => return,
+            }
+        } else {
+            return;
+        };
+
+        let arr_expr = self.gen_expr(&args[0]);
+        let source_name = match &args[0] {
+            Expr::Ident(n) => Some(n.as_str()),
+            _ => None,
+        };
+        let arr_len = if let Some(name) = source_name {
+            if let Some(len) = self.array_lengths.get(name).cloned() {
+                len
+            } else {
+                format!("(long)(sizeof({av}) / sizeof({av}[0]))", av = arr_expr)
+            }
+        } else {
+            format!("(long)(sizeof({av}) / sizeof({av}[0]))", av = arr_expr)
+        };
+
+        let cap_args_str = if lambda_captures.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", lambda_captures.join(", "))
+        };
+
+        match fn_name {
+            "reduce" => {
+                // target = init; for (...) target = lambda(target, arr[i], caps);
+                let init_expr = self.gen_expr(&args[2]);
+                self.write_indent();
+                writeln!(self.output, "{} = {};", target, init_expr).unwrap();
+                self.write_indent();
+                writeln!(
+                    self.output,
+                    "for (long __i_{idx} = 0; __i_{idx} < {len}; __i_{idx}++) {{",
+                    idx = idx,
+                    len = arr_len
+                )
+                .unwrap();
+                self.indent += 1;
+                self.write_indent();
+                writeln!(
+                    self.output,
+                    "{target} = {lambda}({target}, {arr}[__i_{idx}]{caps});",
+                    target = target,
+                    lambda = lambda_c_name,
+                    arr = arr_expr,
+                    caps = cap_args_str
+                )
+                .unwrap();
+                self.indent -= 1;
+                self.write_indent();
+                writeln!(self.output, "}}").unwrap();
+            }
+            _ => {
+                // map/filter produce arrays; a scalar cannot hold them. Fall back to
+                // the declaration form under the source name (type system guarantees
+                // this branch is only reachable for scalar map/filter, which the
+                // typechecker rejects today).
+                self.gen_map_filter_reduce(target, fn_name, args);
+            }
         }
     }
 
@@ -1860,9 +1983,11 @@ impl CodeGen {
                 let c_ty = ty
                     .as_ref()
                     .map_or_else(|| self.infer_c_type(value), |t| self.c_type(t));
+                // Capture previous binding's C type BEFORE var_types is overwritten below.
+                let prev_type = self.var_types.get(name.as_str()).cloned();
+                let is_shadow = self.declared_vars.contains(name);
                 self.var_types.insert(name.clone(), c_ty.clone());
                 self.write_indent();
-                let is_shadow = self.declared_vars.contains(name);
                 // ── map / filter / reduce: generate inline C loops ──
                 if let Expr::Call {
                     name: ref fn_name,
@@ -1871,34 +1996,40 @@ impl CodeGen {
                 } = value
                 {
                     if fn_name == "map" || fn_name == "filter" || fn_name == "reduce" {
-                        if is_shadow {
-                            // Shadow: use unique internal name to avoid C type conflicts.
-                            // C arrays cannot be reassigned, so shadows of map/filter
-                            // results use a unique name. Reduce (scalar) assigns back.
-                            let prev_type = self.var_types.get(name.as_str()).cloned();
-                            let is_prev_array =
-                                prev_type.map(|t| t.ends_with('*')).unwrap_or(false);
-                            if is_prev_array {
-                                // Previous was array — can't reassign in C.
-                                // Use unique name, remove from declared_vars so
-                                // subsequent references use the new unique name.
-                                let unique = format!("{}__v{}", name, self.var_counter.get());
-                                self.var_counter.set(self.var_counter.get() + 1);
-                                self.declared_vars.retain(|v| v != name);
-                                self.gen_map_filter_reduce(&unique, fn_name, fn_args);
-                                // Register the unique name
-                                self.declared_vars.push(unique.clone());
-                                self.var_types.insert(unique.clone(), "long".to_string());
-                            } else {
-                                // Previous was scalar — safe to redeclare
-                                self.declared_vars.retain(|v| v != name);
-                                self.gen_map_filter_reduce(name, fn_name, fn_args);
+                        let prev_is_array = prev_type.map(|t| t.ends_with('*')).unwrap_or(false);
+                        if is_shadow && prev_is_array {
+                            // Shadowing an array result (map/filter/reduce chain under
+                            // one name): C arrays cannot be reassigned, so emit under a
+                            // unique C name and redirect later references via c_symbol_map.
+                            // gen_map_filter_reduce resolves the source through gen_expr,
+                            // which follows the CURRENT mapping (i.e. the old symbol), so
+                            // this must run before the new mapping is registered.
+                            let unique = format!("{}__v{}", name, self.var_counter.get());
+                            self.var_counter.set(self.var_counter.get() + 1);
+                            self.declared_vars.retain(|v| v != &unique);
+                            self.gen_map_filter_reduce(&unique, fn_name, fn_args);
+                            // Redirect source-level name to the new C symbol
+                            self.c_symbol_map.insert(name.clone(), unique.clone());
+                            self.declared_vars.push(unique.clone());
+                            let new_ty: &str = if fn_name == "reduce" { "long" } else { "long*" };
+                            self.var_types.insert(unique.clone(), new_ty.to_string());
+                            self.var_types.insert(name.clone(), new_ty.to_string());
+                            // Keep length tracking under the source name too, so
+                            // print/len/chained calls keyed by the source name resolve.
+                            if let Some(l) = self.array_lengths.get(&unique).cloned() {
+                                self.array_lengths.insert(name.clone(), l);
                             }
                             return;
-                        } else {
-                            self.gen_map_filter_reduce(name, fn_name, fn_args);
+                        }
+                        if is_shadow {
+                            // Scalar shadow (e.g. reduce over a reduce result):
+                            // assign in place to the CURRENT C symbol.
+                            let target_c = self.c_symbol(name);
+                            self.gen_map_filter_reduce_assign(&target_c, fn_name, fn_args);
                             return;
                         }
+                        self.gen_map_filter_reduce(name, fn_name, fn_args);
+                        return;
                     }
                 }
                 if is_shadow {
@@ -2098,8 +2229,13 @@ impl CodeGen {
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
-                } else {
+                } else if let Expr::ArrayLiteral(_) = iterable {
+                    // Inline array literal: copy elements into a local array.
+                    // Braced so __arr/__i stay loop-local (multiple loops in one fn).
                     let iter_expr = self.gen_expr(iterable);
+                    self.write_indent();
+                    writeln!(self.output, "{{").unwrap();
+                    self.indent += 1;
                     self.write_indent();
                     writeln!(self.output, "long __arr[] = (long[]){};", iter_expr).unwrap();
                     self.write_indent();
@@ -2114,6 +2250,49 @@ impl CodeGen {
                     for s in body {
                         self.gen_stmt(s);
                     }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                } else {
+                    // Named array (or expression resolving to array storage):
+                    // iterate by pointer using the tracked element count.
+                    let iter_expr = self.gen_expr(iterable);
+                    let len_expr = match iterable {
+                        Expr::Ident(n) => self
+                            .array_lengths
+                            .get(self.c_symbol(n).as_str())
+                            .or_else(|| self.array_lengths.get(n.as_str()))
+                            .cloned(),
+                        _ => None,
+                    }
+                    .unwrap_or_else(|| {
+                        // No tracked length (e.g. array parameter): best-effort sizeof.
+                        format!("(long)(sizeof({ie}) / sizeof({ie}[0]))", ie = iter_expr)
+                    });
+                    self.write_indent();
+                    writeln!(self.output, "{{").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "long* __arr = {};", iter_expr).unwrap();
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "for (long __i = 0; __i < {}; __i++) {{",
+                        len_expr
+                    )
+                    .unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "long {} = __arr[__i];", variable).unwrap();
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
@@ -2319,6 +2498,21 @@ impl CodeGen {
                     "long".into()
                 }
             }
+            Expr::MethodCall { target, method, .. } => {
+                // Built-in method sugar returns the stdlib fn's C type;
+                // struct methods return the struct's C type.
+                if self.infer_c_type(target) == "const char*" {
+                    match method.as_str() {
+                        "contains" | "starts_with" | "ends_with" | "equals" | "is_empty" => {
+                            "long".into() // C runtime booleans are long
+                        }
+                        "find" | "length" | "len" | "char_at" => "long".into(),
+                        _ => "const char*".into(),
+                    }
+                } else {
+                    "long".into()
+                }
+            }
             Expr::Match { .. } => "long".into(),
             Expr::Lambda { params, ret, .. } => {
                 let ret_str = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
@@ -2331,6 +2525,14 @@ impl CodeGen {
             Expr::FString(_) => "const char*".into(),
             _ => "long".into(),
         }
+    }
+
+    /// Resolve the C symbol for a source-level variable name (follows shadow renames).
+    fn c_symbol(&self, name: &str) -> String {
+        self.c_symbol_map
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn gen_expr(&self, expr: &Expr) -> String {
@@ -2364,7 +2566,7 @@ impl CodeGen {
                 {
                     Self::c_mangle(&normalized)
                 } else {
-                    name.clone()
+                    self.c_symbol(name)
                 }
             }
             Expr::MoneyLiteral { amount, currency } => {
@@ -2451,6 +2653,13 @@ impl CodeGen {
                     if c_ty == "const char*" || c_ty == "char*" {
                         return format!("(long)strlen({})", self.gen_expr(arg));
                     } else if c_ty.ends_with('*') {
+                        // Tracked runtime lengths (filter counts, mapped/shadowed arrays)
+                        // take priority over sizeof, which reports allocation size
+                        if let Expr::Ident(n) = arg {
+                            if let Some(len) = self.array_lengths.get(n.as_str()).cloned() {
+                                return len;
+                            }
+                        }
                         // For VLA arrays, use sizeof at call site
                         let arr_val = self.gen_expr(arg);
                         return format!("(long)(sizeof({av}) / sizeof({av}[0]))", av = arr_val);
@@ -2860,7 +3069,18 @@ impl CodeGen {
                         "to_lower" => "__sbx_str_to_lower".to_string(),
                         "replace" => "__sbx_str_replace".to_string(),
                         "trim" => "__sbx_str_trim".to_string(),
-                        "length" => "__sbx_str_len".to_string(),
+                        "length" | "len" => "__sbx_str_len".to_string(),
+                        // sugar aliases: method name → stdlib fn name
+                        "contains" => "__sbx_str_contains".to_string(),
+                        "starts_with" => "__sbx_str_starts_with".to_string(),
+                        "ends_with" => "__sbx_str_ends_with".to_string(),
+                        "find" => "__sbx_str_find".to_string(),
+                        "substring" => "__sbx_str_sub".to_string(),
+                        "char_at" => "__sbx_str_char_at".to_string(),
+                        "repeat" => "__sbx_str_repeat".to_string(),
+                        "split" => "__sbx_str_split".to_string(),
+                        "equals" => "__sbx_str_eq".to_string(),
+                        "is_empty" => "__sbx_str_is_empty".to_string(),
                         _ => format!("__sbx_str_{}", method),
                     }
                 } else {

@@ -1,6 +1,7 @@
 mod ast;
 mod codegen;
 mod compiler;
+mod diagnostic;
 mod fmt;
 mod interpreter;
 mod lexer;
@@ -204,9 +205,9 @@ fn main() -> anyhow::Result<()> {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
             if ast {
-                let mut lex = lexer::Lexer::new(&source);
+                let mut lex = lexer::Lexer::new(&source).with_source(&filename);
                 let tokens = lex.tokenize()?;
-                let mut pars = parser::Parser::new(tokens);
+                let mut pars = parser::Parser::new(tokens).with_source(&source, &filename);
                 let program = pars.parse()?;
                 println!("{:#?}", program);
             } else {

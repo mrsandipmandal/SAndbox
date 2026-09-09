@@ -59,6 +59,8 @@ pub struct Parser {
     tokens: Vec<Spanned>,
     pos: usize,
     eof: Spanned,
+    source: String,
+    filename: String,
 }
 
 impl Parser {
@@ -67,7 +69,17 @@ impl Parser {
             eof: Spanned::new(Token::Eof, 0, 0),
             tokens,
             pos: 0,
+            source: String::new(),
+            filename: "<input>".to_string(),
         }
+    }
+
+    /// Attach the original source so errors can render the offending line
+    /// with a caret pointer.
+    pub fn with_source(mut self, source: &str, filename: &str) -> Self {
+        self.source = source.to_string();
+        self.filename = filename.to_string();
+        self
     }
 
     pub fn parse(&mut self) -> Result<Program> {
@@ -907,7 +919,7 @@ impl Parser {
         let mut left = self.parse_comparison()?;
         while self.current_token() == &Token::And {
             self.advance();
-            let right = self.parse_unary()?;
+            let right = self.parse_comparison()?;
             left = Expr::BinaryOp {
                 op: BinOp::And,
                 left: Box::new(left),
@@ -1034,11 +1046,26 @@ impl Parser {
                         self.advance();
                         let args = self.parse_args()?;
                         self.expect_token(&Token::RParen)?;
-                        expr = Expr::MethodCall {
-                            target: Box::new(expr),
-                            method: field,
-                            args,
-                        };
+                        // Array method sugar: nums.map(f) ≡ map(nums, f).
+                        // Desugaring here lets every backend reuse the proven
+                        // free-function path (incl. all C codegen positions).
+                        if (field == "map" || field == "filter" || field == "reduce")
+                            && !matches!(expr, Expr::Str(_))
+                        {
+                            let mut full_args = vec![expr];
+                            full_args.extend(args);
+                            expr = Expr::Call {
+                                name: field,
+                                type_args: Vec::new(),
+                                args: full_args,
+                            };
+                        } else {
+                            expr = Expr::MethodCall {
+                                target: Box::new(expr),
+                                method: field,
+                                args,
+                            };
+                        }
                     } else {
                         expr = Expr::FieldAccess {
                             target: Box::new(expr),
@@ -1347,8 +1374,9 @@ impl Parser {
                 Ok(Expr::ArrayLiteral(elems))
             }
             Token::FString(raw) => {
+                let (fline, fcol) = (self.current().line, self.current().col);
                 self.advance();
-                let parts = self.parse_fstring_parts(&raw)?;
+                let parts = self.parse_fstring_parts(&raw, fline, fcol)?;
                 Ok(Expr::FString(parts))
             }
             Token::Pipe => self.parse_lambda(),
@@ -1456,7 +1484,12 @@ impl Parser {
         Ok(Expr::Lambda { params, ret, body })
     }
 
-    fn parse_fstring_parts(&self, raw: &str) -> Result<Vec<crate::ast::FStringPart>> {
+    fn parse_fstring_parts(
+        &self,
+        raw: &str,
+        tok_line: usize,
+        tok_col: usize,
+    ) -> Result<Vec<crate::ast::FStringPart>> {
         let mut parts = Vec::new();
         let chars: Vec<char> = raw.chars().collect();
         let mut i = 0;
@@ -1484,15 +1517,47 @@ impl Parser {
                     }
                 }
                 if depth != 0 {
-                    return Err(anyhow::anyhow!("Unclosed {{ in f-string expression"));
+                    // Absolute file position of the opening '{' at char index
+                    // start (token spans point at 'f'; raw begins after f").
+                    let mut abs_line = tok_line;
+                    let mut abs_col = tok_col + 2;
+                    for &c in chars.iter().take(start) {
+                        if c == '\n' {
+                            abs_line += 1;
+                            abs_col = 1;
+                        } else {
+                            abs_col += 1;
+                        }
+                    }
+                    return Err(anyhow::anyhow!(crate::diagnostic::render(
+                        &self.source,
+                        &self.filename,
+                        abs_line,
+                        abs_col,
+                        "Unclosed '{' in f-string expression"
+                    )));
                 }
                 let expr_str: String = chars[start..i].iter().collect();
                 i += 1; // skip closing }
 
-                // Tokenize and parse the expression
-                let mut lexer = crate::lexer::Lexer::new(&expr_str);
+                // Tokenize and parse the expression. Pad the sub-source so the
+                // sub-lexer's line/col spans land on absolute file positions;
+                // the diagnostic then shows the real source line.
+                let mut abs_line = tok_line;
+                let mut abs_col = tok_col + 2;
+                for &c in chars.iter().take(start) {
+                    if c == '\n' {
+                        abs_line += 1;
+                        abs_col = 1;
+                    } else {
+                        abs_col += 1;
+                    }
+                }
+                let pad = "\n".repeat(abs_line - 1) + &" ".repeat(abs_col);
+                let mut lexer =
+                    crate::lexer::Lexer::new(&(pad + &expr_str)).with_source(&self.filename);
                 let tokens = lexer.tokenize()?;
-                let mut parser = Parser::new(tokens);
+                let mut parser = Parser::new(tokens).with_source(&self.source, &self.filename);
                 let expr = parser.parse_expr()?;
                 parts.push(crate::ast::FStringPart::Expr(Box::new(expr)));
             } else if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '{' {
@@ -1704,7 +1769,13 @@ impl Parser {
 
     fn error(&self, msg: String) -> anyhow::Error {
         let t = self.current();
-        anyhow!("{} at {}:{}", msg, t.line, t.col)
+        anyhow!(crate::diagnostic::render(
+            &self.source,
+            &self.filename,
+            t.line,
+            t.col,
+            &msg
+        ))
     }
 
     // ── v2.1: Impl blocks ──

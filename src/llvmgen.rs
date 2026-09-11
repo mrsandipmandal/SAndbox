@@ -1839,15 +1839,12 @@ impl LlvmGen {
                 // String methods or struct methods
                 let target_ty = self.infer_llvm_type(target);
                 let target_val = self.gen_expr(target);
-                // String methods
+                // String methods — mapped through the shared method table
+                // (stdlib::string_method); struct methods stay Type_method.
                 let c_fn: String = if target_ty == "i8*" {
-                    match method.as_str() {
-                        "to_upper" => "__sbx_str_to_upper".to_string(),
-                        "to_lower" => "__sbx_str_to_lower".to_string(),
-                        "replace" => "__sbx_str_replace".to_string(),
-                        "trim" => "__sbx_str_trim".to_string(),
-                        "length" => "__sbx_str_len".to_string(),
-                        _ => method.clone(),
+                    match crate::stdlib::string_method(method) {
+                        Some(m) => m.c_fn.to_string(),
+                        None => method.clone(),
                     }
                 } else {
                     // Struct method: Type_method
@@ -1864,14 +1861,17 @@ impl LlvmGen {
                     };
                     format!("{}_{}", type_name, method)
                 };
-                let mut all_vals = vec![target_val];
-                all_vals.extend(args.iter().map(|a| self.gen_expr(a)));
+                let mut all_vals = vec![format!("{} {}", target_ty, target_val)];
+                for a in args {
+                    all_vals.push(format!("{} {}", self.infer_llvm_type(a), self.gen_expr(a)));
+                }
                 let result = self.fresh_var();
+                let ret_ty = self.infer_llvm_type(expr);
                 let args_str = all_vals.join(", ");
                 writeln!(
                     self.output,
-                    "  {} = call i64 @{}({})",
-                    result, c_fn, args_str
+                    "  {} = call {} @{}({})",
+                    result, ret_ty, c_fn, args_str
                 )
                 .unwrap();
                 result
@@ -2324,6 +2324,18 @@ impl LlvmGen {
             }
             Expr::Range { .. } => "i64".to_string(),
             Expr::FString(_) => "i8*".to_string(),
+            Expr::MethodCall { target, method, .. } => {
+                // String method sugar: return kind from the shared table
+                // ("s" → i8*, "i" → i64); struct methods → i64.
+                if self.infer_llvm_type(target) == "i8*" {
+                    match crate::stdlib::string_method_ret_kind(method) {
+                        Some("s") => "i8*".to_string(),
+                        _ => "i64".to_string(),
+                    }
+                } else {
+                    "i64".to_string()
+                }
+            }
             _ => "i64".to_string(),
         }
     }

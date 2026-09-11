@@ -629,6 +629,68 @@ pub fn is_builtin(name: &str) -> bool {
     builtins().contains_key(name)
 }
 
+// ── Method dispatch table (single source of truth) ──
+//
+// Every layer consults this table instead of keeping its own method
+// list: the typechecker derives signatures from `builtin`, the C/LLVM
+// backends derive the call target from `c_fn`, and the parser uses
+// `is_array_method` to decide desugaring. Adding a method = one row
+// here (+ one execution arm in the interpreter).
+
+/// One builtin string method: `s.name(args)` ≡ `builtin(s, args…)`.
+/// `builtin` must exist in `builtins()`; its first param is the receiver.
+/// `c_fn` is the C runtime symbol the backends emit.
+pub struct StringMethod {
+    pub name: &'static str,
+    pub builtin: &'static str,
+    pub c_fn: &'static str,
+}
+
+const STRING_METHODS: &[StringMethod] = &[
+    StringMethod { name: "to_upper", builtin: "string::to_upper", c_fn: "__sbx_str_to_upper" },
+    StringMethod { name: "to_lower", builtin: "string::to_lower", c_fn: "__sbx_str_to_lower" },
+    StringMethod { name: "trim", builtin: "string::trim", c_fn: "__sbx_str_trim" },
+    StringMethod { name: "replace", builtin: "string::replace", c_fn: "__sbx_str_replace" },
+    StringMethod { name: "contains", builtin: "string::contains", c_fn: "__sbx_str_contains" },
+    StringMethod { name: "starts_with", builtin: "string::starts_with", c_fn: "__sbx_str_starts_with" },
+    StringMethod { name: "ends_with", builtin: "string::ends_with", c_fn: "__sbx_str_ends_with" },
+    StringMethod { name: "find", builtin: "string::find", c_fn: "__sbx_str_find" },
+    StringMethod { name: "substring", builtin: "string::substring", c_fn: "__sbx_str_sub" },
+    StringMethod { name: "char_at", builtin: "string::char_at", c_fn: "__sbx_str_char_at" },
+    StringMethod { name: "repeat", builtin: "string::repeat", c_fn: "__sbx_str_repeat" },
+    StringMethod { name: "equals", builtin: "string::equals", c_fn: "__sbx_str_eq" },
+    // 'len' aliases the stdlib's 'length' spelling
+    StringMethod { name: "len", builtin: "string::length", c_fn: "__sbx_str_len" },
+    StringMethod { name: "is_empty", builtin: "string::is_empty", c_fn: "__sbx_str_is_empty" },
+];
+
+/// Look up a string method by name.
+pub fn string_method(name: &str) -> Option<&'static StringMethod> {
+    STRING_METHODS.iter().find(|m| m.name == name)
+}
+
+/// Array methods that take a lambda first (after receiver):
+/// `nums.map(f)` ≡ `map(nums, f)` free-function form. The parser
+/// desugars these at parse time so every backend reuses the
+/// free-function codegen path.
+const ARRAY_LAMBDA_METHODS: &[&str] = &["map", "filter", "reduce"];
+
+pub fn is_array_method(name: &str) -> bool {
+    ARRAY_LAMBDA_METHODS.contains(&name)
+}
+
+/// The C return kind of a string method: `"i"` for long/bool results,
+/// `"s"` for string results. Derived from the stdlib signature so there
+/// is no second hand-maintained return-type table.
+pub fn string_method_ret_kind(name: &str) -> Option<&'static str> {
+    let m = string_method(name)?;
+    let ret = builtins().get(m.builtin)?.ret.clone();
+    Some(match ret {
+        Type::String => "s",
+        _ => "i",
+    })
+}
+
 /// Maps a stdlib function name to its C equivalent
 pub fn c_name(name: &str) -> &str {
     match name {

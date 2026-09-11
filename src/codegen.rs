@@ -2499,15 +2499,15 @@ impl CodeGen {
                 }
             }
             Expr::MethodCall { target, method, .. } => {
-                // Built-in method sugar returns the stdlib fn's C type;
-                // struct methods return the struct's C type.
+                // Built-in method sugar returns the stdlib fn's C type
+                // (via the shared method table's ret kind); struct methods
+                // return the struct's C type.
                 if self.infer_c_type(target) == "const char*" {
-                    match method.as_str() {
-                        "contains" | "starts_with" | "ends_with" | "equals" | "is_empty" => {
-                            "long".into() // C runtime booleans are long
-                        }
-                        "find" | "length" | "len" | "char_at" => "long".into(),
-                        _ => "const char*".into(),
+                    match stdlib::string_method_ret_kind(method) {
+                        Some("i") => "long".into(), // C runtime booleans are long
+                        Some("s") => "const char*".into(),
+                        None => "long".into(),
+                        _ => "long".into(),
                     }
                 } else {
                     "long".into()
@@ -3062,26 +3062,12 @@ impl CodeGen {
                 let target_ty = self.infer_c_type(target);
                 let t = self.gen_expr(target);
                 let a: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
-                // String methods — map to __sbx_str_* C runtime functions
+                // String methods — mapped through the shared method table
+                // (stdlib::string_method); struct methods stay Type_method.
                 let c_fn: String = if target_ty == "const char*" {
-                    match method.as_str() {
-                        "to_upper" => "__sbx_str_to_upper".to_string(),
-                        "to_lower" => "__sbx_str_to_lower".to_string(),
-                        "replace" => "__sbx_str_replace".to_string(),
-                        "trim" => "__sbx_str_trim".to_string(),
-                        "length" | "len" => "__sbx_str_len".to_string(),
-                        // sugar aliases: method name → stdlib fn name
-                        "contains" => "__sbx_str_contains".to_string(),
-                        "starts_with" => "__sbx_str_starts_with".to_string(),
-                        "ends_with" => "__sbx_str_ends_with".to_string(),
-                        "find" => "__sbx_str_find".to_string(),
-                        "substring" => "__sbx_str_sub".to_string(),
-                        "char_at" => "__sbx_str_char_at".to_string(),
-                        "repeat" => "__sbx_str_repeat".to_string(),
-                        "split" => "__sbx_str_split".to_string(),
-                        "equals" => "__sbx_str_eq".to_string(),
-                        "is_empty" => "__sbx_str_is_empty".to_string(),
-                        _ => format!("__sbx_str_{}", method),
+                    match stdlib::string_method(method) {
+                        Some(m) => m.c_fn.to_string(),
+                        None => format!("__sbx_str_{}", method),
                     }
                 } else {
                     // Struct method: Type_method

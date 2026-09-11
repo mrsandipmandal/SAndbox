@@ -1108,35 +1108,13 @@ impl TypeChecker {
                 let target_ty = self.check_expr(target)?;
 
                 // Builtin method sugar: s.to_upper() ≡ string::to_upper(s),
-                // nums.map(f) ≡ map(nums, f). Checked against the stdlib
-                // builtin registry so signatures stay single-sourced.
-                const STRING_METHODS: &[&str] = &[
-                    "to_upper",
-                    "to_lower",
-                    "trim",
-                    "replace",
-                    "contains",
-                    "starts_with",
-                    "ends_with",
-                    "find",
-                    "substring",
-                    "char_at",
-                    "repeat",
-                    "equals",
-                    "len",
-                    "is_empty",
-                ];
-                const ARRAY_LAMBDA_METHODS: &[&str] = &["map", "filter"];
-                match (&target_ty, method.as_str()) {
-                    (Type::String, m) if STRING_METHODS.contains(&m) => {
-                        // 'len' is sugar for the stdlib's 'length'
-                        let builtin_name = if m == "len" {
-                            "string::length".to_string()
-                        } else {
-                            format!("string::{m}")
-                        };
+                // nums.map(f) ≡ map(nums, f). The method table in stdlib is
+                // the single source of truth for which methods exist and
+                // which builtin each maps to.
+                if let Type::String = &target_ty {
+                    if let Some(m) = stdlib::string_method(method) {
                         let sig = stdlib::builtins()
-                            .get(builtin_name.as_str())
+                            .get(m.builtin)
                             .cloned()
                             .expect("string method registered in stdlib");
                         let param_tys: Vec<Type> = sig.params.iter().map(|p| p.1.clone()).collect();
@@ -1144,7 +1122,7 @@ impl TypeChecker {
                             return Err(anyhow!(
                                 "String method '{}.{}' takes {} argument(s), got {}",
                                 target_ty,
-                                m,
+                                method,
                                 param_tys.len() - 1,
                                 args.len()
                             ));
@@ -1158,7 +1136,7 @@ impl TypeChecker {
                                     "Arg {} of '{}.{}': expected '{}', got '{}'",
                                     i + 1,
                                     target_ty,
-                                    m,
+                                    method,
                                     expected,
                                     arg_ty
                                 ));
@@ -1166,19 +1144,34 @@ impl TypeChecker {
                         }
                         return Ok(sig.ret.clone());
                     }
-                    (Type::Array(_), m) if ARRAY_LAMBDA_METHODS.contains(&m) => {
-                        // nums.map(f) / nums.filter(f): mirror free-form rules
+                }
+                if let Type::Array(_) = &target_ty {
+                    if stdlib::is_array_method(method) {
+                        // nums.map(f), nums.filter(f), nums.reduce(f, init):
+                        // mirror the free-form rules
+                        if method == "reduce" {
+                            if args.len() != 2 {
+                                return Err(anyhow!(
+                                    "Array method 'reduce' takes 2 arguments (lambda, initial), got {}",
+                                    args.len()
+                                ));
+                            }
+                            self.check_expr(&args[0])?; // lambda
+                            return self.check_expr(&args[1]); // initial
+                        }
+                        if args.len() != 1 {
+                            return Err(anyhow!(
+                                "Array method '{}' takes 1 argument (lambda), got {}",
+                                method,
+                                args.len()
+                            ));
+                        }
                         self.check_expr(&args[0])?; // lambda
-                        if m == "map" {
+                        if method == "map" {
                             return Ok(Type::Array(Box::new(Type::I64)));
                         }
-                        return Ok(target_ty);
+                        return Ok(target_ty); // filter
                     }
-                    (Type::Array(_), "reduce") if args.len() == 2 => {
-                        self.check_expr(&args[0])?; // lambda
-                        return self.check_expr(&args[1]); // initial
-                    }
-                    _ => {}
                 }
                 // For known types, resolve method as Type_method
                 let full_name = match &target_ty {

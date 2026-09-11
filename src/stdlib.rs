@@ -647,21 +647,77 @@ pub struct StringMethod {
 }
 
 const STRING_METHODS: &[StringMethod] = &[
-    StringMethod { name: "to_upper", builtin: "string::to_upper", c_fn: "__sbx_str_to_upper" },
-    StringMethod { name: "to_lower", builtin: "string::to_lower", c_fn: "__sbx_str_to_lower" },
-    StringMethod { name: "trim", builtin: "string::trim", c_fn: "__sbx_str_trim" },
-    StringMethod { name: "replace", builtin: "string::replace", c_fn: "__sbx_str_replace" },
-    StringMethod { name: "contains", builtin: "string::contains", c_fn: "__sbx_str_contains" },
-    StringMethod { name: "starts_with", builtin: "string::starts_with", c_fn: "__sbx_str_starts_with" },
-    StringMethod { name: "ends_with", builtin: "string::ends_with", c_fn: "__sbx_str_ends_with" },
-    StringMethod { name: "find", builtin: "string::find", c_fn: "__sbx_str_find" },
-    StringMethod { name: "substring", builtin: "string::substring", c_fn: "__sbx_str_sub" },
-    StringMethod { name: "char_at", builtin: "string::char_at", c_fn: "__sbx_str_char_at" },
-    StringMethod { name: "repeat", builtin: "string::repeat", c_fn: "__sbx_str_repeat" },
-    StringMethod { name: "equals", builtin: "string::equals", c_fn: "__sbx_str_eq" },
+    StringMethod {
+        name: "to_upper",
+        builtin: "string::to_upper",
+        c_fn: "__sbx_str_to_upper",
+    },
+    StringMethod {
+        name: "to_lower",
+        builtin: "string::to_lower",
+        c_fn: "__sbx_str_to_lower",
+    },
+    StringMethod {
+        name: "trim",
+        builtin: "string::trim",
+        c_fn: "__sbx_str_trim",
+    },
+    StringMethod {
+        name: "replace",
+        builtin: "string::replace",
+        c_fn: "__sbx_str_replace",
+    },
+    StringMethod {
+        name: "contains",
+        builtin: "string::contains",
+        c_fn: "__sbx_str_contains",
+    },
+    StringMethod {
+        name: "starts_with",
+        builtin: "string::starts_with",
+        c_fn: "__sbx_str_starts_with",
+    },
+    StringMethod {
+        name: "ends_with",
+        builtin: "string::ends_with",
+        c_fn: "__sbx_str_ends_with",
+    },
+    StringMethod {
+        name: "find",
+        builtin: "string::find",
+        c_fn: "__sbx_str_find",
+    },
+    StringMethod {
+        name: "substring",
+        builtin: "string::substring",
+        c_fn: "__sbx_str_sub",
+    },
+    StringMethod {
+        name: "char_at",
+        builtin: "string::char_at",
+        c_fn: "__sbx_str_char_at",
+    },
+    StringMethod {
+        name: "repeat",
+        builtin: "string::repeat",
+        c_fn: "__sbx_str_repeat",
+    },
+    StringMethod {
+        name: "equals",
+        builtin: "string::equals",
+        c_fn: "__sbx_str_eq",
+    },
     // 'len' aliases the stdlib's 'length' spelling
-    StringMethod { name: "len", builtin: "string::length", c_fn: "__sbx_str_len" },
-    StringMethod { name: "is_empty", builtin: "string::is_empty", c_fn: "__sbx_str_is_empty" },
+    StringMethod {
+        name: "len",
+        builtin: "string::length",
+        c_fn: "__sbx_str_len",
+    },
+    StringMethod {
+        name: "is_empty",
+        builtin: "string::is_empty",
+        c_fn: "__sbx_str_is_empty",
+    },
 ];
 
 /// Look up a string method by name.
@@ -673,6 +729,10 @@ pub fn string_method(name: &str) -> Option<&'static StringMethod> {
 /// `nums.map(f)` ≡ `map(nums, f)` free-function form. The parser
 /// desugars these at parse time so every backend reuses the
 /// free-function codegen path.
+// ── NOTE: this const currently guards parser desugaring only; the C
+// runtime equivalents (`__sbx_arr_map`, `__sbx_arr_filter`, `__sbx_arr_reduce`)
+// must also exist for `sandbox run` to succeed. Don't extend this list
+// without adding/verifying the matching C runtime function. ──
 const ARRAY_LAMBDA_METHODS: &[&str] = &["map", "filter", "reduce"];
 
 pub fn is_array_method(name: &str) -> bool {
@@ -732,6 +792,9 @@ pub fn c_name(name: &str) -> &str {
         "array::len" => "__sbx_arr_len",
         "array::push" => "__sbx_arr_push",
         "array::sort" => "__sbx_arr_sort",
+        "map" => "__sbx_arr_map",
+        "filter" => "__sbx_arr_filter",
+        "reduce" => "__sbx_arr_reduce",
         "json::stringify" => "__sbx_json_stringify",
         "json::stringify_float" => "__sbx_json_stringify_float",
         "json::parse" => "__sbx_json_parse",
@@ -916,6 +979,12 @@ static long __sbx_str_find(const char* s, const char* sub) {
     return pos ? (long)(pos - s) : -1;
 }
 
+// ── array helpers (runtime) ──
+//
+// The sandbox ecosystem maps `nums.map(f)` → free-function `map(nums, f)`
+// in the parser; the C runtime below is what `sandbox run` links against.
+// Keep these in sync with `ARRAY_LAMBDA_METHODS` in stdlib.rs.
+
 static long __sbx_arr_len(long* arr) {
     (void)arr;
     return 0;
@@ -936,6 +1005,34 @@ static void __sbx_arr_sort(long* arr, long len) {
         }
         arr[j + 1] = key;
     }
+}
+
+// Array lambda helpers — called as map(src, len, lambda, captures...).
+// `src`/`target` are long*; `len` is element count. The lambda receives
+// (element, captures...) and returns the new element. Captures are passed
+// through so closure-captured variables reach the lambda.
+static void __sbx_arr_map(long* target, long* src, long len, long (*lambda)(long, long*)) {
+    for (long i = 0; i < len; i++) {
+        target[i] = lambda(src[i], NULL);
+    }
+}
+
+static long __sbx_arr_filter(long* target, long* src, long len, long (*lambda)(long, long*)) {
+    long j = 0;
+    for (long i = 0; i < len; i++) {
+        if (lambda(src[i], NULL)) {
+            target[j++] = src[i];
+        }
+    }
+    return j;
+}
+
+static long __sbx_arr_reduce(long* src, long len, long (*lambda)(long, long), long init) {
+    long acc = init;
+    for (long i = 0; i < len; i++) {
+        acc = lambda(acc, src[i]);
+    }
+    return acc;
 }
 
 /* ── v2.0: JSON helpers ── */

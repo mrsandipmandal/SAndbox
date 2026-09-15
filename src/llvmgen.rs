@@ -337,6 +337,11 @@ impl LlvmGen {
                 .map_or("void".to_string(), |t| self.llvm_type(t));
             (ptys, rty)
         };
+        // The process entry point must be `define i32 @main()` so the exit
+        // status is defined; `define void @main` leaves it garbage (observed
+        // 3/232 with clang).
+        let is_main = name == "main";
+        let ret_ty = if is_main { "i32".to_string() } else { ret_ty };
 
         // Check if this is a lambda with captures
         let captures = self.lambda_captures.get(name).cloned().unwrap_or_default();
@@ -572,12 +577,27 @@ impl LlvmGen {
             Stmt::Return(Some(expr)) => {
                 let val = self.gen_expr(expr);
                 let ty = self.infer_llvm_type(expr);
-                writeln!(self.output, "  ret {} {}", ty, val).unwrap();
+                if self.current_fn == "main" {
+                    // main returns i32; truncate the i64 expression value.
+                    if ty == "i64" {
+                        let trunc = self.fresh_var();
+                        writeln!(self.output, "  {} = trunc i64 {} to i32", trunc, val).unwrap();
+                        writeln!(self.output, "  ret i32 {}", trunc).unwrap();
+                    } else {
+                        writeln!(self.output, "  ret i32 0").unwrap();
+                    }
+                } else {
+                    writeln!(self.output, "  ret {} {}", ty, val).unwrap();
+                }
                 self.block_terminated = true;
                 val
             }
             Stmt::Return(None) => {
-                writeln!(self.output, "  ret void").unwrap();
+                if self.current_fn == "main" {
+                    writeln!(self.output, "  ret i32 0").unwrap();
+                } else {
+                    writeln!(self.output, "  ret void").unwrap();
+                }
                 self.block_terminated = true;
                 "void".to_string()
             }
@@ -850,6 +870,108 @@ impl LlvmGen {
                         writeln!(self.output, "  {} = sext i8 {} to i64", char_ext, char_val)
                             .unwrap();
                         writeln!(self.output, "  store i64 {}, i64* {}", char_ext, var_alloca)
+                            .unwrap();
+
+                        for s in body {
+                            self.gen_stmt(s);
+                        }
+                        if !self.block_terminated {
+                            writeln!(self.output, "  br label %{}", incr_label).unwrap();
+                            self.block_terminated = true;
+                        }
+
+                        // Increment
+                        writeln!(self.output, "{}:", incr_label).unwrap();
+                        self.block_terminated = false;
+                        let loaded2 = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = load i64, i64* {}",
+                            loaded2, counter_alloca
+                        )
+                        .unwrap();
+                        let incr = self.fresh_var();
+                        writeln!(self.output, "  {} = add i64 {}, 1", incr, loaded2).unwrap();
+                        writeln!(self.output, "  store i64 {}, i64* {}", incr, counter_alloca)
+                            .unwrap();
+                        writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                        self.block_terminated = true;
+
+                        // Pop loop context
+                        self.loop_stack.pop();
+
+                        // End block
+                        writeln!(self.output, "{}:", end_label).unwrap();
+                        self.block_terminated = false;
+                        "void".to_string()
+                    } else if let Expr::ArrayLiteral(elems) = iterable {
+                        // Array-literal iteration: materialize the array once,
+                        // then iterate 0..len (element type i64, matching the
+                        // ArrayLiteral codegen above).
+                        let arr = self.gen_expr(iterable);
+                        let n = elems.len();
+                        let loop_var = variable.clone();
+                        let cond_label = self.fresh_label("for.cond");
+                        let body_label = self.fresh_label("for.body");
+                        let end_label = self.fresh_label("for.end");
+                        let incr_label = self.fresh_label("for.incr");
+
+                        // Allocate loop counter and loop variable
+                        let counter_alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca i64", counter_alloca).unwrap();
+                        writeln!(self.output, "  store i64 0, i64* {}", counter_alloca).unwrap();
+                        let var_alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca i64", var_alloca).unwrap();
+                        self.variables
+                            .insert(loop_var.clone(), (var_alloca.clone(), "i64".to_string()));
+
+                        // Push loop context
+                        self.loop_stack
+                            .push((end_label.clone(), incr_label.clone()));
+
+                        // Branch to condition
+                        writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                        self.block_terminated = true;
+
+                        // Condition: counter < n
+                        writeln!(self.output, "{}:", cond_label).unwrap();
+                        self.block_terminated = false;
+                        let loaded_counter = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = load i64, i64* {}",
+                            loaded_counter, counter_alloca
+                        )
+                        .unwrap();
+                        let cmp = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = icmp slt i64 {}, {}",
+                            cmp, loaded_counter, n
+                        )
+                        .unwrap();
+                        writeln!(
+                            self.output,
+                            "  br i1 {}, label %{}, label %{}",
+                            cmp, body_label, end_label
+                        )
+                        .unwrap();
+                        self.block_terminated = true;
+
+                        // Body: bind loop variable to arr[counter], then body
+                        writeln!(self.output, "{}:", body_label).unwrap();
+                        self.block_terminated = false;
+                        let elem_ptr = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = getelementptr i64, i64* {}, i64 {}",
+                            elem_ptr, arr, loaded_counter
+                        )
+                        .unwrap();
+                        let elem_val = self.fresh_var();
+                        writeln!(self.output, "  {} = load i64, i64* {}", elem_val, elem_ptr)
+                            .unwrap();
+                        writeln!(self.output, "  store i64 {}, i64* {}", elem_val, var_alloca)
                             .unwrap();
 
                         for s in body {

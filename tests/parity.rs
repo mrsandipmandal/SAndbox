@@ -385,6 +385,20 @@ fn main() {
         backends: C_AND_INTERP,
     },
     ParityCase {
+        name: "for_over_array_literal",
+        source: r#"
+fn main() {
+    for item in [10, 20, 30] {
+        print(item)
+    }
+}
+"#,
+        // All backends must agree: for-in over an array literal was a
+        // silent no-op in the interpreter and invalid IR in LLVM until
+        // literal iteration was implemented in both.
+        backends: ALL,
+    },
+    ParityCase {
         name: "string_basics",
         source: r#"
 fn main() {

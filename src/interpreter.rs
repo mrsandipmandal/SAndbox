@@ -563,6 +563,24 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                     }
                     continue;
                 }
+                // Array literal iteration (matches C/LLVM backends: int elements)
+                if let ast::Expr::ArrayLiteral(elems) = iterable {
+                    let mut vals = Vec::new();
+                    for e in elems {
+                        vals.push(eval_expr(e, state)?);
+                    }
+                    for v in vals {
+                        state.vars.insert(variable.clone(), v);
+                        state.arr_vars.remove(variable); // shadow array with element
+                        match exec_block(body, state)? {
+                            Some(BREAK_SENTINEL) => break,
+                            Some(CONTINUE_SENTINEL) => continue,
+                            Some(val) => return Ok(Some(val)),
+                            None => {}
+                        }
+                    }
+                    continue;
+                }
                 // Named array variable iteration
                 if let ast::Expr::Ident(n) = iterable {
                     if let Some(arr) = state.arr_vars.get(n).cloned() {

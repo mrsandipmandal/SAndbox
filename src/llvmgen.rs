@@ -29,6 +29,19 @@ pub struct LlvmGen {
     pending_mono_structs: Vec<(String, String, Vec<Type>)>,
     /// Stack of (end_label, continue_label) for break/continue in loops
     loop_stack: Vec<(String, String)>,
+    /// Allocas created in the entry block (dominate every use site), so a
+    /// `let` redeclaration can safely reuse them instead of re-allocating in
+    /// a loop/branch body (which would not dominate later uses).
+    entry_allocas: std::collections::HashSet<String>,
+    /// False while still emitting into the entry block; flipped when the
+    /// first conditional branch/label opens a new block.
+    left_entry: bool,
+    /// Range-loop induction variables (their allocas are the induction slot,
+    /// incremented every iteration — never alias a redeclaration onto them).
+    induction_vars: std::collections::HashSet<String>,
+    /// Loop variables whose alloca is re-stored at the top of every body
+    /// iteration (array-literal loops) — safe to alias redeclarations onto.
+    loop_locals: std::collections::HashSet<String>,
 }
 
 /// Check if an LLVM type string represents a named struct (e.g., "%Point")
@@ -56,6 +69,10 @@ impl LlvmGen {
             mono_structs: std::collections::HashSet::new(),
             pending_mono_structs: Vec::new(),
             loop_stack: Vec::new(),
+            entry_allocas: std::collections::HashSet::new(),
+            left_entry: false,
+            induction_vars: std::collections::HashSet::new(),
+            loop_locals: std::collections::HashSet::new(),
         }
     }
 
@@ -368,6 +385,10 @@ impl LlvmGen {
     fn gen_fn(&mut self, name: &str, params: &[Param], ret: &Option<Type>, body: &[Stmt]) {
         self.current_fn = name.to_string();
         self.variables.clear();
+        self.entry_allocas.clear();
+        self.induction_vars.clear();
+        self.loop_locals.clear();
+        self.left_entry = false;
         self.block_terminated = false;
         // If the signature isn't pre-registered (e.g. for lambdas), compute it from params.
         let (param_tys, ret_ty) = if let Some(sigs) = self.fn_sigs.get(name) {
@@ -419,6 +440,7 @@ impl LlvmGen {
                 ty, p.name, ty, alloca
             )
             .unwrap();
+            self.entry_allocas.insert(alloca.clone());
             self.variables.insert(p.name.clone(), (alloca, ty.clone()));
         }
         // Allocate and store capture params, mapping __cap_<name> to <name> in variables
@@ -498,15 +520,42 @@ impl LlvmGen {
                     val
                 } else {
                     let val = self.gen_expr(value);
-                    let alloca = self.fresh_var();
-                    writeln!(self.output, "  {} = alloca {}", alloca, llvm_ty).unwrap();
-                    writeln!(
-                        self.output,
-                        "  store {} {}, {}* {}",
-                        llvm_ty, val, llvm_ty, alloca
-                    )
-                    .unwrap();
-                    self.variables.insert(name.clone(), (alloca, llvm_ty));
+                    // A redeclaration of an existing scalar reuses its alloca
+                    // when that alloca provably dominates every later use and
+                    // is not an induction slot: entry-block allocas, and
+                    // array-loop variables (re-stored each iteration).
+                    // Redeclaration behaves as assignment elsewhere (C and
+                    // interpreter agree), and a fresh body-block alloca would
+                    // not dominate uses after a loop that runs zero times.
+                    let is_entry_scalar = !is_struct_type(&llvm_ty)
+                        && !self.induction_vars.contains(name)
+                        && self.variables.get(name).is_some_and(|(a, t)| {
+                            t == &llvm_ty
+                                && (self.entry_allocas.contains(a)
+                                    || self.loop_locals.contains(name))
+                        });
+                    if is_entry_scalar {
+                        let alloca = self.variables.get(name).unwrap().0.clone();
+                        writeln!(
+                            self.output,
+                            "  store {} {}, {}* {}",
+                            llvm_ty, val, llvm_ty, alloca
+                        )
+                        .unwrap();
+                    } else {
+                        let alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca {}", alloca, llvm_ty).unwrap();
+                        if !self.left_entry {
+                            self.entry_allocas.insert(alloca.clone());
+                        }
+                        writeln!(
+                            self.output,
+                            "  store {} {}, {}* {}",
+                            llvm_ty, val, llvm_ty, alloca
+                        )
+                        .unwrap();
+                        self.variables.insert(name.clone(), (alloca, llvm_ty));
+                    }
                     val
                 }
             }
@@ -741,10 +790,14 @@ impl LlvmGen {
                     let end_label = self.fresh_label("for.end");
                     let incr_label = self.fresh_label("for.incr");
 
-                    // Allocate loop variable
+                    // Allocate loop variable (this alloca is the induction
+                    // slot: the incr block loads/adds/stores through it, so a
+                    // body redeclaration must not alias onto it).
                     let alloca = self.fresh_var();
                     writeln!(self.output, "  {} = alloca i64", alloca).unwrap();
                     writeln!(self.output, "  store i64 {}, i64* {}", start_val, alloca).unwrap();
+                    self.entry_allocas.insert(alloca.clone());
+                    self.induction_vars.insert(loop_var.clone());
                     self.variables
                         .insert(loop_var.clone(), (alloca.clone(), "i64".to_string()));
 
@@ -2662,6 +2715,9 @@ impl LlvmGen {
     }
 
     fn fresh_label(&mut self, prefix: &str) -> String {
+        // Labels are only minted for branch targets, so the first label of a
+        // function means control flow has left the entry block.
+        self.left_entry = true;
         let l = format!("{}_{}", prefix, self.var_counter);
         self.var_counter += 1;
         l

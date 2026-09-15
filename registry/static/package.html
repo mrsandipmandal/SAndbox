@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{PACKAGE_NAME}} — Sandbox Registry</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.0/github-markdown-dark.min.css">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface2: #1a1a25;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --orange: #f59e0b;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 20px 0;
+      background: var(--surface);
+    }
+
+    header .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--accent);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo svg { width: 32px; height: 32px; }
+
+    .nav-links { display: flex; gap: 24px; }
+    .nav-links a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+
+    .breadcrumb {
+      padding: 16px 0;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+    .breadcrumb a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .breadcrumb a:hover { text-decoration: underline; }
+
+    .pkg-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+      padding: 24px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .pkg-title h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent-hover);
+      margin-bottom: 8px;
+    }
+
+    .pkg-title .desc {
+      color: var(--text-dim);
+      font-size: 1.05rem;
+    }
+
+    .pkg-meta {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .meta-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    .meta-badge .value {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .meta-badge.version { border-color: var(--accent); color: var(--accent); }
+    .meta-badge.version .value { color: var(--accent); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 32px;
+      padding: 32px 0 80px;
+    }
+
+    .main-col { min-width: 0; }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .sidebar-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    .sidebar-card h3 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+    }
+
+    .install-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 0.85rem;
+      color: var(--green);
+      position: relative;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      word-break: break-all;
+    }
+
+    .install-box:hover { border-color: var(--accent); }
+
+    .install-box .copy-hint {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-family: 'Inter', sans-serif;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      background: var(--surface2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    .install-box:hover .copy-hint { opacity: 1; }
+    .install-box .copy-hint.copied { opacity: 1; color: var(--green); }
+
+    .dep-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .dep-list li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+
+    .dep-list li:last-child { border-bottom: none; }
+
+    .dep-list .dep-name {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .dep-list .dep-name:hover { text-decoration: underline; }
+
+    .dep-list .dep-spec {
+      color: var(--text-dim);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.8rem;
+    }
+
+    .version-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .version-list li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      font-size: 0.85rem;
+    }
+
+    .version-list .ver-link {
+      color: var(--text);
+      text-decoration: none;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .version-list .ver-link:hover { color: var(--accent); }
+
+    .version-list .yanked {
+      color: var(--red);
+      font-size: 0.75rem;
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+
+    .version-list .date {
+      color: var(--text-dim);
+      font-size: 0.8rem;
+    }
+
+    .section-title {
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* README markdown styles */
+    .readme-content {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      margin-bottom: 32px;
+    }
+
+    .readme-content .markdown-body {
+      background: transparent !important;
+      color: var(--text) !important;
+    }
+
+    .readme-content .markdown-body h1,
+    .readme-content .markdown-body h2,
+    .readme-content .markdown-body h3 {
+      color: var(--text) !important;
+      border-color: var(--border) !important;
+    }
+
+    .readme-content .markdown-body a {
+      color: var(--accent) !important;
+    }
+
+    .readme-content .markdown-body code {
+      background: var(--surface2) !important;
+      color: var(--text) !important;
+      border-radius: 4px;
+      padding: 2px 6px;
+    }
+
+    .readme-content .markdown-body pre {
+      background: var(--bg) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 8px;
+    }
+
+    .readme-content .markdown-body pre code {
+      background: transparent !important;
+    }
+
+    .readme-content .markdown-body blockquote {
+      border-left-color: var(--accent) !important;
+      color: var(--text-dim) !important;
+    }
+
+    .readme-content .markdown-body table th,
+    .readme-content .markdown-body table td {
+      border-color: var(--border) !important;
+    }
+
+    .empty-msg {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      font-style: italic;
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 0;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.85rem;
+    }
+
+    @media (max-width: 768px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .pkg-header { flex-direction: column; }
+      .pkg-title h1 { font-size: 1.5rem; }
+      .readme-content { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <a href="/" class="logo">
+        <svg viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="8" fill="#6366f1"/>
+          <path d="M8 22L16 10L24 22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="16" cy="18" r="2" fill="white"/>
+        </svg>
+        sandbox
+      </a>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/api/v1/packages">API</a>
+        <a href="https://github.com/sandbox-lang/sandbox" target="_blank">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <div class="breadcrumb">
+        <a href="/">Registry</a> / <span id="crumb-name"></span>
+      </div>
+
+      <div class="pkg-header">
+        <div class="pkg-title">
+          <h1 id="pkg-name"></h1>
+          <div class="desc" id="pkg-desc"></div>
+          <div class="pkg-meta" id="pkg-meta"></div>
+        </div>
+      </div>
+
+      <div class="layout">
+        <div class="main-col">
+          <div class="readme-content" id="readme-section" style="display:none">
+            <div class="markdown-body" id="readme-body"></div>
+          </div>
+          <div id="no-readme" class="empty-msg" style="display:none">No README provided.</div>
+
+          <h2 class="section-title">Dependencies</h2>
+          <div id="deps-section">
+            <span class="empty-msg">No dependencies.</span>
+          </div>
+        </div>
+
+        <div class="sidebar">
+          <div class="sidebar-card">
+            <h3>Install</h3>
+            <div id="install-commands"></div>
+          </div>
+
+          <div class="sidebar-card">
+            <h3>Download</h3>
+            <div id="download-link"></div>
+          </div>
+
+          <div class="sidebar-card">
+            <h3>Versions</h3>
+            <ul class="version-list" id="version-list"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container">
+      Sandbox Registry &copy; 2026 &middot; <a href="https://github.com/sandbox-lang/sandbox" style="color:var(--accent);text-decoration:none">sandbox-lang</a>
+    </div>
+  </footer>
+
+  <!-- Marked.js for markdown rendering -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+
+  <script>
+    const PKG_DATA = {{PKG_JSON}};
+
+    function render() {
+      const pkg = PKG_DATA;
+      if (!pkg || !pkg.name) {
+        document.querySelector('.container main').innerHTML =
+          '<div style="text-align:center;padding:80px 0"><h2>Package not found</h2><p style="color:var(--text-dim);margin-top:8px"><a href="/" style="color:var(--accent)">Back to registry</a></p></div>';
+        return;
+      }
+
+      document.title = pkg.name + ' — Sandbox Registry';
+      document.getElementById('crumb-name').textContent = pkg.name;
+      document.getElementById('pkg-name').textContent = pkg.name;
+      document.getElementById('pkg-desc').textContent = pkg.description || '';
+
+      // Meta badges
+      const meta = document.getElementById('pkg-meta');
+      let metaHtml = '';
+      if (pkg.latest_version) {
+        metaHtml += '<span class="meta-badge version"><span class="value">v' + pkg.latest_version + '</span></span>';
+      }
+      metaHtml += '<span class="meta-badge">' + pkg.versions.length + ' version' + (pkg.versions.length !== 1 ? 's' : '') + '</span>';
+      if (pkg.owner) {
+        metaHtml += '<span class="meta-badge">by <span class="value">' + pkg.owner + '</span></span>';
+      }
+      meta.innerHTML = metaHtml;
+
+      // Install commands
+      const installDiv = document.getElementById('install-commands');
+      if (pkg.latest_version) {
+        installDiv.innerHTML =
+          '<div style="margin-bottom:8px;color:var(--text-dim);font-size:0.8rem">CLI install:</div>' +
+          '<div class="install-box" onclick="copyText(\'sandbox add ' + pkg.name + ' ' + pkg.latest_version + '\', this)">' +
+          '  sandbox add ' + pkg.name + ' ' + pkg.latest_version +
+          '  <span class="copy-hint">click to copy</span>' +
+          '</div>' +
+          '<div style="margin-top:8px;color:var(--text-dim);font-size:0.8rem">Registry publish:</div>' +
+          '<div class="install-box" onclick="copyText(\'sandbox pkg publish src/main.sbx\', this)">' +
+          '  sandbox pkg publish src/main.sbx' +
+          '  <span class="copy-hint">click to copy</span>' +
+          '</div>';
+      }
+
+      // Download link
+      const downloadDiv = document.getElementById('download-link');
+      if (pkg.latest_version) {
+        downloadDiv.innerHTML =
+          '<a href="/api/v1/packages/' + pkg.name + '/' + pkg.latest_version + '/download" ' +
+          'style="display:inline-flex;align-items:center;gap:8px;color:var(--accent);text-decoration:none;font-size:0.9rem">' +
+          '  📦 ' + pkg.name + '-' + pkg.latest_version + '.sb' +
+          '</a>' +
+          '<div style="margin-top:4px;color:var(--text-dim);font-size:0.8rem">' +
+          '  SHA-256: ' + (pkg.versions[0] ? pkg.versions[0].checksum.substring(0, 20) + '...' : '—') +
+          '</div>';
+      }
+
+      // Versions
+      const versionList = document.getElementById('version-list');
+      if (pkg.versions.length === 0) {
+        versionList.innerHTML = '<li class="empty-msg">No versions</li>';
+      } else {
+        versionList.innerHTML = pkg.versions.map(v => {
+          const date = new Date(v.published_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+          if (v.yanked) {
+            return '<li><span class="ver-link yanked">v' + v.version + '</span><span class="date">yanked</span></li>';
+          }
+          return '<li><a class="ver-link" href="/api/v1/packages/' + pkg.name + '/' + v.version + '/download">v' + v.version + '</a><span class="date">' + date + '</span></li>';
+        }).join('');
+      }
+
+      // Dependencies
+      const depsSection = document.getElementById('deps-section');
+      const latestVersion = pkg.versions.find(v => !v.yanked);
+      if (latestVersion && latestVersion.dependencies && latestVersion.dependencies.length > 0) {
+        depsSection.innerHTML = '<ul class="dep-list">' +
+          latestVersion.dependencies.map(d =>
+            '<li><a class="dep-name" href="/packages/' + d.name + '">' + d.name + '</a><span class="dep-spec">' + d.spec + '</span></li>'
+          ).join('') + '</ul>';
+      }
+
+      // README
+      const readmeSection = document.getElementById('readme-section');
+      const noReadme = document.getElementById('no-readme');
+      if (pkg.readme && pkg.readme.trim()) {
+        readmeSection.style.display = 'block';
+        noReadme.style.display = 'none';
+        try {
+          document.getElementById('readme-body').innerHTML = marked.parse(pkg.readme);
+        } catch(e) {
+          document.getElementById('readme-body').textContent = pkg.readme;
+        }
+      } else {
+        readmeSection.style.display = 'none';
+        noReadme.style.display = 'block';
+      }
+    }
+
+    function copyText(text, el) {
+      navigator.clipboard.writeText(text).then(() => {
+        const hint = el.querySelector('.copy-hint');
+        hint.textContent = 'copied!';
+        hint.classList.add('copied');
+        setTimeout(() => {
+          hint.textContent = 'click to copy';
+          hint.classList.remove('copied');
+        }, 2000);
+      });
+    }
+
+    render();
+  </script>
+</body>
+</html>

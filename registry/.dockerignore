@@ -1,0 +1,6 @@
+target/
+registry-data/
+.git/
+tests/
+*.md
+LICENSE

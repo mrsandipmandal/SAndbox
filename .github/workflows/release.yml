@@ -100,10 +100,32 @@ jobs:
         with:
           path: artifacts
 
+      # Flatten artifacts/<name>/<file> into release/<file>, then generate a
+      # SHA256SUMS.txt in the standard sha256sum(1) format so users can verify
+      # downloads with: sha256sum -c --ignore-missing SHA256SUMS.txt
+      - name: Generate SHA256 checksums
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          cd release
+          sha256sum *.tar.gz *.zip | sort > SHA256SUMS.txt
+          # Self-check: catches any copy/mangling problem before publishing.
+          sha256sum --check --quiet SHA256SUMS.txt
+          echo "----- SHA256SUMS.txt -----"
+          cat SHA256SUMS.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            ## Verify your download
+
+            ```
+            sha256sum -c --ignore-missing SHA256SUMS.txt
+            ```
           files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
+            release/*.tar.gz
+            release/*.zip
+            release/SHA256SUMS.txt

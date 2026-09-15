@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Cache dependencies: copy manifests first, create dummy sources.
-COPY Cargo.toml Cargo.lock ./
+# (Cargo.lock is gitignored for this app-style crate, so generate it.)
+COPY Cargo.toml ./
 RUN mkdir src && \
     echo 'fn main() {}' > src/main.rs && \
     echo '' > src/lib.rs && \
@@ -23,7 +24,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user.

@@ -117,104 +117,20 @@ jobs:
           cargo build --verbose
           echo "Sandbox binary built."
 
-      - name: Smoke test (hello world)
-        env:
-          SRC_HELLO: 'fn main() {\n    print("Hello, Sandbox!")\n}\n'
-        run: |
-          set -euo pipefail
-          BIN="target/debug/sandbox"
+      # The checks themselves live in scripts/ci-smoke.sh — the single source
+      # of truth, also used by scripts/ci-local.sh. One thin step per check so
+      # a backend regression gets its own red X in the Actions UI.
+      - name: Smoke test (hello world, C backend)
+        run: bash scripts/ci-smoke.sh hello
 
-          TMP="$(mktemp -d)"
-          SOURCE="$TMP/hello.sbx"
-          printf '%b' "$SRC_HELLO" > "$SOURCE"
-
-          echo "----- hello.sbx -----"
-          cat "$SOURCE"
-
-          # Run once; --quiet suppresses compiler progress lines so stdout is
-          # program output only.
-          OUT="$($BIN run --quiet "$SOURCE")"
-          echo "----- stdout -----"
-          printf '%s\n' "$OUT"
-          echo "----- end stdout -----"
-
-          if ! printf '%s\n' "$OUT" | grep -qFx "Hello, Sandbox!"; then
-            echo >&2 "FAIL: unexpected hello output"
-            exit 1
-          fi
-          echo "Hello smoke test passed."
-
-      - name: Smoke test (array literal)
-        env:
-          SRC_ARRAY: 'fn main() {\n    for item in [10, 20, 30] {\n        print(item)\n    }\n}\n'
-        run: |
-          set -euo pipefail
-          BIN="target/debug/sandbox"
-
-          TMP="$(mktemp -d)"
-          SOURCE="$TMP/array.sbx"
-          printf '%b' "$SRC_ARRAY" > "$SOURCE"
-
-          echo "----- array.sbx -----"
-          cat "$SOURCE"
-
-          # Run once; --quiet makes stdout diffable against expected output.
-          OUT="$($BIN run --quiet "$SOURCE")"
-          echo "----- stdout -----"
-          printf '%s\n' "$OUT"
-          echo "----- end stdout -----"
-
-          if ! printf '%s\n' "$OUT" | diff -u - <(printf '10\n20\n30\n'); then
-            echo >&2 "FAIL: unexpected array output"
-            exit 1
-          fi
-          echo "Array smoke test passed."
+      - name: Smoke test (array literal, C backend)
+        run: bash scripts/ci-smoke.sh array
 
       - name: Smoke test (interpreter)
-        env:
-          SRC_ARRAY: 'fn main() {\n    for item in [10, 20, 30] {\n        print(item)\n    }\n}\n'
-        run: |
-          set -euo pipefail
-          BIN="target/debug/sandbox"
-
-          TMP="$(mktemp -d)"
-          SOURCE="$TMP/array.sbx"
-          printf '%b' "$SRC_ARRAY" > "$SOURCE"
-
-          # The interpreter prints no banner; stdout is program output only.
-          OUT="$($BIN interpret "$SOURCE")"
-          echo "----- interpreter stdout -----"
-          printf '%s\n' "$OUT"
-
-          if ! printf '%s\n' "$OUT" | diff -u - <(printf '10\n20\n30\n'); then
-            echo >&2 "FAIL: unexpected interpreter output"
-            exit 1
-          fi
-          echo "Interpreter smoke test passed."
+        run: bash scripts/ci-smoke.sh interp
 
       - name: Smoke test (LLVM backend)
-        env:
-          SRC_ARRAY: 'fn main() {\n    for item in [10, 20, 30] {\n        print(item)\n    }\n}\n'
-        run: |
-          set -euo pipefail
-          BIN="target/debug/sandbox"
-
-          TMP="$(mktemp -d)"
-          SOURCE="$TMP/array.sbx"
-          printf '%b' "$SRC_ARRAY" > "$SOURCE"
-
-          # Build a native binary via the LLVM backend (sandbox -> .ll -> clang).
-          # clang's -Woverride-module warning goes to stderr; silence it.
-          "$BIN" llvm-build "$SOURCE" -o "$TMP/llvm_prog" 2>/dev/null
-          OUT="$($TMP/llvm_prog)"
-          echo "----- llvm binary stdout -----"
-          printf '%s\n' "$OUT"
-
-          if ! printf '%s\n' "$OUT" | diff -u - <(printf '10\n20\n30\n'); then
-            echo >&2 "FAIL: unexpected LLVM binary output"
-            exit 1
-          fi
-          echo "LLVM backend smoke test passed."
+        run: bash scripts/ci-smoke.sh llvm
 
 
   # ── Backend Parity ──────────────────────────────────────────────────────────

@@ -1,5 +1,8 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM rust:1.82-slim AS builder
+# Floating `1-slim`: deps re-resolve fresh (Cargo.lock is gitignored), so a
+# pinned old toolchain eventually fails MSRV checks against newer dep
+# releases — exactly what killed the first CI docker build on rust:1.82.
+FROM rust:1-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev \

@@ -115,6 +115,14 @@ impl LlvmGen {
                     let ret_ty = ret
                         .as_ref()
                         .map_or("void".to_string(), |t| self.llvm_type(t));
+                    // main is emitted as `define i32 @main` (defined process
+                    // exit status); register the same type so any call site
+                    // — e.g. recursion — matches the definition.
+                    let ret_ty = if name == "main" {
+                        "i32".to_string()
+                    } else {
+                        ret_ty
+                    };
                     self.fn_sigs.insert(name.clone(), (param_tys, ret_ty));
                 }
                 TopLevel::ImplDef {

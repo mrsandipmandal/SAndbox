@@ -115,14 +115,6 @@ impl LlvmGen {
                     let ret_ty = ret
                         .as_ref()
                         .map_or("void".to_string(), |t| self.llvm_type(t));
-                    // main is emitted as `define i32 @main` (defined process
-                    // exit status); register the same type so any call site
-                    // — e.g. recursion — matches the definition.
-                    let ret_ty = if name == "main" {
-                        "i32".to_string()
-                    } else {
-                        ret_ty
-                    };
                     self.fn_sigs.insert(name.clone(), (param_tys, ret_ty));
                 }
                 TopLevel::ImplDef {
@@ -317,6 +309,48 @@ impl LlvmGen {
             .unwrap();
         }
 
+        // Process entry shim: the user's main keeps its declared signature
+        // (emitted as @sandbox_main above); this zero-arg shim defines the
+        // real process exit status. A declared i64 result is truncated to
+        // i32; any parameters get type-appropriate zeros.
+        if let Some((main_params, main_ret)) = self.fn_sigs.get("main").cloned() {
+            let zero = |ty: &str| match ty {
+                "double" => "0.0".to_string(),
+                "i8*" => "null".to_string(),
+                _ => "0".to_string(),
+            };
+            let call_args: Vec<String> = main_params.iter().map(|ty| zero(ty)).collect();
+            writeln!(self.output, "define i32 @main() {{").unwrap();
+            if main_ret == "void" {
+                writeln!(
+                    self.output,
+                    "  call void @sandbox_main({})",
+                    call_args.join(", ")
+                )
+                .unwrap();
+                writeln!(self.output, "  ret i32 0").unwrap();
+            } else {
+                let res = self.fresh_var();
+                writeln!(
+                    self.output,
+                    "  {} = call {} @sandbox_main({})",
+                    res,
+                    main_ret,
+                    call_args.join(", ")
+                )
+                .unwrap();
+                if main_ret == "i64" {
+                    let trunc = self.fresh_var();
+                    writeln!(self.output, "  {} = trunc i64 {} to i32", trunc, res).unwrap();
+                    writeln!(self.output, "  ret i32 {}", trunc).unwrap();
+                } else {
+                    writeln!(self.output, "  ret i32 0").unwrap();
+                }
+            }
+            writeln!(self.output, "}}").unwrap();
+            writeln!(self.output).unwrap();
+        }
+
         // Combine: preamble first, then string constants, then functions
         let preamble_end = self
             .output
@@ -345,11 +379,6 @@ impl LlvmGen {
                 .map_or("void".to_string(), |t| self.llvm_type(t));
             (ptys, rty)
         };
-        // The process entry point must be `define i32 @main()` so the exit
-        // status is defined; `define void @main` leaves it garbage (observed
-        // 3/232 with clang).
-        let is_main = name == "main";
-        let ret_ty = if is_main { "i32".to_string() } else { ret_ty };
 
         // Check if this is a lambda with captures
         let captures = self.lambda_captures.get(name).cloned().unwrap_or_default();
@@ -365,11 +394,15 @@ impl LlvmGen {
             let cap_param = format!("__cap_{}", cname);
             params_str.push(format!("{} %{}", cty, cap_param));
         }
+        // The user's `main` keeps its declared signature; it is emitted as
+        // `@sandbox_main` so a real `define i32 @main` entry shim can define
+        // the process exit status (see the shim appended in generate()).
+        let symbol: &str = if name == "main" { "sandbox_main" } else { name };
         writeln!(
             self.output,
             "define {} @{}({}) {{",
             ret_ty,
-            name,
+            symbol,
             params_str.join(", ")
         )
         .unwrap();
@@ -585,27 +618,12 @@ impl LlvmGen {
             Stmt::Return(Some(expr)) => {
                 let val = self.gen_expr(expr);
                 let ty = self.infer_llvm_type(expr);
-                if self.current_fn == "main" {
-                    // main returns i32; truncate the i64 expression value.
-                    if ty == "i64" {
-                        let trunc = self.fresh_var();
-                        writeln!(self.output, "  {} = trunc i64 {} to i32", trunc, val).unwrap();
-                        writeln!(self.output, "  ret i32 {}", trunc).unwrap();
-                    } else {
-                        writeln!(self.output, "  ret i32 0").unwrap();
-                    }
-                } else {
-                    writeln!(self.output, "  ret {} {}", ty, val).unwrap();
-                }
+                writeln!(self.output, "  ret {} {}", ty, val).unwrap();
                 self.block_terminated = true;
                 val
             }
             Stmt::Return(None) => {
-                if self.current_fn == "main" {
-                    writeln!(self.output, "  ret i32 0").unwrap();
-                } else {
-                    writeln!(self.output, "  ret void").unwrap();
-                }
+                writeln!(self.output, "  ret void").unwrap();
                 self.block_terminated = true;
                 "void".to_string()
             }

@@ -20,7 +20,9 @@ RUN mkdir src && \
     rm -rf src
 
 # Copy real source and rebuild (only the registry crate changes).
+# static/ is include_str!'d into the lib (HTML templates) — required at compile time.
 COPY src/ src/
+COPY static/ static/
 RUN touch src/main.rs src/lib.rs && cargo build --release
 
 # ── Runtime stage ────────────────────────────────────────────────────────────

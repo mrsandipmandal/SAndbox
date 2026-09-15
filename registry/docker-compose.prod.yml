@@ -1,0 +1,11 @@
+# Production override used by the CI deploy job: run the exact image that CI
+# pushed to ghcr.io instead of building on the host.
+#
+#   export REGISTRY_IMAGE=ghcr.io/mrsandipmandal/sandbox-registry:<sha>
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull registry
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Falls back to :latest when REGISTRY_IMAGE is unset (e.g. manual host runs).
+services:
+  registry:
+    image: ${REGISTRY_IMAGE:-ghcr.io/mrsandipmandal/sandbox-registry:latest}

@@ -399,6 +399,26 @@ fn main() {
         backends: ALL,
     },
     ParityCase {
+        name: "for_in_array_break_continue",
+        source: r#"
+fn main() {
+    for x in [1, 2, 3, 4, 5] {
+        if x == 2 {
+            continue
+        }
+        if x == 4 {
+            break
+        }
+        print(x)
+    }
+    print("done")
+}
+"#,
+        // All backends must agree: the C backend used to unroll array-literal
+        // iteration, so break/continue failed to compile ("not within a loop").
+        backends: ALL,
+    },
+    ParityCase {
         name: "string_basics",
         source: r#"
 fn main() {

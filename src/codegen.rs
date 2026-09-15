@@ -2157,22 +2157,7 @@ impl CodeGen {
                 if !self.declared_vars.contains(variable) {
                     self.declared_vars.push(variable.clone());
                 }
-                if let Expr::ArrayLiteral(elems) = iterable {
-                    for elem in elems {
-                        self.write_indent();
-                        writeln!(self.output, "{{").unwrap();
-                        self.indent += 1;
-                        self.write_indent();
-                        writeln!(self.output, "long {} = {};", variable, self.gen_expr(elem))
-                            .unwrap();
-                        for s in body {
-                            self.gen_stmt(s);
-                        }
-                        self.indent -= 1;
-                        self.write_indent();
-                        writeln!(self.output, "}}").unwrap();
-                    }
-                } else if let Expr::Range {
+                if let Expr::Range {
                     start,
                     end,
                     inclusive,
@@ -2229,19 +2214,33 @@ impl CodeGen {
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
-                } else if let Expr::ArrayLiteral(_) = iterable {
-                    // Inline array literal: copy elements into a local array.
+                } else if let Expr::ArrayLiteral(elems) = iterable {
+                    // Array literal: copy elements into a local array and run a
+                    // real C loop, so break/continue inside the body work (an
+                    // unrolled body would compile-fail: "not within a loop").
                     // Braced so __arr/__i stay loop-local (multiple loops in one fn).
+                    // Length comes from the element count, so the empty case is
+                    // exact and never forms a zero-size array index.
                     let iter_expr = self.gen_expr(iterable);
+                    let len = elems.len();
                     self.write_indent();
                     writeln!(self.output, "{{").unwrap();
                     self.indent += 1;
                     self.write_indent();
-                    writeln!(self.output, "long __arr[] = (long[]){};", iter_expr).unwrap();
+                    if len == 0 {
+                        writeln!(self.output, "long __arr[1] = {{ 0 }}; (void)__arr;").unwrap();
+                    } else {
+                        // gen_expr for a literal already yields the braced
+                        // initializer `{ e1, e2, ... }` — used directly, since
+                        // `(long[]){...}` compound literals are gcc-invalid as
+                        // array initializers.
+                        writeln!(self.output, "long __arr[] = {};", iter_expr).unwrap();
+                    }
                     self.write_indent();
                     writeln!(
                         self.output,
-                        "for (long __i = 0, __len = sizeof(__arr) / sizeof(__arr[0]); __i < __len; __i++) {{"
+                        "for (long __i = 0, __len = {}; __i < __len; __i++) {{",
+                        len
                     )
                     .unwrap();
                     self.indent += 1;

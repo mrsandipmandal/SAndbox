@@ -12,6 +12,8 @@ use std::process::Command;
 pub struct Compiler {
     pub source: String,
     pub filename: String,
+    /// Suppress progress output (--quiet CLI flag)
+    quiet: bool,
 }
 
 impl Compiler {
@@ -19,6 +21,19 @@ impl Compiler {
         Self {
             source: source.to_string(),
             filename: filename.to_string(),
+            quiet: false,
+        }
+    }
+
+    /// Suppress compiler progress output (--quiet CLI flag)
+    pub fn quiet(mut self) -> Self {
+        self.quiet = true;
+        self
+    }
+
+    fn progress(&self, msg: &str) {
+        if !self.quiet {
+            println!("{}", msg);
         }
     }
 
@@ -138,35 +153,45 @@ impl Compiler {
     }
 
     pub fn compile(&self) -> Result<String> {
-        println!("[sandbox] Compiling {}", self.filename);
+        self.progress(&format!("[sandbox] Compiling {}", self.filename));
 
-        println!("  → Lexing...");
+        self.progress("  → Lexing...");
         let mut lexer = Lexer::new(&self.source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
-        println!("  ✓ {} tokens", tokens.len());
+        self.progress(&format!("  ✓ {} tokens", tokens.len()));
 
-        println!("  → Parsing...");
-        let program = self.parse_with_vendors(&self.source, true)?;
-        println!("  ✓ {} top-level items", program.items.len());
+        self.progress("  → Parsing...");
+        let program = self.parse_with_vendors(&self.source, !self.quiet)?;
+        self.progress(&format!("  ✓ {} top-level items", program.items.len()));
         for (i, item) in program.items.iter().enumerate() {
             match item {
-                TopLevel::FnDef { name, .. } => println!("    [{}] FnDef {}", i, name),
-                TopLevel::ModuleDef { name, items, .. } => {
-                    println!("    [{}] ModuleDef {} ({} items)", i, name, items.len())
+                TopLevel::FnDef { name, .. } => {
+                    self.progress(&format!("    [{}] FnDef {}", i, name))
                 }
-                TopLevel::Use { path, .. } => println!("    [{}] Use {}", i, path.join("::")),
-                _ => println!("    [{}] Other", i),
+                TopLevel::ModuleDef { name, items, .. } => self.progress(&format!(
+                    "    [{}] ModuleDef {} ({} items)",
+                    i,
+                    name,
+                    items.len()
+                )),
+                TopLevel::Use { path, .. } => {
+                    self.progress(&format!("    [{}] Use {}", i, path.join("::")))
+                }
+                _ => self.progress(&format!("    [{}] Other", i)),
             }
         }
 
-        println!("  → Type checking...");
+        self.progress("  → Type checking...");
         let mut checker = TypeChecker::new();
+        if self.quiet {
+            checker = checker.quiet();
+        }
         checker.check(&program)?;
 
-        println!("  → Generating C code...");
+        self.progress("  → Generating C code...");
         let mut codegen = CodeGen::new();
         let c_code = codegen.generate(&program, None);
-        println!("  ✓ {} lines of C", c_code.lines().count());
+        self.progress(&format!("  ✓ {} lines of C", c_code.lines().count()));
 
         Ok(c_code)
     }
@@ -174,7 +199,7 @@ impl Compiler {
     /// Compile without printing progress messages (for REPL)
     pub fn compile_quiet(&self) -> Result<String> {
         let program = self.parse_with_vendors(&self.source, false)?;
-        let mut checker = TypeChecker::new();
+        let mut checker = TypeChecker::new().quiet();
         checker.check(&program)?;
         let mut codegen = CodeGen::new();
         let c_code = codegen.generate(&program, None);
@@ -182,18 +207,21 @@ impl Compiler {
     }
 
     fn parse_for_codegen(&self) -> Result<Program> {
-        println!("[sandbox] Compiling {}", self.filename);
+        self.progress(&format!("[sandbox] Compiling {}", self.filename));
 
-        println!("  → Lexing...");
+        self.progress("  → Lexing...");
         let mut lexer = Lexer::new(&self.source).with_source(&self.filename);
         let tokens = lexer.tokenize()?;
-        println!("  ✓ {} tokens", tokens.len());
+        self.progress(&format!("  ✓ {} tokens", tokens.len()));
 
-        println!("  → Parsing and loading vendors...");
-        let program = self.parse_with_vendors(&self.source, true)?;
+        self.progress("  → Parsing and loading vendors...");
+        let program = self.parse_with_vendors(&self.source, !self.quiet)?;
 
-        println!("  → Type checking...");
+        self.progress("  → Type checking...");
         let mut checker = TypeChecker::new();
+        if self.quiet {
+            checker = checker.quiet();
+        }
         checker.check(&program)?;
 
         Ok(program)
@@ -204,7 +232,7 @@ impl Compiler {
         let c_path = format!("{}.c", output);
         fs::write(&c_path, &c_code)?;
 
-        println!("  → Compiling C to native binary...");
+        self.progress("  → Compiling C to native binary...");
         let status = Command::new("gcc")
             .arg("-o")
             .arg(output)
@@ -215,7 +243,7 @@ impl Compiler {
         if !status.success() {
             return Err(anyhow!("gcc compilation failed"));
         }
-        println!("  ✓ Built: {}", output);
+        self.progress(&format!("  ✓ Built: {}", output));
         let _ = fs::remove_file(&c_path);
         Ok(())
     }
@@ -223,13 +251,13 @@ impl Compiler {
     pub fn build_wasm(&self, output: &str) -> Result<()> {
         let program = self.parse_for_codegen()?;
 
-        println!("  → Generating WebAssembly (.wat)...");
+        self.progress("  → Generating WebAssembly (.wat)...");
         let mut wasmgen = WasmGen::new();
         let wat = wasmgen.generate(&program);
 
         let wat_path = format!("{}.wat", output);
         fs::write(&wat_path, &wat)?;
-        println!("  ✓ {} lines of WAT", wat.lines().count());
+        self.progress(&format!("  ✓ {} lines of WAT", wat.lines().count()));
 
         // Try to compile with wat2wasm if available
         let wasm_path = format!("{}.wasm", output);
@@ -241,8 +269,8 @@ impl Compiler {
 
         match status {
             Ok(s) if s.success() => {
-                println!("  ✓ Built: {}", wasm_path);
-                println!("  Run with: wasmtime {}", wasm_path);
+                self.progress(&format!("  ✓ Built: {}", wasm_path));
+                self.progress(&format!("  Run with: wasmtime {}", wasm_path));
             }
             _ => {
                 println!(

@@ -39,6 +39,9 @@ enum Commands {
         /// Print the parsed AST without compiling
         #[arg(long)]
         ast: bool,
+        /// Suppress compiler progress output (program stdout only)
+        #[arg(long, short)]
+        quiet: bool,
     },
     /// Compile a .sbx file to native binary or WebAssembly
     Build {
@@ -50,6 +53,9 @@ enum Commands {
         /// Target: native (default) or wasm
         #[arg(short, long, default_value = "native")]
         target: String,
+        /// Suppress compiler progress output
+        #[arg(long, short)]
+        quiet: bool,
     },
     /// Type-check a .sbx file without compiling
     Check {
@@ -201,7 +207,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, ast } => {
+        Commands::Run { file, ast, quiet } => {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
             if ast {
@@ -211,7 +217,10 @@ fn main() -> anyhow::Result<()> {
                 let program = pars.parse()?;
                 println!("{:#?}", program);
             } else {
-                let compiler = compiler::Compiler::new(&source, &filename);
+                let mut compiler = compiler::Compiler::new(&source, &filename);
+                if quiet {
+                    compiler = compiler.quiet();
+                }
                 compiler.run()?;
             }
         }
@@ -219,6 +228,7 @@ fn main() -> anyhow::Result<()> {
             file,
             output,
             target,
+            quiet,
         } => {
             let source = fs::read_to_string(&file)?;
             let filename = file.to_string_lossy().to_string();
@@ -227,10 +237,16 @@ fn main() -> anyhow::Result<()> {
                     .map_or("a.out".to_string(), |s| s.to_string_lossy().to_string())
             });
             if target == "wasm" {
-                let compiler = compiler::Compiler::new(&source, &filename);
+                let mut compiler = compiler::Compiler::new(&source, &filename);
+                if quiet {
+                    compiler = compiler.quiet();
+                }
                 compiler.build_wasm(&out_name)?;
             } else {
-                let compiler = compiler::Compiler::new(&source, &filename);
+                let mut compiler = compiler::Compiler::new(&source, &filename);
+                if quiet {
+                    compiler = compiler.quiet();
+                }
                 compiler.build(&out_name)?;
             }
         }

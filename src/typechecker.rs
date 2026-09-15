@@ -17,6 +17,8 @@ pub struct TypeChecker {
     constants: HashMap<String, (Type, i64)>,
     /// Depth of nested loops (for break/continue validation)
     loop_depth: usize,
+    /// Suppress progress output (used by REPL and --quiet CLI flag)
+    quiet: bool,
 }
 
 impl TypeChecker {
@@ -31,6 +33,19 @@ impl TypeChecker {
             scopes: vec![HashMap::new()],
             constants: HashMap::new(),
             loop_depth: 0,
+            quiet: false,
+        }
+    }
+
+    /// Suppress progress output (used by REPL and --quiet CLI flag)
+    pub fn quiet(mut self) -> Self {
+        self.quiet = true;
+        self
+    }
+
+    fn progress(&self, msg: &str) {
+        if !self.quiet {
+            println!("{}", msg);
         }
     }
 
@@ -272,7 +287,10 @@ impl TypeChecker {
                         }
                         self.check_block(body)?;
                         self.scopes.pop();
-                        println!("  ✓ Method '{}::{}' type-checked", type_name, name);
+                        self.progress(&format!(
+                            "  ✓ Method '{}::{}' type-checked",
+                            type_name, name
+                        ));
                     }
                 }
             }
@@ -299,7 +317,7 @@ impl TypeChecker {
                 self.scopes.push(HashMap::new());
                 self.check_block(body)?;
                 self.scopes.pop();
-                println!("  ✓ Test '{}' type-checked", name);
+                self.progress(&format!("  ✓ Test '{}' type-checked", name));
             }
         }
 
@@ -317,7 +335,7 @@ impl TypeChecker {
                 }
                 self.check_block(body)?;
                 self.scopes.pop();
-                println!("  ✓ Function '{}' type-checked", name);
+                self.progress(&format!("  ✓ Function '{}' type-checked", name));
             }
             if let TopLevel::AsyncFnDef {
                 name, params, body, ..
@@ -332,7 +350,7 @@ impl TypeChecker {
                 }
                 self.check_block(body)?;
                 self.scopes.pop();
-                println!("  ✓ Async function '{}' type-checked", name);
+                self.progress(&format!("  ✓ Async function '{}' type-checked", name));
             }
         }
 
@@ -340,7 +358,7 @@ impl TypeChecker {
         for item in &program.items {
             if let TopLevel::LedgerDef(ledger) = item {
                 self.validate_ledger(ledger)?;
-                println!("  ✓ Ledger '{}' validated", ledger.name);
+                self.progress(&format!("  ✓ Ledger '{}' validated", ledger.name));
             }
         }
 
@@ -348,11 +366,11 @@ impl TypeChecker {
         for item in &program.items {
             if let TopLevel::DatabaseDef(db) = item {
                 self.validate_database(db)?;
-                println!("  ✓ Database '{}' validated", db.name);
+                self.progress(&format!("  ✓ Database '{}' validated", db.name));
             }
         }
 
-        println!("  ✓ All type checks passed");
+        self.progress("  ✓ All type checks passed");
         Ok(())
     }
 

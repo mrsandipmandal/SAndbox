@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master, main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -79,11 +82,12 @@ jobs:
 
   # ── Binary smoke (fast end-to-end signal) ───────────────────────────────────
   # A small, cheap smoke test that exercises the compiled sandbox binary against
-  # real source files. This is intentionally separate from the full test suite so
-  # a backend regression can fail fast with the actual program output, not just
-  # inside the Rust harness.
+  # real source files across all three execution backends (C, LLVM, interpreter).
+  # This is intentionally separate from the full test suite so a backend
+  # regression can fail fast with the actual program output, not just inside
+  # the Rust harness.
   smoke:
-    name: Binary Smoke (Hello + Array)
+    name: Binary Smoke (C + LLVM + Interpreter)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +105,12 @@ jobs:
           key: sandbox-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: sandbox-${{ runner.os }}-cargo-
 
+      - name: Verify clang (LLVM backend compiler)
+        run: |
+          set -euo pipefail
+          clang --version
+          echo "clang found: $(clang --version | head -n 1)"
+
       - name: Build sandbox binary
         run: |
           set -euo pipefail
@@ -114,12 +124,6 @@ jobs:
           set -euo pipefail
           BIN="target/debug/sandbox"
 
-          # The compiler prints progress lines to stdout; strip them so only
-          # program output is asserted on.
-          filter_banner() {
-            grep -vE '^\[sandbox\] |^[[:space:]]+(→|✓)|^[[:space:]]+\[[0-9]+\]'
-          }
-
           TMP="$(mktemp -d)"
           SOURCE="$TMP/hello.sbx"
           printf '%b' "$SRC_HELLO" > "$SOURCE"
@@ -127,8 +131,9 @@ jobs:
           echo "----- hello.sbx -----"
           cat "$SOURCE"
 
-          # Run once, capture, assert on the captured output.
-          OUT="$($BIN run "$SOURCE" | filter_banner)"
+          # Run once; --quiet suppresses compiler progress lines so stdout is
+          # program output only.
+          OUT="$($BIN run --quiet "$SOURCE")"
           echo "----- stdout -----"
           printf '%s\n' "$OUT"
           echo "----- end stdout -----"
@@ -146,12 +151,6 @@ jobs:
           set -euo pipefail
           BIN="target/debug/sandbox"
 
-          # The compiler prints progress lines to stdout; strip them so only
-          # program output is asserted on.
-          filter_banner() {
-            grep -vE '^\[sandbox\] |^[[:space:]]+(→|✓)|^[[:space:]]+\[[0-9]+\]'
-          }
-
           TMP="$(mktemp -d)"
           SOURCE="$TMP/array.sbx"
           printf '%b' "$SRC_ARRAY" > "$SOURCE"
@@ -159,8 +158,8 @@ jobs:
           echo "----- array.sbx -----"
           cat "$SOURCE"
 
-          # Run once, capture, assert on the captured output.
-          OUT="$($BIN run "$SOURCE" | filter_banner)"
+          # Run once; --quiet makes stdout diffable against expected output.
+          OUT="$($BIN run --quiet "$SOURCE")"
           echo "----- stdout -----"
           printf '%s\n' "$OUT"
           echo "----- end stdout -----"
@@ -170,6 +169,52 @@ jobs:
             exit 1
           fi
           echo "Array smoke test passed."
+
+      - name: Smoke test (interpreter)
+        env:
+          SRC_ARRAY: 'fn main() {\n    for item in [10, 20, 30] {\n        print(item)\n    }\n}\n'
+        run: |
+          set -euo pipefail
+          BIN="target/debug/sandbox"
+
+          TMP="$(mktemp -d)"
+          SOURCE="$TMP/array.sbx"
+          printf '%b' "$SRC_ARRAY" > "$SOURCE"
+
+          # The interpreter prints no banner; stdout is program output only.
+          OUT="$($BIN interpret "$SOURCE")"
+          echo "----- interpreter stdout -----"
+          printf '%s\n' "$OUT"
+
+          if ! printf '%s\n' "$OUT" | diff -u - <(printf '10\n20\n30\n'); then
+            echo >&2 "FAIL: unexpected interpreter output"
+            exit 1
+          fi
+          echo "Interpreter smoke test passed."
+
+      - name: Smoke test (LLVM backend)
+        env:
+          SRC_ARRAY: 'fn main() {\n    for item in [10, 20, 30] {\n        print(item)\n    }\n}\n'
+        run: |
+          set -euo pipefail
+          BIN="target/debug/sandbox"
+
+          TMP="$(mktemp -d)"
+          SOURCE="$TMP/array.sbx"
+          printf '%b' "$SRC_ARRAY" > "$SOURCE"
+
+          # Build a native binary via the LLVM backend (sandbox -> .ll -> clang).
+          # clang's -Woverride-module warning goes to stderr; silence it.
+          "$BIN" llvm-build "$SOURCE" -o "$TMP/llvm_prog" 2>/dev/null
+          OUT="$($TMP/llvm_prog)"
+          echo "----- llvm binary stdout -----"
+          printf '%s\n' "$OUT"
+
+          if ! printf '%s\n' "$OUT" | diff -u - <(printf '10\n20\n30\n'); then
+            echo >&2 "FAIL: unexpected LLVM binary output"
+            exit 1
+          fi
+          echo "LLVM backend smoke test passed."
 
 
   # ── Backend Parity ──────────────────────────────────────────────────────────

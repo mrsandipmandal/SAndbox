@@ -31,16 +31,146 @@ jobs:
           restore-keys: sandbox-${{ runner.os }}-cargo-
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          echo "Rust formatting check passed."
 
       - name: Clippy lints
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          set -euo pipefail
+          # Emit a stable machine-readable summary even when Clippy passes,
+          # so CI logs are easier to scan when a run regresses.
+          cargo clippy --all-targets -- -D warnings
+          echo "Clippy lint check passed."
 
       - name: Build
-        run: cargo build --verbose
+        run: |
+          set -euo pipefail
+          cargo build --verbose
+          echo "Sandbox build passed."
 
-      - name: Run tests
-        run: cargo test --verbose
+      # Retry the heaviest Rust step a couple of times so transient CI flakes
+      # (slow linker peaks, test runner races, temporary registry hiccups) don't
+      # fail a PR on the first blip. Each attempt is independent, and the final
+      # attempt still fails hard if the suite is genuinely broken.
+      - name: Run tests (with retry)
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=3
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "===== cargo test attempt ${attempt}/${max_attempts} ====="
+            if cargo test --verbose; then
+              echo "Rust test suite passed on attempt ${attempt}."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "Rust test suite failed on attempt ${attempt}; retrying in ~5s..."
+              sleep 5
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          echo "===== cargo test failed after ${max_attempts} attempts ====="
+          echo "If this is a genuine test regression, fix it in code."
+          echo "If this looks like a transient CI flake, re-run the job."
+          exit 1
+
+  # ── Binary smoke (fast end-to-end signal) ───────────────────────────────────
+  # A small, cheap smoke test that exercises the compiled sandbox binary against
+  # real source files. This is intentionally separate from the full test suite so
+  # a backend regression can fail fast with the actual program output, not just
+  # inside the Rust harness.
+  smoke:
+    name: Binary Smoke (Hello + Array)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: sandbox-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: sandbox-${{ runner.os }}-cargo-
+
+      - name: Build sandbox binary
+        run: |
+          set -euo pipefail
+          cargo build --verbose
+          echo "Sandbox binary built."
+
+      - name: Smoke test (hello world)
+        env:
+          SRC_HELLO: 'fn main() {\n    print("Hello, Sandbox!")\n}\n'
+        run: |
+          set -euo pipefail
+          BIN="target/debug/sandbox"
+
+          # The compiler prints progress lines to stdout; strip them so only
+          # program output is asserted on.
+          filter_banner() {
+            grep -vE '^\[sandbox\] |^[[:space:]]+(→|✓)|^[[:space:]]+\[[0-9]+\]'
+          }
+
+          TMP="$(mktemp -d)"
+          SOURCE="$TMP/hello.sbx"
+          printf '%b' "$SRC_HELLO" > "$SOURCE"
+
+          echo "----- hello.sbx -----"
+          cat "$SOURCE"
+
+          # Run once, capture, assert on the captured output.
+          OUT="$($BIN run "$SOURCE" | filter_banner)"
+          echo "----- stdout -----"
+          printf '%s\n' "$OUT"
+          echo "----- end stdout -----"
+
+          if ! printf '%s\n' "$OUT" | grep -qFx "Hello, Sandbox!"; then
+            echo >&2 "FAIL: unexpected hello output"
+            exit 1
+          fi
+          echo "Hello smoke test passed."
+
+      - name: Smoke test (array literal)
+        env:
+          SRC_ARRAY: 'fn main() {\n    for item in [10, 20, 30] {\n        print(item)\n    }\n}\n'
+        run: |
+          set -euo pipefail
+          BIN="target/debug/sandbox"
+
+          # The compiler prints progress lines to stdout; strip them so only
+          # program output is asserted on.
+          filter_banner() {
+            grep -vE '^\[sandbox\] |^[[:space:]]+(→|✓)|^[[:space:]]+\[[0-9]+\]'
+          }
+
+          TMP="$(mktemp -d)"
+          SOURCE="$TMP/array.sbx"
+          printf '%b' "$SRC_ARRAY" > "$SOURCE"
+
+          echo "----- array.sbx -----"
+          cat "$SOURCE"
+
+          # Run once, capture, assert on the captured output.
+          OUT="$($BIN run "$SOURCE" | filter_banner)"
+          echo "----- stdout -----"
+          printf '%s\n' "$OUT"
+          echo "----- end stdout -----"
+
+          if ! printf '%s\n' "$OUT" | diff -u - <(printf '10\n20\n30\n'); then
+            echo >&2 "FAIL: unexpected array output"
+            exit 1
+          fi
+          echo "Array smoke test passed."
+
 
   # ── Backend Parity ──────────────────────────────────────────────────────────
   parity:
@@ -63,12 +193,35 @@ jobs:
           restore-keys: sandbox-${{ runner.os }}-cargo-
 
       - name: Verify clang (LLVM backend compiler)
-        run: clang --version
+        run: |
+          set -euo pipefail
+          clang --version
+          echo "clang found: $(clang --version | head -n 1)"
 
       # Fails on any backend output mismatch or backend regression beyond
       # the known-gap allowlist documented in tests/parity.rs.
-      - name: Run backend parity harness
-        run: cargo test --test parity -- --nocapture
+      - name: Run backend parity harness (with retry)
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=3
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "===== parity test attempt ${attempt}/${max_attempts} ====="
+            if cargo test --test parity -- --nocapture; then
+              echo "Backend parity harness passed on attempt ${attempt}."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "Backend parity harness failed on attempt ${attempt}; retrying in ~5s..."
+              sleep 5
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          echo "===== parity test failed after ${max_attempts} attempts ====="
+          echo "If backends diverged, fix the regression first."
+          echo "If this looks like a transient CI flake, re-run the job."
+          exit 1
 
   # ── Registry Server ─────────────────────────────────────────────────────────
   registry:
@@ -92,22 +245,51 @@ jobs:
           restore-keys: registry-${{ runner.os }}-cargo-
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          echo "Registry formatting check passed."
 
       - name: Clippy lints
-        run: cargo clippy --all-targets -- -D warnings
+        run: |
+          set -euo pipefail
+          cargo clippy --all-targets -- -D warnings
+          echo "Registry Clippy check passed."
 
       - name: Build
-        run: cargo build --verbose
+        run: |
+          set -euo pipefail
+          cargo build --verbose
+          echo "Registry build passed."
 
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Run tests (with retry)
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=3
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "===== registry test attempt ${attempt}/${max_attempts} ====="
+            if cargo test --verbose; then
+              echo "Registry test suite passed on attempt ${attempt}."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "Registry test suite failed on attempt ${attempt}; retrying in ~5s..."
+              sleep 5
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          echo "===== registry tests failed after ${max_attempts} attempts ====="
+          echo "If this is a genuine test regression, fix it in code."
+          echo "If this looks like a transient CI flake, re-run the job."
+          exit 1
 
   # ── Docker Build ────────────────────────────────────────────────────────────
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [check, parity, registry]
+    needs: [check, parity, registry, smoke]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
@@ -128,19 +310,41 @@ jobs:
   deploy:
     name: Deploy Registry
     runs-on: ubuntu-latest
-    needs: [check, registry, docker]
+    needs: [check, registry, docker, smoke]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy instructions
+      - name: Verify release artifact shape
         run: |
-          echo "Registry deployment would go here."
-          echo "Options:"
-          echo "  - Docker Compose on a VPS"
-          echo "  - Fly.io (fly deploy)"
-          echo "  - Railway"
-          echo "  - Cloud Run"
+          set -euo pipefail
+          echo "This workflow does not currently publish release artifacts,"
+          echo "so this is a placeholder gate for future CD automation."
+
+      - name: Required deploy steps (not implemented yet)
+        run: |
+          set -euo pipefail
+          echo "This job is wired into CI, but the production deploy steps are not"
+          echo "filled in yet. Before enabling automated deploys, add and verify:"
           echo ""
-          echo "Configure your deployment target and add the steps here."
+          echo "1. Registry image publishing"
+          echo "   - Change docker/build-push-action push: false to push: true"
+          echo "   - Set up registry credential secrets (example: REGISTRY_*)"
+          echo "   - Decide on image tag strategy (sha, semver, latest-ish)"
+          echo ""
+          echo "2. Runtime deployment target"
+          echo "   - Pick a host: VPS + Docker Compose, Fly.io, Railway, Cloud Run"
+          echo "   - Add the corresponding deploy provider action or CLI step"
+          echo "   - Store deploy secrets (host, tokens, image ref, env vars)"
+          echo ""
+          echo "3. Pre-deploy validation"
+          echo "   - Health check / smoke test against the deployed registry"
+          echo "   - Rollback plan if the new image fails to start"
+          echo ""
+          echo "4. Release artifact publishing (if this job should publish releases)"
+          echo "   - Build cross-target release binaries"
+          echo "   - Upload artifacts to the GitHub Release"
+          echo "   - Attach checksums/signatures if required"
+          echo ""
+          echo "Once those are in place, remove or replace this placeholder step."

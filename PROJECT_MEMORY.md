@@ -99,7 +99,21 @@ docs/explanations: **English**.
 
 ### Track B — Machine-level (compiler-level only)
 
-- [ ] **B1. Bitwise operators** — `& | ^ << >> ~` (lexer must distinguish `&` from `&&`).
+- [x] **B1. Bitwise operators** — `& | ^ << >> ~` (lexer must distinguish `&` from `&&`).
+  *(Done 2026-09-18.)* New tokens Amp/Caret/Shl/Shr/Tilde (`&&` still And);
+  single `|` stays the lambda Pipe token — the parser treats an INFIX Pipe
+  as BitOr (a lambda can only start a primary, so no ambiguity). Precedence
+  is C's: shift > comparison > & > ^ > | > && > || (parse chain or → and →
+  bitor → bitxor → bitand → comparison → shift → additive). Semantics:
+  i64-only (typechecker rejects bool/mixed operands — stricter than C);
+  `>>` is arithmetic (LLVM ashr); `<<` is wrapping — the C backend emits
+  `(long)((unsigned long long)l << r)` because signed-shift-into-sign-bit
+  is UB in C and gcc constant-folded 1<<63 to 0 while the runtime shift
+  produced i64::MIN; `~x` is a real UnaryOp::BitNot (LLVM: xor with -1).
+  wasmgen gained the new arms (kept the pre-existing and/or-for-&&-||
+  conflation untouched). Parity: `bitwise_ops`, `shift_ops` (ALL backends);
+  integration: `test_bitwise_ops_all_backends`,
+  `test_bitwise_interpreter_matches_c`.
 - [ ] **B2. Sized/unsigned ints + casts** — `u8..u64`, `i8..i32`, `usize`, `as` casts.
 
 ### Known deferred issues (found during work; not scheduled)

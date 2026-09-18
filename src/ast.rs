@@ -185,12 +185,20 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    // B1: bitwise (C precedence: shifts bind tighter than & < ^ < |)
+    Shl,
+    Shr,
+    BitAnd,
+    BitXor,
+    BitOr,
 }
 
 #[derive(Debug, Clone)]
 pub enum UnOp {
     Neg,
     Not,
+    // B1: bitwise complement (~x == x ^ -1)
+    BitNot,
 }
 
 // ── Statements ──

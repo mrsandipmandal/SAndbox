@@ -109,6 +109,16 @@ pub enum Token {
     Bang,
     And,
     Or,
+    // B1: bitwise. NOTE: BitOr is currently unused — single '|' lexes as
+    // Pipe (lambda syntax) and the parser treats an infix Pipe as bitwise
+    // or; the variant is kept for future lexing-level disambiguation.
+    Amp,
+    #[allow(dead_code)]
+    BitOr,
+    Caret,
+    Shl,
+    Shr,
+    Tilde,
     Assign,
     Arrow,
     FatArrow,

@@ -87,6 +87,14 @@ fn tok_str(tok: &Token) -> String {
         Token::Ge => ">=".into(),
         Token::And => "&&".into(),
         Token::Or => "||".into(),
+        // B1: bitwise
+        Token::Amp => "&".into(),
+        Token::Caret => "^".into(),
+        Token::Shl => "<<".into(),
+        Token::Shr => ">>".into(),
+        Token::Tilde => "~".into(),
+        // single '|' is the lambda pipe in source form
+        Token::BitOr => "|".into(),
         Token::Assign => "=".into(),
         Token::Arrow => "->".into(),
         Token::FatArrow => "=>".into(),

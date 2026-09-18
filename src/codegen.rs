@@ -2624,6 +2624,13 @@ impl CodeGen {
                     BinOp::Ge => ">=",
                     BinOp::And => "&&",
                     BinOp::Or => "||",
+                    // B1: bitwise — C operators map 1:1 (>> is arithmetic on
+                    // signed i64 in practice; both backends agree on it)
+                    BinOp::BitAnd => "&",
+                    BinOp::BitOr => "|",
+                    BinOp::BitXor => "^",
+                    BinOp::Shl => "<<",
+                    BinOp::Shr => ">>",
                 };
 
                 // String operations: concat, eq, neq, ordering
@@ -2643,6 +2650,15 @@ impl CodeGen {
                     }
                 }
 
+                // B1: `<<` on signed i64 is UB in C when it overflows into
+                // the sign bit (gcc constant-folds 1<<63 to 0 while the
+                // runtime shift yields i64::MIN). Shift unsigned, then
+                // reinterpret, so the wrap is defined and matches the LLVM
+                // and interpreter backends.
+                if op == &BinOp::Shl {
+                    return format!("((long)((unsigned long long)({}) << ({})))", l, r);
+                }
+
                 format!("({} {} {})", l, op_str, r)
             }
             Expr::UnaryOp { op, expr } => {
@@ -2650,6 +2666,8 @@ impl CodeGen {
                 match op {
                     UnOp::Neg => format!("(-{})", e),
                     UnOp::Not => format!("(!{})", e),
+                    // ~x == x ^ -1 (all-ones on two's complement)
+                    UnOp::BitNot => format!("(~{})", e),
                 }
             }
             Expr::Call {
@@ -3410,6 +3428,7 @@ impl CodeGen {
                 match op {
                     UnOp::Neg => Some(-v),
                     UnOp::Not => Some(if v == 0 { 1 } else { 0 }),
+                    UnOp::BitNot => Some(!v),
                 }
             }
             _ => None,

@@ -106,6 +106,7 @@ impl TypeChecker {
                 match op {
                     UnOp::Neg => Some(-v),
                     UnOp::Not => Some(if v == 0 { 1 } else { 0 }),
+                    UnOp::BitNot => Some(!v),
                 }
             }
             _ => None,
@@ -569,6 +570,13 @@ impl TypeChecker {
                             return Err(anyhow!("Cannot apply '!' to '{}'", ty));
                         }
                         Ok(Type::Bool)
+                    }
+                    // B1: bitwise complement — integers only
+                    UnOp::BitNot => {
+                        if ty != Type::I64 {
+                            return Err(anyhow!("Cannot apply '~' to '{}'", ty));
+                        }
+                        Ok(ty)
                     }
                 }
             }
@@ -1561,6 +1569,28 @@ impl TypeChecker {
                 } else {
                     Err(anyhow!("Logical operators require bool operands"))
                 }
+            }
+            // B1: bitwise — integers only (i64 today); shifts return the
+            // left operand's type so `1 << x` stays an int.
+            BinOp::Shl | BinOp::Shr => {
+                if *lt != Type::I64 || *rt != Type::I64 {
+                    return Err(anyhow!(
+                        "Shift operators require integer operands, got '{}' and '{}'",
+                        lt,
+                        rt
+                    ));
+                }
+                Ok(lt.clone())
+            }
+            BinOp::BitAnd | BinOp::BitXor | BinOp::BitOr => {
+                if lt != rt || *lt != Type::I64 {
+                    return Err(anyhow!(
+                        "Bitwise operators require two integers of the same type, got '{}' and '{}'",
+                        lt,
+                        rt
+                    ));
+                }
+                Ok(lt.clone())
             }
         }
     }

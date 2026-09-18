@@ -1459,6 +1459,33 @@ impl LlvmGen {
                         writeln!(self.output, "  {} = srem {} {}, {}", result, lt, l, r).unwrap();
                         result
                     }
+                    // B1: bitwise — plain integer ops on the operand type.
+                    // >> is arithmetic (ashr) to match C's >> on signed i64.
+                    BinOp::BitAnd => {
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = and {} {}, {}", result, lt, l, r).unwrap();
+                        result
+                    }
+                    BinOp::BitOr => {
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = or {} {}, {}", result, lt, l, r).unwrap();
+                        result
+                    }
+                    BinOp::BitXor => {
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = xor {} {}, {}", result, lt, l, r).unwrap();
+                        result
+                    }
+                    BinOp::Shl => {
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = shl {} {}, {}", result, lt, l, r).unwrap();
+                        result
+                    }
+                    BinOp::Shr => {
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = ashr {} {}, {}", result, lt, l, r).unwrap();
+                        result
+                    }
                 }
             }
             Expr::UnaryOp { op, expr } => {
@@ -1473,6 +1500,15 @@ impl LlvmGen {
                     UnOp::Not => {
                         let result = self.fresh_var();
                         writeln!(self.output, "  {} = xor i1 {}, 1", result, val).unwrap();
+                        result
+                    }
+                    // B1: ~x = x ^ -1 (all-ones on two's complement)
+                    UnOp::BitNot => {
+                        let ones = self.fresh_var();
+                        writeln!(self.output, "  {} = sub {} 0, 1", ones, ty).unwrap();
+                        let result = self.fresh_var();
+                        writeln!(self.output, "  {} = xor {} {}, {}", result, ty, val, ones)
+                            .unwrap();
                         result
                     }
                 }

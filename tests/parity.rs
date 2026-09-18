@@ -233,6 +233,46 @@ const LLVM_ONLY: &[Backend] = &[Backend::Llvm];
 
 const CORPUS: &[ParityCase] = &[
     ParityCase {
+        name: "bitwise_ops",
+        source: r#"
+fn main() {
+    let a = 12
+    let b = 10
+    print(a & b)
+    print(a | b)
+    print(a ^ b)
+    print(~a)
+    print(~0)
+    print(255 & 15)
+    print(-1 ^ 256)
+}
+"#,
+        // B1: & | ^ ~ on two's-complement i64 — identical results across
+        // C (operators), LLVM (and/or/xor), and the interpreter (Rust ops).
+        backends: ALL,
+    },
+    ParityCase {
+        name: "shift_ops",
+        source: r#"
+fn main() {
+    print(1 << 10)
+    print(-16 >> 2)
+    print(2 + 3 << 1 * 2)
+    print(1 << 3 + 1)
+    print(16 >> 1 + 1)
+    print((a_shift_helper(1, 63)) >> 62)
+}
+fn a_shift_helper(v: i64, n: i64) -> i64 {
+    return v << n
+}
+"#,
+        // B1: shifts — >> is arithmetic; << wraps (the C backend shifts
+        // through unsigned long long so overflowing into the sign bit is
+        // defined and matches LLVM ashr / the interpreter). Shifts bind
+        // tighter than comparisons, looser than addition.
+        backends: ALL,
+    },
+    ParityCase {
         name: "method_string",
         source: r#"
 fn main() {

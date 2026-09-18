@@ -127,6 +127,9 @@ impl Lexer {
                 if self.peek() == Some('=') {
                     self.advance();
                     Ok(Spanned::new(Token::Le, line, col))
+                } else if self.peek() == Some('<') {
+                    self.advance();
+                    Ok(Spanned::new(Token::Shl, line, col))
                 } else {
                     Ok(Spanned::new(Token::Lt, line, col))
                 }
@@ -136,6 +139,9 @@ impl Lexer {
                 if self.peek() == Some('=') {
                     self.advance();
                     Ok(Spanned::new(Token::Ge, line, col))
+                } else if self.peek() == Some('>') {
+                    self.advance();
+                    Ok(Spanned::new(Token::Shr, line, col))
                 } else {
                     Ok(Spanned::new(Token::Gt, line, col))
                 }
@@ -150,7 +156,8 @@ impl Lexer {
                     self.advance();
                     Ok(Spanned::new(Token::And, line, col))
                 } else {
-                    Err(self.error(line, col, "Unexpected character '&'".to_string()))
+                    // B1: single & = bitwise and (&& handled above)
+                    Ok(Spanned::new(Token::Amp, line, col))
                 }
             }
             '|' => {
@@ -159,8 +166,19 @@ impl Lexer {
                     self.advance();
                     Ok(Spanned::new(Token::Or, line, col))
                 } else {
+                    // Single '|' stays Token::Pipe: lambdas (|x| ...) start a
+                    // primary, and the parser treats an infix Pipe as bitwise
+                    // or (a lambda can never follow an expression).
                     Ok(Spanned::new(Token::Pipe, line, col))
                 }
+            }
+            '^' => {
+                self.advance();
+                Ok(Spanned::new(Token::Caret, line, col))
+            }
+            '~' => {
+                self.advance();
+                Ok(Spanned::new(Token::Tilde, line, col))
             }
             '.' => {
                 self.advance();

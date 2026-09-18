@@ -933,11 +933,55 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_and(&mut self) -> Result<Expr> {
+    // B1: bitwise or — single '|' in INFIX position (a lambda `|x| ...` can
+    // only start a primary, so an infix Pipe is unambiguously bitwise or).
+    fn parse_bitor(&mut self) -> Result<Expr> {
+        let mut left = self.parse_bitxor()?;
+        while self.current_token() == &Token::Pipe {
+            self.advance();
+            let right = self.parse_bitxor()?;
+            left = Expr::BinaryOp {
+                op: BinOp::BitOr,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_bitxor(&mut self) -> Result<Expr> {
+        let mut left = self.parse_bitand()?;
+        while self.current_token() == &Token::Caret {
+            self.advance();
+            let right = self.parse_bitand()?;
+            left = Expr::BinaryOp {
+                op: BinOp::BitXor,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_bitand(&mut self) -> Result<Expr> {
         let mut left = self.parse_comparison()?;
-        while self.current_token() == &Token::And {
+        while self.current_token() == &Token::Amp {
             self.advance();
             let right = self.parse_comparison()?;
+            left = Expr::BinaryOp {
+                op: BinOp::BitAnd,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_and(&mut self) -> Result<Expr> {
+        let mut left = self.parse_bitor()?;
+        while self.current_token() == &Token::And {
+            self.advance();
+            let right = self.parse_bitor()?;
             left = Expr::BinaryOp {
                 op: BinOp::And,
                 left: Box::new(left),
@@ -987,7 +1031,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr> {
-        let mut left = self.parse_addition()?;
+        let mut left = self.parse_shift()?;
         loop {
             // Check if < is actually generic type args: func<T>(...)
             if matches!(self.current_token(), Token::Lt) {
@@ -1022,6 +1066,26 @@ impl Parser {
                 _ => break,
             };
             self.advance();
+            let right = self.parse_shift()?;
+            left = Expr::BinaryOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    // B1: shifts bind tighter than comparisons, looser than addition (C).
+    fn parse_shift(&mut self) -> Result<Expr> {
+        let mut left = self.parse_addition()?;
+        loop {
+            let op = match self.current_token() {
+                Token::Shl => BinOp::Shl,
+                Token::Shr => BinOp::Shr,
+                _ => break,
+            };
+            self.advance();
             let right = self.parse_addition()?;
             left = Expr::BinaryOp {
                 op,
@@ -1035,16 +1099,24 @@ impl Parser {
     fn parse_unary(&mut self) -> Result<Expr> {
         if self.peek_token(&Token::Minus) {
             self.advance();
-            let expr = self.parse_postfix()?;
+            let expr = self.parse_unary()?;
             Ok(Expr::UnaryOp {
                 op: UnOp::Neg,
                 expr: Box::new(expr),
             })
         } else if self.peek_token(&Token::Bang) {
             self.advance();
-            let expr = self.parse_postfix()?;
+            let expr = self.parse_unary()?;
             Ok(Expr::UnaryOp {
                 op: UnOp::Not,
+                expr: Box::new(expr),
+            })
+        } else if self.peek_token(&Token::Tilde) {
+            // B1: bitwise complement binds like the other prefix unaries
+            self.advance();
+            let expr = self.parse_unary()?;
+            Ok(Expr::UnaryOp {
+                op: UnOp::BitNot,
                 expr: Box::new(expr),
             })
         } else {

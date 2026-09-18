@@ -5786,3 +5786,61 @@ fn main() {
     assert!(output.contains("eq"), "Expected 'eq', got: {}", output);
     assert!(output.contains("neq"), "Expected 'neq', got: {}", output);
 }
+
+#[test]
+fn test_bitwise_ops_all_backends() {
+    // B1: & | ^ ~ << >> on the C backend (the parity suite covers LLVM and
+    // the interpreter); && and single-| (lambda) must keep working.
+    let source = r#"
+fn main() {
+    let a = 12
+    let b = 10
+    print(a & b)
+    print(a | b)
+    print(a ^ b)
+    print(~a)
+    print(1 << 10)
+    print(-16 >> 2)
+    if a > 0 && b > 0 { print(1) }
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "bitwise C run failed: {}", output);
+    for expected in ["8", "14", "6", "-13", "1024", "-4", "1"] {
+        assert!(
+            output.lines().any(|l| l.trim() == expected),
+            "missing {} in output: {}",
+            expected,
+            output
+        );
+    }
+}
+
+#[test]
+fn test_bitwise_interpreter_matches_c() {
+    let source = r#"
+fn main() {
+    print(12 & 10)
+    print(12 | 10)
+    print(12 ^ 10)
+    print(~12)
+    print(1 << 10)
+    print(-16 >> 2)
+}
+"#;
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "C bitwise failed: {}", c_out);
+    assert!(i_ok, "interpreter bitwise failed: {}", i_out);
+    let c_vals: Vec<&str> = c_out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .collect();
+    let i_vals: Vec<&str> = i_out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .collect();
+    assert_eq!(c_vals, i_vals, "interpreter diverged from C");
+}

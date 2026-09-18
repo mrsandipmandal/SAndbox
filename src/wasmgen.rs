@@ -460,6 +460,18 @@ impl WasmGen {
                     self.write_indent();
                     writeln!(self.output, ")").unwrap();
                 }
+                UnOp::BitNot => {
+                    // ~x = x ^ -1
+                    self.write_indent();
+                    writeln!(self.output, "(i64.xor").unwrap();
+                    self.indent += 1;
+                    self.gen_wasm_expr(expr);
+                    self.write_indent();
+                    writeln!(self.output, "(i64.const -1)").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+                }
             },
             Expr::Call {
                 name,
@@ -517,6 +529,13 @@ impl WasmGen {
             BinOp::Ge => "ge_s",
             BinOp::And => "and",
             BinOp::Or => "or",
+            // B1: bitwise (logical &&/|| were emitted as wasm and/or before
+            // this — a pre-existing conflation, kept as-is here)
+            BinOp::BitAnd => "and",
+            BinOp::BitOr => "or",
+            BinOp::BitXor => "xor",
+            BinOp::Shl => "shl",
+            BinOp::Shr => "shr_s",
         }
     }
 

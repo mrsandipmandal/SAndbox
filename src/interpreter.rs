@@ -1925,6 +1925,25 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                 }
                 ast::BinOp::And => Ok(if l != 0 && r != 0 { 1 } else { 0 }),
                 ast::BinOp::Or => Ok(if l != 0 || r != 0 { 1 } else { 0 }),
+                // B1: bitwise — Rust i64 ops match two's-complement C/LLVM
+                // semantics; shifts mask the shift amount like x86 (<<, >>
+                // with r in 0..=63). C/LLVM would poison on r >= 64, so
+                // mirror the masking for cross-backend agreement.
+                ast::BinOp::BitAnd => Ok(l & r),
+                ast::BinOp::BitOr => Ok(l | r),
+                ast::BinOp::BitXor => Ok(l ^ r),
+                ast::BinOp::Shl => Ok(if (r as u64) < 64 {
+                    l << (r as u64 & 63)
+                } else {
+                    0
+                }),
+                ast::BinOp::Shr => {
+                    if (r as u64) < 64 {
+                        Ok(l >> (r as u64 & 63))
+                    } else {
+                        Ok(if l < 0 { -1 } else { 0 })
+                    }
+                }
             }
         }
         ast::Expr::UnaryOp { op, expr } => {
@@ -1932,6 +1951,8 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
             match op {
                 ast::UnOp::Neg => Ok(-val),
                 ast::UnOp::Not => Ok(if val == 0 { 1 } else { 0 }),
+                // B1: bitwise complement
+                ast::UnOp::BitNot => Ok(!val),
             }
         }
         ast::Expr::MapLiteral(pairs) => {

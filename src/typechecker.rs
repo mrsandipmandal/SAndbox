@@ -187,6 +187,7 @@ impl TypeChecker {
             Type::Void => "void".to_string(),
             Type::Custom { name, .. } => name.clone(),
             Type::Option(inner) => format!("Option_{}", Self::c_type_name(inner)),
+            Type::Map(k, v) => format!("Map_{}_{}", Self::c_type_name(k), Self::c_type_name(v)),
             Type::Result(ok, _) => format!("Result_{}", Self::c_type_name(ok)),
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::c_type_name(inner)),
@@ -524,6 +525,31 @@ impl TypeChecker {
                 }
                 Ok(Type::Array(Box::new(first)))
             }
+            Expr::MapLiteral(pairs) => {
+                if pairs.is_empty() {
+                    return Ok(Type::Map(Box::new(Type::String), Box::new(Type::I64)));
+                }
+                let key_ty = self.check_expr(&pairs[0].0)?;
+                if key_ty != Type::String {
+                    return Err(anyhow!("Map keys must be strings, got '{}'", key_ty));
+                }
+                let val_ty = self.check_expr(&pairs[0].1)?;
+                for (k, v) in &pairs[1..] {
+                    let kt = self.check_expr(k)?;
+                    if kt != Type::String {
+                        return Err(anyhow!("Map keys must be strings, got '{}'", kt));
+                    }
+                    let vt = self.check_expr(v)?;
+                    if vt != val_ty {
+                        return Err(anyhow!(
+                            "Map values must have the same type ('{}' vs '{}')",
+                            val_ty,
+                            vt
+                        ));
+                    }
+                }
+                Ok(Type::Map(Box::new(key_ty), Box::new(val_ty)))
+            }
             Expr::BinaryOp { op, left, right } => {
                 let lt = self.check_expr(left)?;
                 let rt = self.check_expr(right)?;
@@ -561,7 +587,7 @@ impl TypeChecker {
                     }
                     let arg_ty = self.check_expr(&args[0])?;
                     match &arg_ty {
-                        Type::String | Type::Array(_) => return Ok(Type::I64),
+                        Type::String | Type::Array(_) | Type::Map(_, _) => return Ok(Type::I64),
                         _ => return Err(anyhow!("'len' is not defined for type '{}'", arg_ty)),
                     }
                 }
@@ -673,6 +699,27 @@ impl TypeChecker {
                     }
                 }
 
+                // A4: tmpl::render is variadic — (template, key, value, ...)
+                // with at least one pair; every arg is a string.
+                if name == "tmpl::render" {
+                    if args.len() < 3 || args.len() % 2 != 1 {
+                        return Err(anyhow!(
+                            "Function 'tmpl::render' expects a template plus key/value pairs (odd arg count), got {}",
+                            args.len()
+                        ));
+                    }
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_ty = self.check_expr(arg)?;
+                        if !self.types_compatible(&Type::String, &arg_ty) {
+                            return Err(anyhow!(
+                                "Arg {} of 'tmpl::render': expected 'string', got '{}'",
+                                i + 1,
+                                arg_ty
+                            ));
+                        }
+                    }
+                    return Ok(Type::String);
+                }
                 // Check arg count — allow fewer args if defaults exist
                 let max_params = param_tys.len();
                 let min_params =
@@ -794,12 +841,22 @@ impl TypeChecker {
             Expr::Index { target, index } => {
                 let target_ty = self.check_expr(target)?;
                 let index_ty = self.check_expr(index)?;
-                if index_ty != Type::I64 {
-                    return Err(anyhow!("Array index must be i64, got '{}'", index_ty));
-                }
                 match &target_ty {
-                    Type::Array(inner) => Ok(inner.as_ref().clone()),
-                    _ => Err(anyhow!("Cannot index into '{}'", target_ty)),
+                    Type::Map(k_ty, v_ty) => {
+                        if index_ty != **k_ty {
+                            return Err(anyhow!("Map key must be '{}', got '{}'", k_ty, index_ty));
+                        }
+                        Ok(v_ty.as_ref().clone())
+                    }
+                    _ => {
+                        if index_ty != Type::I64 {
+                            return Err(anyhow!("Array index must be i64, got '{}'", index_ty));
+                        }
+                        match &target_ty {
+                            Type::Array(inner) => Ok(inner.as_ref().clone()),
+                            _ => Err(anyhow!("Cannot index into '{}'", target_ty)),
+                        }
+                    }
                 }
             }
             Expr::OkExpr(value) => {
@@ -1189,6 +1246,93 @@ impl TypeChecker {
                             return Ok(Type::Array(Box::new(Type::I64)));
                         }
                         return Ok(target_ty); // filter
+                    }
+                }
+                if let Type::Map(k_ty, v_ty) = &target_ty {
+                    let k_ty = (**k_ty).clone();
+                    let v_ty = (**v_ty).clone();
+                    match method.as_str() {
+                        "insert" if args.len() == 2 => {
+                            let kt = self.check_expr(&args[0])?;
+                            if kt != k_ty {
+                                return Err(anyhow!(
+                                    "Map method 'insert': key must be '{}', got '{}'",
+                                    k_ty,
+                                    kt
+                                ));
+                            }
+                            let vt = self.check_expr(&args[1])?;
+                            if vt != v_ty {
+                                return Err(anyhow!(
+                                    "Map method 'insert': value must be '{}', got '{}'",
+                                    v_ty,
+                                    vt
+                                ));
+                            }
+                            return Ok(v_ty);
+                        }
+                        "get" if args.len() == 1 || args.len() == 2 => {
+                            let kt = self.check_expr(&args[0])?;
+                            if kt != k_ty {
+                                return Err(anyhow!(
+                                    "Map method 'get': key must be '{}', got '{}'",
+                                    k_ty,
+                                    kt
+                                ));
+                            }
+                            // Optional second arg is the default value
+                            if args.len() == 2 {
+                                let vt = self.check_expr(&args[1])?;
+                                if vt != v_ty {
+                                    return Err(anyhow!(
+                                        "Map method 'get': default must be '{}', got '{}'",
+                                        v_ty,
+                                        vt
+                                    ));
+                                }
+                            }
+                            return Ok(v_ty);
+                        }
+                        "has" if args.len() == 1 => {
+                            let kt = self.check_expr(&args[0])?;
+                            if kt != k_ty {
+                                return Err(anyhow!(
+                                    "Map method 'has': key must be '{}', got '{}'",
+                                    k_ty,
+                                    kt
+                                ));
+                            }
+                            return Ok(Type::Bool);
+                        }
+                        "remove" if args.len() == 1 => {
+                            let kt = self.check_expr(&args[0])?;
+                            if kt != k_ty {
+                                return Err(anyhow!(
+                                    "Map method 'remove': key must be '{}', got '{}'",
+                                    k_ty,
+                                    kt
+                                ));
+                            }
+                            return Ok(Type::Bool);
+                        }
+                        "keys" | "len" if args.is_empty() => {
+                            if method == "keys" {
+                                return Ok(Type::String);
+                            }
+                            return Ok(Type::I64);
+                        }
+                        "values" if args.is_empty() => {
+                            return Err(anyhow!(
+                                "Map method 'values' is not supported yet (needs dynamic arrays)"
+                            ));
+                        }
+                        _ => {
+                            return Err(anyhow!(
+                                "Unknown map method '{}' (with {} argument(s))",
+                                method,
+                                args.len()
+                            ));
+                        }
                     }
                 }
                 // For known types, resolve method as Type_method

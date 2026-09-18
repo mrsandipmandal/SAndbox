@@ -2372,6 +2372,14 @@ impl CodeGen {
                     writeln!(self.output, "printf(\"%s\\n\", {});", self.gen_expr(expr)).unwrap();
                 } else if var_type == Some("double") {
                     writeln!(self.output, "printf(\"%f\\n\", {});", self.gen_expr(expr)).unwrap();
+                } else if var_type == Some("sbx_map*") {
+                    // Map: human-readable {k: v, ...} (interpreter parity)
+                    writeln!(
+                        self.output,
+                        "printf(\"%s\\n\", __sbx_map_format({}));",
+                        self.gen_expr(expr)
+                    )
+                    .unwrap();
                 } else if var_type.map(|t| t.ends_with('*')).unwrap_or(false) {
                     // Array: use __sbx_print_arr if we know the length, else fallback
                     if let Some(len_expr) = self.array_lengths.get(name.as_str()) {
@@ -2434,6 +2442,7 @@ impl CodeGen {
             Expr::ArrayLiteral(elems) if !elems.is_empty() => {
                 format!("{}*", self.infer_c_type(&elems[0]))
             }
+            Expr::MapLiteral(_) => "sbx_map*".into(),
             Expr::StructLiteral {
                 name, type_args, ..
             } => {
@@ -2498,6 +2507,13 @@ impl CodeGen {
                 }
             }
             Expr::MethodCall { target, method, .. } => {
+                // Map method sugar: keys() yields a string, everything else a long.
+                if self.infer_c_type(target) == "sbx_map*" {
+                    return match method.as_str() {
+                        "keys" => "const char*".into(),
+                        _ => "long".into(),
+                    };
+                }
                 // Built-in method sugar returns the stdlib fn's C type
                 // (via the shared method table's ret kind); struct methods
                 // return the struct's C type.
@@ -2648,6 +2664,11 @@ impl CodeGen {
                     if let Expr::ArrayLiteral(elems) = arg {
                         return format!("{}", elems.len());
                     }
+                    // Map length → runtime helper (sbx_map* also ends with '*',
+                    // so it must be tested before the array/sizeof branch)
+                    if self.infer_c_type(arg) == "sbx_map*" {
+                        return format!("__sbx_map_len({})", self.gen_expr(arg));
+                    }
                     let c_ty = self.infer_c_type(arg);
                     if c_ty == "const char*" || c_ty == "char*" {
                         return format!("(long)strlen({})", self.gen_expr(arg));
@@ -2717,8 +2738,49 @@ impl CodeGen {
                 if name == "future::wait" || name == "future::is_ready" {
                     return args_str.first().cloned().unwrap_or_else(|| "0".to_string());
                 }
+                // A2: json::stringify_array — C cannot pass { } array literals
+                // as call operands: use the variadic helper for literals and
+                // the pointer helper for named arrays.
+                if name == "json::stringify_array" && args.len() == 1 {
+                    match &args[0] {
+                        Expr::ArrayLiteral(elems) => {
+                            let elem_strs: Vec<String> =
+                                elems.iter().map(|e| self.gen_expr(e)).collect();
+                            let mut call = format!("__sbx_json_stringify_array({}, ", elems.len());
+                            call.push_str(&elem_strs.join(", "));
+                            call.push(')');
+                            return call;
+                        }
+                        Expr::Ident(n) => {
+                            let arr_val = self.gen_expr(&args[0]);
+                            let len_val = self
+                                .array_lengths
+                                .get(n.as_str())
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    format!("(long)(sizeof({av}) / sizeof({av}[0]))", av = arr_val)
+                                });
+                            return format!(
+                                "__sbx_json_stringify_array_p({}, {})",
+                                arr_val, len_val
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 if stdlib::is_builtin(name) {
                     let c_fn = stdlib::c_name(name);
+                    // Legacy map::get(key) with no default: the runtime ABI takes
+                    // (m, key, default) — fill 0 to match m.get(key) / m[key].
+                    let mut args_str: Vec<String> = args_str;
+                    if name == "map::get" && args_str.len() == 2 {
+                        args_str.push("0".to_string());
+                    }
+                    // A4: tmpl::render — the C ABI is variadic with a leading
+                    // count; prepend it.
+                    if name == "tmpl::render" {
+                        return format!("{}({}, {})", c_fn, args_str.len(), args_str.join(", "));
+                    }
                     // v2.0: spawn / serve_once take a *function name* — emit it as a
                     // C function pointer (dropping the string quotes) instead of a literal.
                     let args_joined =
@@ -2781,7 +2843,29 @@ impl CodeGen {
                 format!("({}).{}", self.gen_expr(target), field)
             }
             Expr::Index { target, index } => {
+                // Map indexing: m["key"] → __sbx_map_get(m, "key", 0)
+                if self.infer_c_type(target) == "sbx_map*" {
+                    let t = self.gen_expr(target);
+                    let k = self.gen_expr(index);
+                    return format!("__sbx_map_get({}, {}, 0)", t, k);
+                }
                 format!("({})[{}]", self.gen_expr(target), self.gen_expr(index))
+            }
+            Expr::MapLiteral(pairs) => {
+                // GNU statement expression: declare + insert, value is the map handle.
+                let idx = self.var_counter.get();
+                self.var_counter.set(idx + 1);
+                let tmp = format!("__map{}", idx);
+                let mut body = String::new();
+                for (k, v) in pairs {
+                    body.push_str(&format!(
+                        "__sbx_map_insert({}, {}, {}); ",
+                        tmp,
+                        self.gen_expr(k),
+                        self.gen_expr(v)
+                    ));
+                }
+                format!("({{ sbx_map* {} = sbx_map_new(); {}{}; }})", tmp, body, tmp)
             }
             Expr::ArrayLiteral(elems) => {
                 let elems_str: Vec<String> = elems.iter().map(|e| self.gen_expr(e)).collect();
@@ -3061,6 +3145,25 @@ impl CodeGen {
                 let target_ty = self.infer_c_type(target);
                 let t = self.gen_expr(target);
                 let a: Vec<String> = args.iter().map(|a| self.gen_expr(a)).collect();
+                // Map methods (map<string,long>)
+                if target_ty == "sbx_map*" {
+                    let c_fn = match method.as_str() {
+                        "insert" => "__sbx_map_insert",
+                        "get" => "__sbx_map_get_default",
+                        "has" => "__sbx_map_has",
+                        "remove" => "__sbx_map_remove",
+                        "keys" => "__sbx_map_keys",
+                        "len" => "__sbx_map_len",
+                        other => other,
+                    };
+                    let mut all_args = vec![t];
+                    all_args.extend(a.iter().cloned());
+                    // m.get(key) without a default uses 0 (matches m[key])
+                    if method == "get" && a.len() == 1 {
+                        all_args.push("0".to_string());
+                    }
+                    return format!("{}({})", c_fn, all_args.join(", "));
+                }
                 // String methods — mapped through the shared method table
                 // (stdlib::string_method); struct methods stay Type_method.
                 let c_fn: String = if target_ty == "const char*" {
@@ -3265,6 +3368,7 @@ impl CodeGen {
             Type::Void => "void".to_string(),
             Type::Custom { name, .. } => name.clone(),
             Type::Option(inner) => format!("Option_{}", Self::type_id(inner)),
+            Type::Map(k, v) => format!("Map_{}_{}", Self::type_id(k), Self::type_id(v)),
             Type::Result(ok, _) => format!("Result_{}", Self::type_id(ok)),
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::type_id(inner)),
@@ -3339,6 +3443,7 @@ impl CodeGen {
                 }
             }
             Type::Option(_) => "long".into(), // Tagged: 0 = None, nonzero = Some(payload)
+            Type::Map(_, _) => "sbx_map*".into(),
             Type::Future(inner) => format!("Future<{}>", self.c_type(inner)),
             Type::TypeParam(name) => name.clone(),
             Type::Result(ok, _) => self.c_type(ok),

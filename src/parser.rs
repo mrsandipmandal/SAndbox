@@ -691,6 +691,24 @@ impl Parser {
                 Ok(Type::Unit(unit))
             }
             Token::Ident(name) => {
+                // map<K, V> is a builtin generic type, not a Custom struct name
+                // (peek_token checks the CURRENT token; the identifier has not
+                // been consumed yet, so '<' is at offset 1)
+                if name == "map" && self.peek_token_at(1, &Token::Lt) {
+                    self.advance(); // skip 'map'
+                    let saved = self.pos;
+                    self.advance(); // skip <
+                    if let (Ok(k), Ok(v)) = (self.parse_type(), {
+                        self.expect_token(&Token::Comma)?;
+                        self.parse_type()
+                    }) {
+                        if self.peek_token(&Token::Gt) {
+                            self.advance();
+                            return Ok(Type::Map(Box::new(k), Box::new(v)));
+                        }
+                    }
+                    self.pos = saved;
+                }
                 self.advance();
                 // Check for generic type arguments: Pair<T>
                 if self.peek_token(&Token::Lt) {
@@ -1040,7 +1058,33 @@ impl Parser {
             match self.current_token().clone() {
                 Token::Dot => {
                     self.advance();
-                    let field = self.expect_ident()?;
+                    // Method/field names may be SQL keywords (insert, values, ...):
+                    // after a dot they can never start an SQL statement, and map
+                    // methods use them (m.insert(...)).
+                    let field = match self.current_token().clone() {
+                        Token::Ident(s) => {
+                            self.advance();
+                            s
+                        }
+                        Token::Select
+                        | Token::Insert
+                        | Token::Update
+                        | Token::Delete
+                        | Token::Set
+                        | Token::Where
+                        | Token::From
+                        | Token::Into
+                        | Token::Values => {
+                            let s = format!("{:?}", self.current_token());
+                            self.advance();
+                            s.to_lowercase()
+                        }
+                        ref t => {
+                            return Err(
+                                self.error(format!("Expected method or field name, got {:?}", t))
+                            )
+                        }
+                    };
                     // Check if this is a method call: .method(args)
                     if self.peek_token(&Token::LParen) {
                         self.advance();
@@ -1146,7 +1190,8 @@ impl Parser {
             | Token::Where
             | Token::From
             | Token::Into
-            | Token::Values => {
+            | Token::Values
+            | Token::Query => {
                 let s = format!("{:?}", self.current_token());
                 self.advance();
                 Ok(s.to_lowercase())
@@ -1372,6 +1417,21 @@ impl Parser {
                 }
                 self.expect_token(&Token::RBracket)?;
                 Ok(Expr::ArrayLiteral(elems))
+            }
+            Token::LBrace if self.peek_token_at(1, &Token::RBrace) || self.peek_map_literal() => {
+                self.advance();
+                let mut pairs = Vec::new();
+                while !self.peek_token(&Token::RBrace) {
+                    let key = self.parse_expr()?;
+                    self.expect_token(&Token::Colon)?;
+                    let value = self.parse_expr()?;
+                    pairs.push((key, value));
+                    if !self.peek_token(&Token::RBrace) {
+                        self.expect_token(&Token::Comma)?;
+                    }
+                }
+                self.expect_token(&Token::RBrace)?;
+                Ok(Expr::MapLiteral(pairs))
             }
             Token::FString(raw) => {
                 let (fline, fcol) = (self.current().line, self.current().col);
@@ -1761,6 +1821,13 @@ impl Parser {
         self.tokens
             .get(self.pos + offset)
             .is_some_and(|t| t.token == *expected)
+    }
+
+    /// Lookahead: does a `{` here start a map literal (`{` expr `:` …) rather
+    /// than a block? Blocks never contain `expr :` at the top level, so this
+    /// is unambiguous.
+    fn peek_map_literal(&self) -> bool {
+        !self.peek_token_at(1, &Token::RBrace) && self.peek_token_at(2, &Token::Colon)
     }
 
     fn is_at_end(&self) -> bool {

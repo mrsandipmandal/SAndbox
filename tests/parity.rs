@@ -419,6 +419,217 @@ fn main() {
         backends: ALL,
     },
     ParityCase {
+        name: "map_basics",
+        source: r#"
+fn getval(m: map<string, i64>) -> i64 {
+    return m.get("v")
+}
+fn mkmap() -> map<string, i64> {
+    return {"x": 10, "y": 20}
+}
+fn bump(m: map<string, i64>) -> i64 {
+    m.insert("n", m.get("n") + 1)
+    return m.get("n")
+}
+fn main() {
+    let m = {"name": 1, "age": 2}
+    print(m["name"])
+    m.insert("city", 3)
+    print(m.get("city"))
+    print(m.get("nope"))
+    print(m.get("nope", 7))
+    print(m.has("age"))
+    print(m.len())
+    m.remove("age")
+    print(m.has("age"))
+    print(m.keys())
+    print(m)
+    let empty = {}
+    print(empty.len())
+    print(empty)
+    let m2 = mkmap()
+    print(m2["x"])
+    print(getval(m2))
+    bump(m2)
+    print(m2.get("n"))
+    let k = "city"
+    print(m.get(k))
+}
+"#,
+        // All backends must agree: maps (map<string, i64>) are a new type —
+        // literal, index, insert/get/has/remove/keys/len, empty literal, fn
+        // args/returns, by-reference mutation, and string-variable keys.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "http_url_decode",
+        source: r#"
+fn main() {
+    print(http::url_decode("a%20b+c"))
+    print(http::url_decode("100%25%21"))
+    print(http::url_decode("plain"))
+    print(http::url_decode("x%2Fy%3Fz%3D1"))
+}
+"#,
+        // A3: percent-decoding + '+'→space, pure helper. All backends agree
+        // on decode semantics including %2F (%2f uppercase hex) etc.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "http_query_params",
+        source: r#"
+fn main() {
+    let q = "who=world&n=42&empty=&flag"
+    print(http::query_param(q, "who"))
+    print(http::query_param(q, "n"))
+    print(http::query_param(q, "empty"))
+    print(http::query_param(q, "flag"))
+    print(http::query_param(q, "missing"))
+    let decoded = http::query_param("q=a%20b", "q")
+    print(decoded)
+}
+"#,
+        // A3: value extraction from a query string — present, numeric,
+        // valueless ("="), bare flag, absent, and percent-decoded values.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "http_form_parse",
+        source: r#"
+fn main() {
+    let body = "name=anne+smith&age=30&ok=1"
+    print(http::form_get(body, "name"))
+    print(http::form_get(body, "age"))
+    print(http::form_get(body, "ok"))
+    print(http::form_get(body, "nope"))
+    let who = http::query_param("who=x+y", "who")
+    print(who)
+}
+"#,
+        // A3: form-encoded body parsing ('+'→space in values), mirroring
+        // query_param semantics — same pair grammar, different source.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "a4_html_escape",
+        source: r#"
+fn main() {
+    let raw = "<b>Tom & \"Jerry\"</b>"
+    let esc = html::escape(raw)
+    print(esc)
+    print(html::unescape(esc))
+    print(html::escape("it's ok"))
+    print(html::unescape("A &amp; B &#65; &#x42; &unknown;"))
+    print(html::escape(""))
+}
+"#,
+        // A4: HTML escaping round-trips; numeric + named entity decoding;
+        // unknown entities pass through untouched.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "a4_tmpl_render",
+        source: r#"
+fn main() {
+    let page = tmpl::render("<h1>%{title}</h1><p>%{body}</p>", "title", "Hi", "body", "Body & more")
+    print(page)
+    print(tmpl::render("%{a}-%{a}", "a", "dup"))
+    print(tmpl::render("%{missing} stays", "x", "y"))
+    print(tmpl::render("no placeholders", "x", "y"))
+}
+"#,
+        // A4: %{key} substitution — repeated keys, unknown keys left as-is,
+        // templates without placeholders untouched.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "a4_cookie_get",
+        source: r#"
+fn main() {
+    let hdr = "sid=abc123; theme=dark; user=ann"
+    print(http::cookie_get(hdr, "sid"))
+    print(http::cookie_get(hdr, "theme"))
+    print(http::cookie_get(hdr, "user"))
+    print(http::cookie_get(hdr, "nope"))
+    print(http::cookie_get("", "sid"))
+}
+"#,
+        // A4: Cookie header parsing (RFC 6265 '; '-separated pairs).
+        backends: ALL,
+    },
+    ParityCase {
+        name: "json_parse_basics",
+        source: r#"
+fn main() {
+    let m = json::parse_map("{\"id\": 7, \"count\": 42, \"ok\": true, \"off\": false, \"nothing\": null}")
+    print(m.get("id"))
+    print(m.get("count"))
+    print(m.get("ok"))
+    print(m.get("off"))
+    print(m.len())
+    print(m.has("id"))
+    print(m.has("missing"))
+    print(m)
+    let s = json::stringify_map(m)
+    print(s)
+    let n = json::get_int("{\"a\": -15}", "a")
+    print(n)
+}
+"#,
+        // A2: JSON object → map<string,i64>. All backends must agree on
+        // numeric fields, true/false/null mapping (1/0/0), string-field
+        // skipping, insertion order through stringify, and get_int on
+        // negative numbers.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "json_stringify_roundtrip",
+        source: r#"
+fn main() {
+    let m = {"b": 2, "a": 1}
+    let s = json::stringify_map(m)
+    print(s)
+    let back = json::parse_map(s)
+    print(back.get("b"))
+    print(back.get("a"))
+    print(back.len())
+    let s2 = json::stringify_map(back)
+    print(s2)
+    let arr = json::stringify_array([10, 20, 30])
+    print(arr)
+    print(json::array_get_int("[7, 8, 9]", 0))
+    print(json::array_get_int("[7, 8, 9]", 2))
+    print(json::array_get_int("[7, 8, 9]", 5))
+}
+"#,
+        // A2: map → JSON text → map roundtrip preserves order and values;
+        // array literals stringify as [1,2,3]; array element access is
+        // bounds-safe (out of range → 0). All backends must agree.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "json_string_fields",
+        source: r#"
+fn main() {
+    let name = json::get_str("{\"user\": {\"name\": \"Alice\"}, \"n\": 3}", "name")
+    print(name)
+    let obj = "{\"title\": \"The Book\", \"copies\": 4}"
+    let t = json::get_str(obj, "title")
+    print(t)
+    let c = json::get_int(obj, "copies")
+    print(c)
+    let m = json::parse_map(obj)
+    print(m.get("copies"))
+    print(m.len())
+}
+"#,
+        // A2: string fields stay readable from the raw JSON text via
+        // get_str (map<string,i64> cannot hold string values); mixed
+        // string/numeric objects parse with string fields skipped.
+        // Known gap: LLVM string runtime lacks method-sugar parity here.
+        backends: C_AND_INTERP,
+    },
+    ParityCase {
         name: "string_basics",
         source: r#"
 fn main() {

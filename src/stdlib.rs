@@ -236,6 +236,53 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
         vec![("s".into(), Type::String)],
         Type::I64,
     );
+    // ── A2: real JSON parse/stringify on maps + arrays ──
+    register(
+        &mut m,
+        "json::parse_map",
+        vec![("s".into(), Type::String)],
+        Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+    );
+    register(
+        &mut m,
+        "json::stringify_map",
+        vec![(
+            "m".into(),
+            Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+        )],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::get_str",
+        vec![("s".into(), Type::String), ("key".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::get_int",
+        vec![("s".into(), Type::String), ("key".into(), Type::String)],
+        Type::I64,
+    );
+    register(
+        &mut m,
+        "json::stringify_array",
+        vec![("arr".into(), Type::Array(Box::new(Type::I64)))],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "json::array_get_int",
+        vec![("s".into(), Type::String), ("i".into(), Type::I64)],
+        Type::I64,
+    );
+    // Renamed from the repurposed json::stringify: explicit int stringify
+    register(
+        &mut m,
+        "json::stringify_int",
+        vec![("v".into(), Type::I64)],
+        Type::String,
+    );
 
     // ── v2.0: http module ──
     register(
@@ -298,6 +345,117 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
         &mut m,
         "http::headers",
         vec![("s".into(), Type::String), ("name".into(), Type::String)],
+        Type::String,
+    );
+
+    // ── v2.1: A3 real HTTP server ──
+    register(&mut m, "http::method", vec![], Type::String);
+    register(&mut m, "http::query", vec![], Type::String);
+    register(&mut m, "http::body", vec![], Type::String);
+    register(
+        &mut m,
+        "http::req_header",
+        vec![("name".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::set_status",
+        vec![("code".into(), Type::I64)],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "http::set_header",
+        vec![
+            ("name".into(), Type::String),
+            ("value".into(), Type::String),
+        ],
+        Type::Void,
+    );
+    register(&mut m, "http::status", vec![], Type::I64);
+    register(
+        &mut m,
+        "http::query_param",
+        vec![
+            ("query".into(), Type::String),
+            ("name".into(), Type::String),
+        ],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::form_get",
+        vec![("body".into(), Type::String), ("name".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::form_param",
+        vec![("name".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::url_decode",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::serve_static",
+        vec![("dir".into(), Type::String)],
+        Type::Void,
+    );
+    // ── A4: cookies ──
+    register(
+        &mut m,
+        "http::set_cookie",
+        vec![
+            ("name".into(), Type::String),
+            ("value".into(), Type::String),
+        ],
+        Type::Void,
+    );
+    register(
+        &mut m,
+        "http::get_cookie",
+        vec![("name".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "http::cookie_get",
+        vec![
+            ("cookie_header".into(), Type::String),
+            ("name".into(), Type::String),
+        ],
+        Type::String,
+    );
+
+    // ── A4: html ──
+    register(
+        &mut m,
+        "html::escape",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+    register(
+        &mut m,
+        "html::unescape",
+        vec![("s".into(), Type::String)],
+        Type::String,
+    );
+
+    // ── A4: %{key} templates — tmpl::render(t, k1, v1, k2, v2, ...)
+    register(
+        &mut m,
+        "tmpl::render",
+        vec![
+            ("template".into(), Type::String),
+            ("key".into(), Type::String),
+            ("value".into(), Type::String),
+        ],
         Type::String,
     );
 
@@ -553,41 +711,80 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
         vec![("l".into(), Type::I64)],
         Type::Bool,
     );
-    // Map — opaque pointer handle (i64)
-    register(&mut m, "map::new", vec![], Type::I64);
-    register(&mut m, "map::len", vec![("m".into(), Type::I64)], Type::I64);
+    // Map — module-call API on real map<string, i64> values. Legacy
+    // handles-typed-as-i64 rows were retired when maps became first-class
+    // (A1); these signatures match the sbx_map* runtime exactly.
+    register(
+        &mut m,
+        "map::new",
+        vec![],
+        Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+    );
+    register(
+        &mut m,
+        "map::len",
+        vec![(
+            "m".into(),
+            Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+        )],
+        Type::I64,
+    );
     register(
         &mut m,
         "map::insert",
         vec![
-            ("m".into(), Type::I64),
+            (
+                "m".into(),
+                Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+            ),
             ("k".into(), Type::String),
             ("v".into(), Type::I64),
         ],
-        Type::Void,
+        Type::I64,
     );
     register(
         &mut m,
         "map::get",
-        vec![("m".into(), Type::I64), ("k".into(), Type::String)],
+        vec![
+            (
+                "m".into(),
+                Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+            ),
+            ("k".into(), Type::String),
+        ],
         Type::I64,
     );
     register(
         &mut m,
         "map::contains",
-        vec![("m".into(), Type::I64), ("k".into(), Type::String)],
+        vec![
+            (
+                "m".into(),
+                Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+            ),
+            ("k".into(), Type::String),
+        ],
         Type::Bool,
     );
     register(
         &mut m,
         "map::remove",
-        vec![("m".into(), Type::I64), ("k".into(), Type::String)],
-        Type::Void,
+        vec![
+            (
+                "m".into(),
+                Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+            ),
+            ("k".into(), Type::String),
+        ],
+        Type::Bool,
     );
     register(
         &mut m,
         "map::keys",
-        vec![("m".into(), Type::I64)],
+        vec![(
+            "m".into(),
+            Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+        )],
         Type::String,
     );
     // Set — opaque pointer handle (i64)
@@ -751,6 +948,36 @@ pub fn string_method_ret_kind(name: &str) -> Option<&'static str> {
     })
 }
 
+/// LLVM return types for builtins whose C runtime functions do not return
+/// a plain long (the generic LLVM builtin path assumes i64).
+pub fn builtin_llvm_ret(name: &str) -> Option<&'static str> {
+    match name {
+        "map::new" => Some("i8*"),
+        "json::parse_map"
+        | "json::stringify_map"
+        | "json::get_str"
+        | "json::stringify_array"
+        | "json::stringify_int"
+        | "json::stringify"
+        | "json::stringify_string"
+        | "json::stringify_bool"
+        | "json::get"
+        | "json::parse_string"
+        | "json::parse_object"
+        | "json::map_get"
+        | "json::map_keys"
+        | "json::stringify_float" => Some("i8*"),
+        "json::parse_float" => Some("double"),
+        // A3 HTTP: string accessors/parsers return RC-allocated strings
+        "http::method" | "http::query" | "http::body" | "http::req_header"
+        | "http::query_param" | "http::form_get" | "http::form_param" | "http::url_decode"
+        // A4: cookies, html and templates return strings
+        | "http::get_cookie" | "http::cookie_get" | "html::escape" | "html::unescape"
+        | "tmpl::render" => Some("i8*"),
+        _ => None,
+    }
+}
+
 /// Maps a stdlib function name to its C equivalent
 pub fn c_name(name: &str) -> &str {
     match name {
@@ -809,15 +1036,40 @@ pub fn c_name(name: &str) -> &str {
         "json::map_get" => "__sbx_json_map_get",
         "json::map_keys" => "__sbx_json_map_keys",
         "json::map_len" => "__sbx_json_map_len",
+        "json::parse_map" => "__sbx_json_parse_map",
+        "json::stringify_map" => "__sbx_json_stringify_map",
+        "json::get_str" => "__sbx_json_get_str",
+        "json::get_int" => "__sbx_json_get_int",
+        "json::stringify_array" => "__sbx_json_stringify_array",
+        "json::array_get_int" => "__sbx_json_array_get_int",
+        "json::stringify_int" => "__sbx_json_stringify",
         "http::get" => "__sbx_http_get",
         "http::post" => "__sbx_http_post",
         "http::serve_once" => "__sbx_serve_once",
         "http::serve" => "__sbx_serve",
+        "http::set_cookie" => "__sbx_http_set_cookie",
+        "http::get_cookie" => "__sbx_http_get_cookie",
+        "http::cookie_get" => "__sbx_http_cookie_get",
+        "html::escape" => "__sbx_html_escape",
+        "html::unescape" => "__sbx_html_unescape",
+        "tmpl::render" => "__sbx_tmpl_render",
         "http::status_code" => "__sbx_http_status",
         "http::delete" => "__sbx_http_delete",
         "http::put" => "__sbx_http_put",
         "http::patch" => "__sbx_http_patch",
         "http::headers" => "__sbx_http_headers",
+        "http::method" => "__sbx_http_method",
+        "http::query" => "__sbx_http_query",
+        "http::body" => "__sbx_http_body",
+        "http::req_header" => "__sbx_http_req_header",
+        "http::set_status" => "__sbx_http_set_status",
+        "http::set_header" => "__sbx_http_set_header",
+        "http::status" => "__sbx_http_status_code",
+        "http::query_param" => "__sbx_http_query_param",
+        "http::form_get" => "__sbx_http_form_get",
+        "http::form_param" => "__sbx_http_form_param",
+        "http::url_decode" => "__sbx_url_decode",
+        "http::serve_static" => "__sbx_http_serve_static",
         "spawn" => "__sbx_spawn",
         "chan::create" => "__sbx_chan_create",
         "chan::send" => "__sbx_chan_send",
@@ -840,11 +1092,11 @@ pub fn c_name(name: &str) -> &str {
         "list::sort" => "__sbx_list_sort",
         "list::remove" => "__sbx_list_remove",
         "list::is_empty" => "__sbx_list_is_empty",
-        "map::new" => "__sbx_map_new",
+        "map::new" => "sbx_map_new",
         "map::len" => "__sbx_map_len",
         "map::insert" => "__sbx_map_insert",
         "map::get" => "__sbx_map_get",
-        "map::contains" => "__sbx_map_contains",
+        "map::contains" => "__sbx_map_has",
         "map::remove" => "__sbx_map_remove",
         "map::keys" => "__sbx_map_keys",
         "set_of::new" => "__sbx_set_new",
@@ -880,6 +1132,7 @@ pub fn c_preamble() -> String {
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <signal.h>
 
 /* ── Reference Counting Runtime ── */
 
@@ -1035,6 +1288,203 @@ static long __sbx_arr_reduce(long* src, long len, long (*lambda)(long, long), lo
     return acc;
 }
 
+/* ── map<string,long> runtime (insertion-ordered) ──
+   ABI note: every long-returning helper matches the LLVM declares
+   (i64), so results stay valid across the C/LLVM link boundary. */
+/* Open addressing with tombstones; keys are RC-managed strings. */
+
+typedef struct { const char* key; long val; int state; } sbx_map_slot; /* state: 0 empty, 1 used, 2 tombstone */
+
+typedef struct {
+    sbx_map_slot* slots;
+    long cap;       /* power of two */
+    long used;      /* live entries */
+    long tombs;     /* tombstones present */
+    /* insertion order log: indices into a parallel key/val list */
+    const char** ord_keys;
+    long* ord_vals;
+    long ord_len, ord_cap;
+} sbx_map;
+
+static const char* __sbx_map_strdup(const char* s) {
+    size_t n = strlen(s);
+    char* out = (char*)sbx_rc_alloc(n + 1);
+    memcpy(out, s, n + 1);
+    return out;
+}
+
+static unsigned long __sbx_map_hash(const char* s) {
+    unsigned long h = 1469598103934665603UL; /* FNV-1a */
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211UL; }
+    return h;
+}
+
+static sbx_map* sbx_map_new(void) {
+    sbx_map* m = (sbx_map*)sbx_rc_alloc(sizeof(sbx_map));
+    m->cap = 8;
+    m->slots = (sbx_map_slot*)sbx_rc_alloc(sizeof(sbx_map_slot) * (size_t)m->cap);
+    for (long i = 0; i < m->cap; i++) m->slots[i].state = 0;
+    m->used = 0; m->tombs = 0;
+    m->ord_cap = 8; m->ord_len = 0;
+    m->ord_keys = (const char**)sbx_rc_alloc(sizeof(char*) * (size_t)m->ord_cap);
+    m->ord_vals = (long*)sbx_rc_alloc(sizeof(long) * (size_t)m->ord_cap);
+    return m;
+}
+
+static void sbx_map_ord_push(sbx_map* m, const char* key, long val) {
+    if (m->ord_len == m->ord_cap) {
+        long nc = m->ord_cap * 2;
+        const char** nk = (const char**)sbx_rc_alloc(sizeof(char*) * (size_t)nc);
+        long* nv = (long*)sbx_rc_alloc(sizeof(long) * (size_t)nc);
+        memcpy(nk, m->ord_keys, sizeof(char*) * (size_t)m->ord_len);
+        memcpy(nv, m->ord_vals, sizeof(long) * (size_t)m->ord_len);
+        m->ord_keys = nk; m->ord_vals = nv; m->ord_cap = nc;
+    }
+    m->ord_keys[m->ord_len] = key;
+    m->ord_vals[m->ord_len] = val;
+    m->ord_len++;
+}
+
+/* Find slot index for key; sets *out_found. Probes from hash. */
+static long sbx_map_probe(sbx_map* m, const char* key, int* out_found) {
+    unsigned long h = __sbx_map_hash(key);
+    long mask = m->cap - 1;
+    long i = (long)(h & (unsigned long)mask);
+    long first_tomb = -1;
+    *out_found = 0;
+    for (long p = 0; p < m->cap; p++) {
+        sbx_map_slot* s = &m->slots[i];
+        if (s->state == 0) {
+            return first_tomb >= 0 ? first_tomb : i;
+        }
+        if (s->state == 2) {
+            if (first_tomb < 0) first_tomb = i;
+        } else if (strcmp(s->key, key) == 0) {
+            *out_found = 1;
+            return i;
+        }
+        i = (i + 1) & mask;
+    }
+    return first_tomb >= 0 ? first_tomb : -1;
+}
+
+static void sbx_map_grow(sbx_map* m) {
+    long ncap = m->cap * 2;
+    sbx_map_slot* nslots = (sbx_map_slot*)sbx_rc_alloc(sizeof(sbx_map_slot) * (size_t)ncap);
+    for (long i = 0; i < ncap; i++) nslots[i].state = 0;
+    for (long i = 0; i < m->cap; i++) {
+        if (m->slots[i].state != 1) continue;
+        unsigned long h = __sbx_map_hash(m->slots[i].key);
+        long j = (long)(h & (unsigned long)(ncap - 1));
+        while (nslots[j].state == 1) j = (j + 1) & (ncap - 1);
+        nslots[j] = m->slots[i];
+    }
+    m->slots = nslots;
+    m->cap = ncap;
+    m->tombs = 0;
+}
+
+/* Insert or update. Returns the inserted value (matches the interpreter). */
+static long __sbx_map_insert(sbx_map* m, const char* key, long val) {
+    int found;
+    long i = sbx_map_probe(m, key, &found);
+    if (found) {
+        m->slots[i].val = val;
+        for (long k = 0; k < m->ord_len; k++) {
+            if (m->ord_keys[k] == m->slots[i].key) { m->ord_vals[k] = val; break; }
+        }
+        return val;
+    }
+    if (i < 0) { sbx_map_grow(m); return __sbx_map_insert(m, key, val); }
+    if (m->slots[i].state == 2) m->tombs--;
+    m->slots[i].key = __sbx_map_strdup(key);
+    m->slots[i].val = val;
+    m->slots[i].state = 1;
+    m->used++;
+    sbx_map_ord_push(m, m->slots[i].key, val);
+    if ((m->used + m->tombs) * 10 >= m->cap * 7) sbx_map_grow(m);
+    return val;
+}
+
+static long __sbx_map_get(sbx_map* m, const char* key, long def) {
+    int found;
+    long i = sbx_map_probe(m, key, &found);
+    if (found) return m->slots[i].val;
+    return def;
+}
+
+/* m.get(key, default) — same as __sbx_map_get; separate name for clarity. */
+static long __sbx_map_get_default(sbx_map* m, const char* key, long def) {
+    return __sbx_map_get(m, key, def);
+}
+
+static long __sbx_map_has(sbx_map* m, const char* key) {
+    int found;
+    sbx_map_probe(m, key, &found);
+    return found;
+}
+
+static long __sbx_map_remove(sbx_map* m, const char* key) {
+    int found;
+    long i = sbx_map_probe(m, key, &found);
+    if (!found) return 0;
+    m->slots[i].state = 2;
+    m->slots[i].key = NULL;
+    m->used--; m->tombs++;
+    for (long k = 0; k < m->ord_len; k++) {
+        if (m->ord_keys[k] && strcmp(m->ord_keys[k], key) == 0) {
+            for (long j = k; j + 1 < m->ord_len; j++) {
+                m->ord_keys[j] = m->ord_keys[j + 1];
+                m->ord_vals[j] = m->ord_vals[j + 1];
+            }
+            m->ord_len--;
+            break;
+        }
+    }
+    if ((m->used + m->tombs) * 10 >= m->cap * 7) sbx_map_grow(m);
+    return 1;
+}
+
+static long __sbx_map_len(sbx_map* m) {
+    return m->used;
+}
+
+/* Human-readable form "{k: v, ...}" in insertion order (print parity with the interpreter). */
+static const char* __sbx_map_format(sbx_map* m) {
+    long total = 3;
+    for (long k = 0; k < m->ord_len; k++) total += (long)strlen(m->ord_keys[k]) + 24;
+    char* out = (char*)sbx_rc_alloc((size_t)total);
+    out[0] = '{';
+    size_t off = 1;
+    for (long k = 0; k < m->ord_len; k++) {
+        if (k > 0) { out[off++] = ','; out[off++] = ' '; }
+        size_t kl = strlen(m->ord_keys[k]);
+        memcpy(out + off, m->ord_keys[k], kl);
+        off += kl;
+        off += (size_t)snprintf(out + off, (size_t)(total - (long)off), ": %ld", m->ord_vals[k]);
+    }
+    out[off++] = '}';
+    out[off] = '\0';
+    return out;
+}
+
+/* Keys joined with ", " in insertion order (string arrays are not supported yet). */
+static const char* __sbx_map_keys(sbx_map* m) {
+    long total = 1;
+    for (long k = 0; k < m->ord_len; k++) total += (long)strlen(m->ord_keys[k]) + 2;
+    char* out = (char*)sbx_rc_alloc((size_t)total);
+    out[0] = '\0';
+    size_t off = 0;
+    for (long k = 0; k < m->ord_len; k++) {
+        if (k > 0) { out[off++] = ','; out[off++] = ' '; }
+        size_t kl = strlen(m->ord_keys[k]);
+        memcpy(out + off, m->ord_keys[k], kl);
+        off += kl;
+    }
+    out[off] = '\0';
+    return out;
+}
+
 /* ── v2.0: JSON helpers ── */
 
 static const char* __sBx_json_stringify(long v) {
@@ -1051,7 +1501,9 @@ static const char* __sbx_json_stringify(long v) {
 
 static const char* __sbx_json_stringify_float(double v) {
     char* out = (char*)sbx_rc_alloc(64);
-    snprintf(out, 64, "%f", v);
+    /* %g-style: up to 15 significant digits, trim trailing zeros —
+       round-trips values instead of a lossy fixed 6-decimal form. */
+    snprintf(out, 64, "%.15g", v);
     return out;
 }
 
@@ -1337,6 +1789,178 @@ static long __sbx_json_map_len(const char* map_str) {
         count++;
     }
     return count;
+}
+
+/* ── A2: JSON parse/stringify on maps + arrays ──
+   map<string,long> cannot hold string values (A1 decision), so
+   object parsing stores only numeric values (true/false/null → 1/0/0);
+   string fields stay readable via json::get_str on the raw text. */
+
+static void __sbx_json_skip_ws(const char** pp) {
+    const char* p = *pp;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    *pp = p;
+}
+
+/* Parse a JSON object into a map<string,long>. Keys keep source order.
+   Numeric values are stored exactly; true/false/null become 1/0/0;
+   string, array and object values are skipped. */
+static sbx_map* __sbx_json_parse_map(const char* s) {
+    sbx_map* m = sbx_map_new();
+    const char* p = s;
+    while (*p && *p != '{') p++;
+    if (*p != '{') return m;
+    p++;
+    char key[256];
+    for (;;) {
+        __sbx_json_skip_ws(&p);
+        if (*p == '}' || *p == '\0') break;
+        if (*p == ',') { p++; continue; }
+        if (*p != '"') break;
+        if (!__sbx_json_extract_string(&p, key, sizeof(key))) break;
+        __sbx_json_skip_ws(&p);
+        if (*p != ':') break;
+        p++;
+        __sbx_json_skip_ws(&p);
+        if (*p == '"') {
+            /* string value: skip (read string fields via json::get_str) */
+            p++;
+            while (*p && *p != '"') { if (*p == '\\' && *(p+1)) p++; p++; }
+            if (*p) p++;
+        } else if (*p == '[' || *p == '{') {
+            __sbx_json_skip_value(&p);
+        } else if (*p == 't' && strncmp(p, "true", 4) == 0) {
+            __sbx_map_insert(m, key, 1);
+            p += 4;
+        } else if (*p == 'f' && strncmp(p, "false", 5) == 0) {
+            __sbx_map_insert(m, key, 0);
+            p += 5;
+        } else if (*p == 'n' && strncmp(p, "null", 4) == 0) {
+            __sbx_map_insert(m, key, 0);
+            p += 4;
+        } else {
+            char* end;
+            long v = strtol(p, &end, 10);
+            if (end == p) break; /* malformed */
+            __sbx_map_insert(m, key, v);
+            p = end;
+        }
+    }
+    return m;
+}
+
+/* Serialize map<string,long> to JSON: {"k": v, ...} in insertion order. */
+static const char* __sbx_json_stringify_map(sbx_map* m) {
+    long total = 4;
+    for (long k = 0; k < m->ord_len; k++) total += (long)strlen(m->ord_keys[k]) + 32;
+    char* out = (char*)sbx_rc_alloc((size_t)total);
+    size_t off = 0;
+    out[off++] = '{';
+    for (long k = 0; k < m->ord_len; k++) {
+        if (k > 0) out[off++] = ',';
+        out[off++] = '"';
+        size_t kl = strlen(m->ord_keys[k]);
+        memcpy(out + off, m->ord_keys[k], kl);
+        off += kl;
+        out[off++] = '"';
+        out[off++] = ':';
+        off += (size_t)snprintf(out + off, (size_t)(total - (long)off), "%ld", m->ord_vals[k]);
+    }
+    out[off++] = '}';
+    out[off] = '\0';
+    return out;
+}
+
+/* String field of a JSON object, read from the raw text. "" if missing. */
+static const char* __sbx_json_get_str(const char* s, const char* key) {
+    return __sbx_json_get(s, key);
+}
+
+/* Numeric field of a JSON object, read from the raw text. 0 if missing. */
+static long __sbx_json_get_int(const char* s, const char* key) {
+    char needle[256];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char* p = strstr(s, needle);
+    if (!p) return 0;
+    p += strlen(needle);
+    while (*p && (*p == ' ' || *p == ':' || *p == '\t')) p++;
+    int neg = 0;
+    if (*p == '-') { neg = 1; p++; }
+    if (*p < '0' || *p > '9') return 0;
+    long v = strtol(p, NULL, 10);
+    return neg ? -v : v;
+}
+
+/* Serialize a long array as [1,2,3]. Two forms so inline array literals
+   work on every backend: variadic __sbx_json_stringify_array(len, e0, e1, ...)
+   for literal arguments, and __sbx_json_stringify_array_p(long* arr, long len)
+   when the elements live in a real array. */
+static const char* __sbx_json_stringify_array(long len, ...) {
+    if (len < 0) len = 0;
+    char* out = (char*)sbx_rc_alloc((size_t)(len * 24 + 4));
+    size_t off = 0;
+    va_list ap;
+    va_start(ap, len);
+    out[off++] = '[';
+    for (long i = 0; i < len; i++) {
+        if (i > 0) out[off++] = ',';
+        off += (size_t)snprintf(out + off, (size_t)(len * 24 + 4 - (long)off), "%ld",
+                                va_arg(ap, long));
+    }
+    va_end(ap);
+    out[off++] = ']';
+    out[off] = '\0';
+    return out;
+}
+
+static const char* __sbx_json_stringify_array_p(long* arr, long len) {
+    if (len < 0) len = 0;
+    char* out = (char*)sbx_rc_alloc((size_t)(len * 24 + 4));
+    size_t off = 0;
+    out[off++] = '[';
+    for (long i = 0; i < len; i++) {
+        if (i > 0) out[off++] = ',';
+        off += (size_t)snprintf(out + off, (size_t)(len * 24 + 4 - (long)off), "%ld", arr[i]);
+    }
+    out[off++] = ']';
+    out[off] = '\0';
+    return out;
+}
+
+/* Element `idx` of the top-level JSON array in `s`. 0 if out of range. */
+static long __sbx_json_array_get_int(const char* s, long idx) {
+    const char* p = s;
+    while (*p && *p != '[') p++;
+    if (*p != '[') return 0;
+    p++;
+    long i = 0;
+    while (*p) {
+        __sbx_json_skip_ws(&p);
+        if (*p == ']' || *p == '\0') return 0;
+        if (*p == ',') { p++; continue; }
+        const char* start = p;
+        if (*p == '"') {
+            p++;
+            while (*p && *p != '"') { if (*p == '\\' && *(p+1)) p++; p++; }
+            if (*p) p++;
+        } else if (*p == '[' || *p == '{') {
+            __sbx_json_skip_value(&p);
+        } else {
+            while (*p && *p != ',' && *p != ']') p++;
+        }
+        if (i == idx) {
+            char buf[32];
+            size_t n = (size_t)(p - start);
+            if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+            memcpy(buf, start, n);
+            buf[n] = '\0';
+            return strtol(buf, NULL, 10);
+        }
+        i++;
+        __sbx_json_skip_ws(&p);
+        if (*p == ',') p++;
+    }
+    return 0;
 }
 
 /* ── v2.0: Channels ── */
@@ -1760,7 +2384,246 @@ static const char* __sbx_http_headers(const char* s, const char* name) {
     return "";
 }
 
+/* ── v2.1: request context (implicit accessors) ──
+   The active server fills this per request; handler code reads it through
+   http::method / http::query / http::body / http::req_header and mutates
+   the response through http::set_status / http::set_header. */
+#define SBX_HTTP_MAX_HEADERS 32
+typedef struct {
+    char method[16];
+    char target[2048];            /* raw request target incl. query */
+    char query[1024];             /* after '?' (no leading '?'), "" if none */
+    char body[8192 - 3072];
+    char header_names[SBX_HTTP_MAX_HEADERS][128];
+    char header_values[SBX_HTTP_MAX_HEADERS][1024];
+    int header_count;
+    int status;                   /* response status (default 200) */
+    char content_type[128];       /* response content type (default json) */
+    char extra_headers[4096];     /* user-set response headers, CRLF-joined */
+} sbx_http_req;
+static sbx_http_req __sbx_http_ctx;
+
+static const char* __sbx_http_method(void) {
+    char* out = (char*)sbx_rc_alloc(16);
+    snprintf(out, 16, "%s", __sbx_http_ctx.method);
+    return out;
+}
+
+static const char* __sbx_http_query(void) {
+    char* out = (char*)sbx_rc_alloc(sizeof(__sbx_http_ctx.query));
+    snprintf(out, sizeof(__sbx_http_ctx.query), "%s", __sbx_http_ctx.query);
+    return out;
+}
+
+static const char* __sbx_http_body(void) {
+    char* out = (char*)sbx_rc_alloc(sizeof(__sbx_http_ctx.body));
+    snprintf(out, sizeof(__sbx_http_ctx.body), "%s", __sbx_http_ctx.body);
+    return out;
+}
+
+static const char* __sbx_http_req_header(const char* name) {
+    for (int i = 0; i < __sbx_http_ctx.header_count; i++) {
+        const char* h = __sbx_http_ctx.header_names[i];
+        const char* n = name;
+        while (*h && *n && (*h == *n || (*h >= 'A' && *h <= 'Z' && *h + 32 == *n) || (*n >= 'A' && *n <= 'Z' && *n + 32 == *h))) { h++; n++; }
+        if (*h == '\0' && *n == '\0') {
+            char* out = (char*)sbx_rc_alloc(sizeof(__sbx_http_ctx.header_values[i]));
+            snprintf(out, sizeof(__sbx_http_ctx.header_values[i]), "%s", __sbx_http_ctx.header_values[i]);
+            return out;
+        }
+    }
+    return "";
+}
+
+static void __sbx_http_set_status(long code) {
+    __sbx_http_ctx.status = (int)code;
+}
+
+static void __sbx_http_set_header(const char* name, const char* value) {
+    if (!name || !*name) return;
+    /* special-case content-type: replaces the default instead of appending */
+    const char* n = name;
+    const char* c = "content-type";
+    while (*n && *c && (*n == *c || (*n >= 'A' && *n <= 'Z' && *n + 32 == *c))) { n++; c++; }
+    if (*n == '\0' && *c == '\0') {
+        snprintf(__sbx_http_ctx.content_type, sizeof(__sbx_http_ctx.content_type), "%s", value);
+        return;
+    }
+    size_t len = strlen(__sbx_http_ctx.extra_headers);
+    snprintf(__sbx_http_ctx.extra_headers + len, sizeof(__sbx_http_ctx.extra_headers) - len,
+        "%s%s: %s\r\n", len ? "" : "", name, value);
+}
+
+static long __sbx_http_status_code(void) {
+    return __sbx_http_ctx.status;
+}
+
+/* ── v2.1: url decode / query & form params (pure, parity-tested) ── */
+static int __sbx_hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static const char* __sbx_url_decode(const char* s) {
+    if (!s) return "";
+    size_t len = strlen(s);
+    char* out = (char*)sbx_rc_alloc(len + 1);
+    size_t o = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '%' && i + 2 < len && __sbx_hex_val(s[i+1]) >= 0 && __sbx_hex_val(s[i+2]) >= 0) {
+            out[o++] = (char)(__sbx_hex_val(s[i+1]) * 16 + __sbx_hex_val(s[i+2]));
+            i += 2;
+        } else if (s[i] == '+') {
+            out[o++] = ' ';
+        } else {
+            out[o++] = s[i];
+        }
+    }
+    out[o] = '\0';
+    return out;
+}
+
+/* Extract one "name=value" pair's decoded value from a query/form string.
+   Mirrored in the interpreter (http_query_param/http_form_get helpers). */
+static const char* __sbx_url_pair_get(const char* pairs, const char* name) {
+    if (!pairs || !name) return "";
+    size_t nlen = strlen(name);
+    const char* p = pairs;
+    while (*p) {
+        const char* amp = strchr(p, '&');
+        size_t seglen = amp ? (size_t)(amp - p) : strlen(p);
+        const char* eq = memchr(p, '=', seglen);
+        size_t keylen = eq ? (size_t)(eq - p) : seglen;
+        if (keylen == nlen && strncmp(p, name, nlen) == 0) {
+            if (!eq) return "";
+            char tmp[2048];
+            size_t vlen = seglen - keylen - 1;
+            if (eq + 1 + vlen > p + seglen) vlen = 0;
+            if (vlen >= sizeof(tmp)) vlen = sizeof(tmp) - 1;
+            memcpy(tmp, eq + 1, vlen);
+            tmp[vlen] = '\0';
+            return __sbx_url_decode(tmp);
+        }
+        if (!amp) break;
+        p = amp + 1;
+    }
+    return "";
+}
+
+static const char* __sbx_http_query_param(const char* query, const char* name) {
+    return __sbx_url_pair_get(query, name);
+}
+
+static const char* __sbx_http_form_get(const char* body, const char* name) {
+    return __sbx_url_pair_get(body, name);
+}
+
+static const char* __sbx_http_form_param(const char* name) {
+    return __sbx_url_pair_get(__sbx_http_ctx.body, name);
+}
+
+/* Fill the request context from a raw request. Returns the path (no query). */
+static void __sbx_http_parse_request(const char* req, char* path, size_t pathcap) {
+    memset(&__sbx_http_ctx, 0, sizeof(__sbx_http_ctx));
+    __sbx_http_ctx.status = 200;
+    snprintf(__sbx_http_ctx.content_type, sizeof(__sbx_http_ctx.content_type), "application/json");
+    snprintf(path, pathcap, "/");
+    if (!req || !*req) return;
+
+    /* request line: METHOD SP TARGET SP HTTP/x */
+    const char* sp1 = strchr(req, ' ');
+    if (!sp1) return;
+    size_t mlen = (size_t)(sp1 - req);
+    if (mlen >= sizeof(__sbx_http_ctx.method)) mlen = sizeof(__sbx_http_ctx.method) - 1;
+    memcpy(__sbx_http_ctx.method, req, mlen);
+    __sbx_http_ctx.method[mlen] = '\0';
+
+    const char* sp2 = strchr(sp1 + 1, ' ');
+    size_t tlen = sp2 ? (size_t)(sp2 - sp1 - 1) : strlen(sp1 + 1);
+    if (tlen >= sizeof(__sbx_http_ctx.target)) tlen = sizeof(__sbx_http_ctx.target) - 1;
+    memcpy(__sbx_http_ctx.target, sp1 + 1, tlen);
+    __sbx_http_ctx.target[tlen] = '\0';
+
+    /* split target into path + query */
+    const char* qm = strchr(__sbx_http_ctx.target, '?');
+    if (qm) {
+        snprintf(__sbx_http_ctx.query, sizeof(__sbx_http_ctx.query), "%s", qm + 1);
+        size_t plen = (size_t)(qm - __sbx_http_ctx.target);
+        if (plen >= pathcap) plen = pathcap - 1;
+        memcpy(path, __sbx_http_ctx.target, plen);
+        path[plen] = '\0';
+    } else {
+        snprintf(path, pathcap, "%s", __sbx_http_ctx.target);
+    }
+
+    /* headers until blank line, then body */
+    const char* line = strstr(req, "\r\n");
+    const char* end = strstr(req, "\r\n\r\n");
+    const char* bodyp = end ? end + 4 : (line ? line + 2 : req + strlen(req));
+    snprintf(__sbx_http_ctx.body, sizeof(__sbx_http_ctx.body), "%s", bodyp);
+    if (!end) end = req + strlen(req);
+    const char* p = line ? line + 2 : req;
+    while (p < end && __sbx_http_ctx.header_count < SBX_HTTP_MAX_HEADERS) {
+        const char* eol = strstr(p, "\r\n");
+        if (!eol || eol > end) eol = end;
+        const char* colon = memchr(p, ':', (size_t)(eol - p));
+        if (colon) {
+            size_t nlen = (size_t)(colon - p);
+            if (nlen >= sizeof(__sbx_http_ctx.header_names[0])) nlen = sizeof(__sbx_http_ctx.header_names[0]) - 1;
+            memcpy(__sbx_http_ctx.header_names[__sbx_http_ctx.header_count], p, nlen);
+            __sbx_http_ctx.header_names[__sbx_http_ctx.header_count][nlen] = '\0';
+            const char* vp = colon + 1;
+            while (vp < eol && (*vp == ' ' || *vp == '\t')) vp++;
+            size_t vlen = (size_t)(eol - vp);
+            if (vlen >= sizeof(__sbx_http_ctx.header_values[0])) vlen = sizeof(__sbx_http_ctx.header_values[0]) - 1;
+            memcpy(__sbx_http_ctx.header_values[__sbx_http_ctx.header_count], vp, vlen);
+            __sbx_http_ctx.header_values[__sbx_http_ctx.header_count][vlen] = '\0';
+            __sbx_http_ctx.header_count++;
+        }
+        if (eol >= end) break;
+        p = eol + 2;
+    }
+}
+
+/* Reason phrase for the common status codes (others get a generic one). */
+static const char* __sbx_http_reason(int code) {
+    switch (code) {
+        case 200: return "OK";
+        case 201: return "Created";
+        case 204: return "No Content";
+        case 301: return "Moved Permanently";
+        case 302: return "Found";
+        case 304: return "Not Modified";
+        case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 405: return "Method Not Allowed";
+        case 418: return "I'm a teapot";
+        case 500: return "Internal Server Error";
+        case 502: return "Bad Gateway";
+        case 503: return "Service Unavailable";
+        default: return "Status";
+    }
+}
+
+/* Send one response using the current context. */
+static void __sbx_http_respond_raw(int cfd, const char* body) {
+    size_t blen = body ? strlen(body) : 2;
+    char head[1024];
+    int hn = snprintf(head, sizeof(head),
+        "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n%s\r\n",
+        __sbx_http_ctx.status, __sbx_http_reason(__sbx_http_ctx.status),
+        __sbx_http_ctx.content_type, blen, __sbx_http_ctx.extra_headers);
+    send(cfd, head, (size_t)hn, 0);
+    if (body && blen) send(cfd, body, blen, 0);
+}
+
 static void __sbx_serve_once(long port, const char* (*handler)(const char*)) {
+    /* A client that disconnects mid-response must not kill the server. */
+    signal(SIGPIPE, SIG_IGN);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { fprintf(stderr, "serve: socket failed\n"); return; }
     int opt = 1;
@@ -1786,32 +2649,286 @@ static void __sbx_serve_once(long port, const char* (*handler)(const char*)) {
     ssize_t n = recv(cfd, req, sizeof(req) - 1, 0);
     req[n > 0 ? n : 0] = '\0';
 
-    /* parse request line: METHOD /path HTTP/1.1 */
-    char path[1024] = "/";
-    if (n > 0) {
-        char* sp1 = strchr(req, ' ');
-        if (sp1) {
-            char* sp2 = strchr(sp1 + 1, ' ');
-            size_t plen = sp2 ? (size_t)(sp2 - sp1 - 1) : strlen(sp1 + 1);
-            if (plen < sizeof(path)) {
-                memcpy(path, sp1 + 1, plen);
-                path[plen] = '\0';
-            }
-        }
-    }
+    char path[1024];
+    __sbx_http_parse_request(req, path, sizeof(path));
 
     const char* body = handler ? handler(path) : "{}";
-    size_t blen = strlen(body);
-    char resp[8192 + 256];
-    int rn = snprintf(resp, sizeof(resp),
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
-        blen, body);
-    send(cfd, resp, (size_t)rn, 0);
+    __sbx_http_respond_raw(cfd, body);
     close(cfd);
     close(fd);
 }
 
+/* ── v2.1: static files (served before the handler; traversal-protected) ── */
+/* Directory for http::serve_static ("" = disabled). Declared before the
+   serve functions that read it. */
+static char __sbx_static_dir[2048] = "";
+
+static void __sbx_http_serve_static(const char* dir) {
+    snprintf(__sbx_static_dir, sizeof(__sbx_static_dir), "%s", dir ? dir : "");
+}
+
+static const char* __sbx_http_mime(const char* path) {
+    const char* dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    if (!strcmp(dot, ".html") || !strcmp(dot, ".htm")) return "text/html";
+    if (!strcmp(dot, ".css")) return "text/css";
+    if (!strcmp(dot, ".js")) return "application/javascript";
+    if (!strcmp(dot, ".json")) return "application/json";
+    if (!strcmp(dot, ".png")) return "image/png";
+    if (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg")) return "image/jpeg";
+    if (!strcmp(dot, ".gif")) return "image/gif";
+    if (!strcmp(dot, ".svg")) return "image/svg+xml";
+    if (!strcmp(dot, ".txt")) return "text/plain";
+    if (!strcmp(dot, ".ico")) return "image/x-icon";
+    return "application/octet-stream";
+}
+
+/* Serve dir/path if it resolves to a regular file under dir.
+   Returns 1 if the response was sent, 0 if the caller should fall through. */
+static int __sbx_http_try_static(int cfd, const char* dir, const char* path) {
+    /* traversal protection: any ".." in the URL path is rejected outright,
+       even with no static dir configured (defense in depth) */
+    if (strstr(path, "..")) {
+        const char* msg = "Forbidden";
+        char head[256];
+        int hn = snprintf(head, sizeof(head),
+            "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+            strlen(msg), msg);
+        send(cfd, head, (size_t)hn, 0);
+        return 1;
+    }
+    if (!dir || !*dir) return 0;
+    while (*path == '/') path++;
+    char full[4096];
+    if (snprintf(full, sizeof(full), "%s%s%s", dir, (*dir && dir[strlen(dir)-1] == '/') ? "" : "/", path) >= (int)sizeof(full)) return 0;
+    struct stat st;
+    if (stat(full, &st) != 0 || !S_ISREG(st.st_mode)) return 0;
+    FILE* fp = fopen(full, "rb");
+    if (!fp) return 0;
+    char head[512];
+    int hn = snprintf(head, sizeof(head),
+        "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
+        __sbx_http_mime(full), (long)st.st_size);
+    send(cfd, head, (size_t)hn, 0);
+    char chunk[8192];
+    size_t r;
+    while ((r = fread(chunk, 1, sizeof(chunk), fp)) > 0) {
+        if (send(cfd, chunk, r, 0) < 0) break;
+    }
+    fclose(fp);
+    return 1;
+}
+
+/* ── A4: cookies ──
+   set_cookie appends a Set-Cookie response header; get_cookie extracts a
+   value from the request's Cookie header ("a=1; b=2", RFC 6265 style). */
+static void __sbx_http_set_cookie(const char* name, const char* value) {
+    if (!name || !*name || !value) return;
+    /* reject CR/LF so a cookie can't inject headers */
+    for (const char* p = name; *p; p++)
+        if (*p == '\r' || *p == '\n' || *p == ';') return;
+    for (const char* p = value; *p; p++)
+        if (*p == '\r' || *p == '\n') return;
+    char* ctx = __sbx_http_ctx.extra_headers;
+    size_t used = strlen(ctx);
+    char one[512];
+    int n = snprintf(one, sizeof(one), "Set-Cookie: %s=%s; Path=/\r\n", name, value);
+    if (n > 0 && used + (size_t)n < sizeof(__sbx_http_ctx.extra_headers)) {
+        memcpy(ctx + used, one, (size_t)n);
+        ctx[used + (size_t)n] = '\0';
+    }
+}
+
+/* Extract `name`'s value from a Cookie request header (or "" if absent).
+   Cookie pairs are '; '-separated; the first '=' splits name and value. */
+static const char* __sbx_http_cookie_get(const char* cookie_header, const char* name) {
+    char* out = (char*)sbx_rc_alloc(1024);
+    out[0] = '\0';
+    if (!cookie_header || !name) return out;
+    size_t nlen = strlen(name);
+    const char* p = cookie_header;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        const char* semi = strchr(p, ';');
+        size_t seg = semi ? (size_t)(semi - p) : strlen(p);
+        if (seg > nlen && strncmp(p, name, nlen) == 0 && p[nlen] == '=') {
+            size_t vlen = seg - nlen - 1;
+            if (vlen >= 1024) vlen = 1023;
+            memcpy(out, p + nlen + 1, vlen);
+            out[vlen] = '\0';
+            return out;
+        }
+        if (!semi) break;
+        p = semi + 1;
+    }
+    return out;
+}
+
+static const char* __sbx_http_get_cookie(const char* name) {
+    const char* hdr = __sbx_http_req_header("Cookie");
+    return __sbx_http_cookie_get(hdr, name);
+}
+
+/* ── A4: html escape/unescape ──
+   escape: & < > " ' → entities (must do & first). unescape: numeric
+   (&#NN; / &#xHH;) plus the five named entities above. */
+static const char* __sbx_html_escape(const char* s) {
+    if (!s) s = "";
+    size_t cap = strlen(s) * 6 + 16;
+    char* out = (char*)sbx_rc_alloc(cap);
+    size_t o = 0;
+    for (const char* p = s; *p; p++) {
+        const char* rep = NULL;
+        switch (*p) {
+            case '&': rep = "&amp;"; break;
+            case '<': rep = "&lt;"; break;
+            case '>': rep = "&gt;"; break;
+            case '"': rep = "&quot;"; break;
+            case '\'': rep = "&#39;"; break;
+            default: break;
+        }
+        if (rep) {
+            size_t rl = strlen(rep);
+            if (o + rl < cap) { memcpy(out + o, rep, rl); o += rl; }
+        } else if (o + 1 < cap) {
+            out[o++] = *p;
+        }
+    }
+    out[o] = '\0';
+    return out;
+}
+
+static unsigned long __sbx_html_entity_val(const char* p, size_t len, size_t* consumed) {
+    /* p points at '&' ... len bytes available; returns value, sets consumed
+       to bytes eaten (0 = not an entity) */
+    if (len < 3 || p[0] != '&' || p[len - 1] != ';') { *consumed = 0; return 0; }
+    const char* body = p + 1;
+    size_t blen = len - 2;
+    if (body[0] == '#') {
+        int hex = (blen > 2 && (body[1] == 'x' || body[1] == 'X'));
+        const char* digits = body + (hex ? 2 : 1);
+        size_t dlen = blen - (hex ? 2 : 1);
+        if (dlen == 0 || dlen > 6) { *consumed = 0; return 0; }
+        unsigned long v = 0;
+        for (size_t i = 0; i < dlen; i++) {
+            char c = digits[i];
+            int d = (c >= '0' && c <= '9') ? c - '0'
+                  : (hex && c >= 'a' && c <= 'f') ? c - 'a' + 10
+                  : (hex && c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+            if (d < 0) { *consumed = 0; return 0; }
+            v = v * (hex ? 16UL : 10UL) + (unsigned long)d;
+        }
+        *consumed = blen + 2;
+        return v;
+    }
+    if (blen == 3 && !strncmp(body, "amp", 3)) { *consumed = blen + 2; return '&'; }
+    if (blen == 2 && !strncmp(body, "lt", 2)) { *consumed = blen + 2; return '<'; }
+    if (blen == 2 && !strncmp(body, "gt", 2)) { *consumed = blen + 2; return '>'; }
+    if (blen == 4 && !strncmp(body, "quot", 4)) { *consumed = blen + 2; return '"'; }
+    if (blen == 4 && !strncmp(body, "apos", 4)) { *consumed = blen + 2; return '\''; }
+    *consumed = 0;
+    return 0;
+}
+
+static const char* __sbx_html_unescape(const char* s) {
+    if (!s) s = "";
+    char* out = (char*)sbx_rc_alloc(strlen(s) + 16);
+    size_t o = 0;
+    size_t n = strlen(s);
+    for (size_t i = 0; i < n;) {
+        if (s[i] == '&') {
+            const char* semi = memchr(s + i, ';', n - i);
+            if (semi && (size_t)(semi - (s + i)) <= 10) {
+                size_t elen = (size_t)(semi - (s + i)) + 1;
+                size_t consumed = 0;
+                unsigned long v = __sbx_html_entity_val(s + i, elen, &consumed);
+                if (consumed && v <= 0x10FFFF) {
+                    /* encode as UTF-8 */
+                    if (v < 0x80) {
+                        out[o++] = (char)v;
+                    } else if (v < 0x800) {
+                        out[o++] = (char)(0xC0 | (v >> 6));
+                        out[o++] = (char)(0x80 | (v & 0x3F));
+                    } else if (v < 0x10000) {
+                        out[o++] = (char)(0xE0 | (v >> 12));
+                        out[o++] = (char)(0x80 | ((v >> 6) & 0x3F));
+                        out[o++] = (char)(0x80 | (v & 0x3F));
+                    } else {
+                        out[o++] = (char)(0xF0 | (v >> 18));
+                        out[o++] = (char)(0x80 | ((v >> 12) & 0x3F));
+                        out[o++] = (char)(0x80 | ((v >> 6) & 0x3F));
+                        out[o++] = (char)(0x80 | (v & 0x3F));
+                    }
+                    i += consumed;
+                    continue;
+                }
+            }
+        }
+        out[o++] = s[i++];
+    }
+    out[o] = '\0';
+    return out;
+}
+
+/* ── A4: %{key} template rendering ──
+   __sbx_tmpl_render(count, s1, s2, ...): s1 is the template, the rest are
+   key/value pairs. Replaces %{key} occurrences; unknown keys stay as-is. */
+static const char* __sbx_tmpl_render(long count, ...) {
+    va_list args;
+    va_start(args, count);
+    const char* tmpl = count > 0 ? va_arg(args, const char*) : "";
+    long npairs = (count - 1) / 2;
+    /* measure output */
+    size_t total = strlen(tmpl) + 16;
+    {
+        const char* p = tmpl;
+        while ((p = strstr(p, "%{")) != NULL) {
+            const char* end = strchr(p + 2, '}');
+            if (!end) break;
+            size_t klen = (size_t)(end - p - 2);
+            total += 512; /* worst-case replacement slack */
+            p = end + 1;
+            (void)klen;
+        }
+    }
+    char* out = (char*)sbx_rc_alloc(total + 1);
+    size_t o = 0;
+    const char* p = tmpl;
+    while (*p) {
+        if (p[0] == '%' && p[1] == '{') {
+            const char* end = strchr(p + 2, '}');
+            if (end) {
+                size_t klen = (size_t)(end - p - 2);
+                va_start(args, count);
+                va_arg(args, const char*); /* skip template */
+                const char* val = NULL;
+                for (long i = 0; i < npairs; i++) {
+                    const char* k = va_arg(args, const char*);
+                    const char* v = va_arg(args, const char*);
+                    if (k && strlen(k) == klen && strncmp(k, p + 2, klen) == 0) {
+                        val = v ? v : "";
+                        break;
+                    }
+                }
+                va_end(args);
+                if (val) {
+                    size_t vl = strlen(val);
+                    memcpy(out + o, val, vl);
+                    o += vl;
+                    p = end + 1;
+                    continue;
+                }
+            }
+        }
+        out[o++] = *p++;
+    }
+    out[o] = '\0';
+    return out;
+}
+
 static void __sbx_serve(long port, const char* (*handler)(const char*)) {
+    /* A client that disconnects mid-response must not kill the server. */
+    signal(SIGPIPE, SIG_IGN);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { fprintf(stderr, "serve: socket failed\n"); return; }
     int opt = 1;
@@ -1839,27 +2956,14 @@ static void __sbx_serve(long port, const char* (*handler)(const char*)) {
         ssize_t n = recv(cfd, req, sizeof(req) - 1, 0);
         req[n > 0 ? n : 0] = '\0';
 
-        /* parse request line: METHOD /path HTTP/1.1 */
-        char path[1024] = "/";
-        if (n > 0) {
-            char* sp1 = strchr(req, ' ');
-            if (sp1) {
-                char* sp2 = strchr(sp1 + 1, ' ');
-                size_t plen = sp2 ? (size_t)(sp2 - sp1 - 1) : strlen(sp1 + 1);
-                if (plen < sizeof(path)) {
-                    memcpy(path, sp1 + 1, plen);
-                    path[plen] = '\0';
-                }
-            }
-        }
+        char path[1024];
+        __sbx_http_parse_request(req, path, sizeof(path));
 
-        const char* body = handler ? handler(path) : "{}";
-        size_t blen = strlen(body);
-        char resp[8192 + 256];
-        int rn = snprintf(resp, sizeof(resp),
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
-            blen, body);
-        send(cfd, resp, (size_t)rn, 0);
+        int st = __sbx_http_try_static(cfd, __sbx_static_dir, path);
+        if (st == 0) {
+            const char* body = handler ? handler(path) : "{}";
+            __sbx_http_respond_raw(cfd, body);
+        }
         close(cfd);
     }
     close(fd);
@@ -2189,106 +3293,6 @@ static long __sbx_list_is_empty(long ptr) {
     sbx_list* l = (sbx_list*)ptr;
     if (!l) return 1;
     return l->len == 0 ? 1 : 0;
-}
-
-/* ── Map ── */
-typedef struct {
-    const char** keys;
-    long*        vals;
-    long         len;
-    long         cap;
-} sbx_map;
-
-static long __sbx_map_new(void) {
-    sbx_map* m = (sbx_map*)sbx_rc_alloc(sizeof(sbx_map));
-    m->keys = NULL;
-    m->vals = NULL;
-    m->len  = 0;
-    m->cap  = 0;
-    return (long)m;
-}
-
-static long __sbx_map_len(long ptr) {
-    sbx_map* m = (sbx_map*)ptr;
-    if (!m) return 0;
-    return m->len;
-}
-
-static void __sbx_map_insert(long ptr, const char* key, long val) {
-    sbx_map* m = (sbx_map*)ptr;
-    if (!m) return;
-    /* update existing key */
-    for (long i = 0; i < m->len; i++) {
-        if (strcmp(m->keys[i], key) == 0) {
-            m->vals[i] = val;
-            return;
-        }
-    }
-    /* new key */
-    if (m->len >= m->cap) {
-        m->cap = m->cap == 0 ? 8 : m->cap * 2;
-        m->keys = (const char**)realloc(m->keys, (size_t)m->cap * sizeof(const char*));
-        m->vals = (long*)realloc(m->vals, (size_t)m->cap * sizeof(long));
-    }
-    /* copy the key string */
-    size_t klen = strlen(key);
-    char* kcopy = (char*)sbx_rc_alloc(klen + 1);
-    memcpy(kcopy, key, klen + 1);
-    m->keys[m->len] = kcopy;
-    m->vals[m->len] = val;
-    m->len++;
-}
-
-static long __sbx_map_get(long ptr, const char* key) {
-    sbx_map* m = (sbx_map*)ptr;
-    if (!m) return 0;
-    for (long i = 0; i < m->len; i++) {
-        if (strcmp(m->keys[i], key) == 0) return m->vals[i];
-    }
-    return 0;
-}
-
-static long __sbx_map_contains(long ptr, const char* key) {
-    sbx_map* m = (sbx_map*)ptr;
-    if (!m) return 0;
-    for (long i = 0; i < m->len; i++) {
-        if (strcmp(m->keys[i], key) == 0) return 1;
-    }
-    return 0;
-}
-
-static void __sbx_map_remove(long ptr, const char* key) {
-    sbx_map* m = (sbx_map*)ptr;
-    if (!m) return;
-    for (long i = 0; i < m->len; i++) {
-        if (strcmp(m->keys[i], key) == 0) {
-            for (long j = i; j < m->len - 1; j++) {
-                m->keys[j] = m->keys[j + 1];
-                m->vals[j] = m->vals[j + 1];
-            }
-            m->len--;
-            return;
-        }
-    }
-}
-
-/* Returns keys as a comma-separated string */
-static const char* __sbx_map_keys(long ptr) {
-    sbx_map* m = (sbx_map*)ptr;
-    if (!m) return "";
-    if (m->len == 0) return "";
-    /* Estimate size */
-    size_t total = 0;
-    for (long i = 0; i < m->len; i++) {
-        total += strlen(m->keys[i]) + 1; /* +1 for comma */
-    }
-    char* out = (char*)sbx_rc_alloc(total + 1);
-    out[0] = '\0';
-    for (long i = 0; i < m->len; i++) {
-        if (i > 0) strcat(out, ",");
-        strcat(out, m->keys[i]);
-    }
-    return out;
 }
 
 /* ── Set ── */

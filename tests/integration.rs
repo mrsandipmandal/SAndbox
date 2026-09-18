@@ -1264,6 +1264,92 @@ fn main() {
     let _ = child.wait();
 }
 
+#[test]
+fn test_http_a3_features_end_to_end() {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    let bin = sandbox_bin();
+    let mut child = Command::new(&bin)
+        .args(["run", "examples/http_server_demo.sbx"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Request helper with optional method + body ("Connection: close").
+    let request = |method: &str, path: &str, body: &str| -> Option<String> {
+        if let Ok(mut s) = std::net::TcpStream::connect_timeout(
+            &"127.0.0.1:8080".parse().unwrap(),
+            Duration::from_millis(500),
+        ) {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+            let req = format!(
+                "{} {} HTTP/1.1\r\nHost: localhost\r\nUser-Agent: integ-test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                method,
+                path,
+                body.len(),
+                body
+            );
+            if s.write_all(req.as_bytes()).is_ok() {
+                let mut buf = Vec::new();
+                if s.read_to_end(&mut buf).is_ok() {
+                    return Some(String::from_utf8_lossy(&buf).to_string());
+                }
+            }
+        }
+        None
+    };
+
+    // Wait for the server to come up ("200" on /hello).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            break; // server died
+        }
+        if let Some(r) = request("GET", "/hello", "") {
+            if r.contains("200") {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    // 1. Query params: /who?who=N picks the value out of the raw query.
+    let r = request("GET", "/who?who=query+works", "").expect("no /who response");
+    assert!(r.contains("200"), "/who status: {}", r);
+    assert!(r.contains("query works"), "/who body: {}", r);
+
+    // 2. Request headers: the handler echoes User-Agent.
+    let r = request("GET", "/agent", "").expect("no /agent response");
+    assert!(r.contains("integ-test"), "/agent body: {}", r);
+
+    // 3. Response status: /teapot sets 418 with a custom body.
+    let r = request("GET", "/teapot", "").expect("no /teapot response");
+    assert!(r.starts_with("HTTP/1.1 418"), "/teapot status: {}", r);
+    assert!(r.contains("short and stout"), "/teapot body: {}", r);
+
+    // 4. Form parsing: POST url-encoded body.
+    let r = request("POST", "/submit", "name=form+guy&x=1").expect("no /submit response");
+    assert!(r.contains("form guy"), "/submit body: {}", r);
+
+    // 5. Custom response header from the handler.
+    let r = request("GET", "/hello", "").expect("no /hello response");
+    assert!(
+        r.to_ascii_lowercase().contains("x-engine: sandbox"),
+        "missing X-Engine header: {}",
+        r
+    );
+
+    // 6. Path traversal: any ".." in the path is rejected with 403 before
+    // the handler even sees the request (static-file guard).
+    let r = request("GET", "/../etc/passwd", "").expect("no traversal response");
+    assert!(r.starts_with("HTTP/1.1 403"), "traversal status: {}", r);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn http_get(addr: &str, path: &str) -> String {
     use std::io::{Read, Write};
     use std::time::Duration;
@@ -1277,6 +1363,108 @@ fn http_get(addr: &str, path: &str) -> String {
     let mut buf = Vec::new();
     s.read_to_end(&mut buf).unwrap();
     String::from_utf8_lossy(&buf).to_string()
+}
+
+/// http_get with a retry: the server's listen backlog can reset the very
+/// first connection while it is still warming up.
+fn http_get_retry(addr: &str, path: &str) -> String {
+    for _ in 0..3 {
+        match std::panic::catch_unwind(|| http_get(addr, path)) {
+            Ok(r) if r.starts_with("HTTP/1.") => return r,
+            _ => std::thread::sleep(std::time::Duration::from_millis(300)),
+        }
+    }
+    http_get(addr, path)
+}
+
+fn http_get_with_cookie(addr: &str, path: &str, cookie: &str) -> String {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: localhost\r\nCookie: {}\r\nConnection: close\r\n\r\n",
+        path, cookie
+    );
+    s.write_all(req.as_bytes()).unwrap();
+    let mut buf = Vec::new();
+    s.read_to_end(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+#[test]
+fn test_web_app_a4_end_to_end() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let bin = sandbox_bin();
+    let log = std::fs::File::create("/tmp/sbx_web_app_test.log").unwrap();
+    let err_log = log.try_clone().unwrap();
+    let mut child = Command::new(&bin)
+        .args(["run", "examples/web_app.sbx"])
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(err_log))
+        .spawn()
+        .unwrap();
+
+    let addr = "127.0.0.1:8090";
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect_timeout(
+            &"127.0.0.1:8090".parse().unwrap(),
+            Duration::from_millis(200),
+        )
+        .is_ok()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+
+    // 1. Home page: template rendered, values substituted, HTML escaped,
+    //    content-type text/html, Set-Cookie emitted.
+    let r = http_get_retry(addr, "/");
+    assert!(r.starts_with("HTTP/1.1 200"), "home status: {}", r);
+    assert!(
+        r.to_ascii_lowercase().contains("content-type: text/html"),
+        "home content-type: {}",
+        r
+    );
+    assert!(r.contains("<h1>Sandbox Web</h1>"), "template title: {}", r);
+    assert!(
+        r.contains("5 &lt; 6 &amp; &quot;cookies&quot; work"),
+        "escaped msg: {}",
+        r
+    );
+    assert!(
+        r.to_ascii_lowercase()
+            .contains("set-cookie: visitor=welcome"),
+        "set-cookie header: {}",
+        r
+    );
+
+    // 2. Cookie round-trip: send the cookie back, the app reads it.
+    let r = http_get_with_cookie(addr, "/again", "visitor=bob");
+    assert!(r.contains("back: bob"), "cookie round-trip: {}", r);
+
+    // 3. No cookie: get_cookie returns an empty value, template still works.
+    let r = http_get_retry(addr, "/again");
+    assert!(r.contains("back: "), "cookieless visit: {}", r);
+
+    // 4. Unknown path: 404 with a templated body that includes the path.
+    let r = http_get_retry(addr, "/nope");
+    assert!(r.starts_with("HTTP/1.1 404"), "404 status: {}", r);
+    assert!(r.contains("not found: /nope"), "404 body: {}", r);
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let server_log = std::fs::read_to_string("/tmp/sbx_web_app_test.log").unwrap_or_default();
+    assert!(
+        server_log.contains("listening"),
+        "server never listened; log: {}",
+        server_log
+    );
 }
 
 #[test]

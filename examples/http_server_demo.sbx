@@ -1,14 +1,34 @@
-// http_server_demo.sbx — multi-request HTTP server
+// http_server_demo.sbx — A3 real HTTP server demo
 // Run: sandbox run examples/http_server_demo.sbx
-// Then: curl http://localhost:8080/hello
-//       curl http://localhost:8080/world
+// Then: curl http://localhost:8080/hello            (path echo, JSON)
+//       curl "http://localhost:8080/who?who=sandip" (query params)
+//       curl http://localhost:8080/teapot           (418 status)
+//       curl -X POST -d "name=sandip" http://localhost:8080/submit  (form body)
+//       curl -H "User-Agent: me" http://localhost:8080/agent        (request headers)
 
 fn handler(path: string) -> string {
+    http::set_header("X-Engine", "sandbox")
+    if path == "/who" {
+        let who = http::query_param(http::query(), "who")
+        return json::stringify_string(who)
+    }
+    if path == "/agent" {
+        let agent = http::req_header("User-Agent")
+        return json::stringify_string(agent)
+    }
+    if path == "/teapot" {
+        http::set_status(418)
+        return "short and stout"
+    }
+    if path == "/submit" {
+        let name = http::form_param("name")
+        return json::stringify_string(name)
+    }
     let body = json::stringify_string(path)
     return body
 }
 
 fn main() {
-    print("Starting Sandbox HTTP server on :8080 (handles multiple requests)")
+    print("Starting Sandbox HTTP server on :8080 (A3: query/form/status/headers)")
     http::serve(8080, "handler", 0)
 }

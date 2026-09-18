@@ -17,6 +17,7 @@ pub enum Type {
     Custom { name: String, type_args: Vec<Type> },
     Result(Box<Type>, Box<Type>),
     Option(Box<Type>),
+    Map(Box<Type>, Box<Type>),
     Fn(Vec<Type>, Box<Type>),
     Future(Box<Type>),
     TypeParam(String), // Generic type parameter like T, U
@@ -44,6 +45,7 @@ impl fmt::Display for Type {
             }
             Type::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
             Type::Option(inner) => write!(f, "Option<{}>", inner),
+            Type::Map(k, v) => write!(f, "map<{}, {}>", k, v),
             Type::Fn(params, ret) => {
                 let params_str: Vec<String> = params.iter().map(|p| format!("{}", p)).collect();
                 write!(f, "Fn({}) -> {}", params_str.join(", "), ret)
@@ -106,6 +108,7 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
     },
     ArrayLiteral(Vec<Expr>),
+    MapLiteral(Vec<(Expr, Expr)>),
     Index {
         target: Box<Expr>,
         index: Box<Expr>,

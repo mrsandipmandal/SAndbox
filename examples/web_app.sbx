@@ -1,0 +1,36 @@
+// web_app.sbx — A4: a tiny HTML website with cookies and %{key} templates.
+// Run: sandbox run examples/web_app.sbx
+// Then: curl http://localhost:8090/                 (templated home page)
+//       curl http://localhost:8090/again            (reads the visitor cookie)
+//       curl -c /tmp/c.txt -L http://localhost:8090/visit  (sets + reflects cookie)
+
+fn handler(path: string) -> string {
+    http::set_header("Content-Type", "text/html")
+    http::set_header("X-Engine", "sandbox")
+    if path == "/" {
+        http::set_cookie("visitor", "welcome")
+        return tmpl::render(
+            "<html><body><h1>%{title}</h1><p>%{msg}</p></body></html>",
+            "title", "Sandbox Web",
+            "msg", html::escape("5 < 6 & \"cookies\" work")
+        )
+    }
+    if path == "/visit" {
+        http::set_cookie("last", "home")
+        let who = http::get_cookie("visitor")
+        return tmpl::render("<html><body><p>%{who}</p></body></html>", "who", who)
+    }
+    if path == "/again" {
+        let who = http::get_cookie("visitor")
+        return tmpl::render("<html><body><p>back: %{who}</p></body></html>", "who", who)
+    }
+    http::set_status(404)
+    return tmpl::render("<html><body><h1>%{code}</h1><p>%{msg}</p></body></html>",
+        "code", "404",
+        "msg", "not found: " + path)
+}
+
+fn main() {
+    print("Starting Sandbox web app on :8090 (A4: cookies + templates)")
+    http::serve(8090, "handler", 0)
+}

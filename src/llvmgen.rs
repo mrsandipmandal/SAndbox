@@ -29,6 +29,12 @@ pub struct LlvmGen {
     pending_mono_structs: Vec<(String, String, Vec<Type>)>,
     /// Stack of (end_label, continue_label) for break/continue in loops
     loop_stack: Vec<(String, String)>,
+    /// Variables known to hold sbx_map* values (map<string,long>) — lets the
+    /// backend distinguish map i8* handles from string i8* at method/index time.
+    map_vars: std::collections::HashSet<String>,
+    /// Functions declared to return map<string,long> — their call results are
+    /// map handles even though the LLVM type is an ambiguous i8*.
+    map_fns: std::collections::HashSet<String>,
     /// Allocas created in the entry block (dominate every use site), so a
     /// `let` redeclaration can safely reuse them instead of re-allocating in
     /// a loop/branch body (which would not dominate later uses).
@@ -69,6 +75,8 @@ impl LlvmGen {
             mono_structs: std::collections::HashSet::new(),
             pending_mono_structs: Vec::new(),
             loop_stack: Vec::new(),
+            map_vars: std::collections::HashSet::new(),
+            map_fns: std::collections::HashSet::new(),
             entry_allocas: std::collections::HashSet::new(),
             left_entry: false,
             induction_vars: std::collections::HashSet::new(),
@@ -119,6 +127,7 @@ impl LlvmGen {
         }
 
         // Register function signatures (including async fns and impl methods)
+        self.map_fns.insert("map::new".to_string());
         for item in &program.items {
             match item {
                 TopLevel::FnDef {
@@ -132,6 +141,9 @@ impl LlvmGen {
                     let ret_ty = ret
                         .as_ref()
                         .map_or("void".to_string(), |t| self.llvm_type(t));
+                    if matches!(ret.as_ref(), Some(Type::Map(_, _))) {
+                        self.map_fns.insert(name.clone());
+                    }
                     self.fn_sigs.insert(name.clone(), (param_tys, ret_ty));
                 }
                 TopLevel::ImplDef {
@@ -211,6 +223,83 @@ impl LlvmGen {
         writeln!(self.output, "declare i8* @__sbx_str_sub(i8*, i64, i64)").unwrap();
         writeln!(self.output, "declare i64 @__sbx_str_len(i8*)").unwrap();
         writeln!(self.output, "declare i64 @__sbx_str_eq(i8*, i8*)").unwrap();
+        // Map runtime (shared with the C backend)
+        writeln!(self.output, "declare i8* @sbx_map_new()").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_map_insert(i8*, i8*, i64)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_map_get(i8*, i8*, i64)").unwrap();
+        writeln!(
+            self.output,
+            "declare i64 @__sbx_map_get_default(i8*, i8*, i64)"
+        )
+        .unwrap();
+        writeln!(self.output, "declare i64 @__sbx_map_has(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_map_remove(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_map_len(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_map_keys(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_map_format(i8*)").unwrap();
+        writeln!(
+            self.output,
+            "declare i64 @__sbx_json_array_get_int(i8*, i64)"
+        )
+        .unwrap();
+        // A2 JSON runtime (shared C runtime)
+        writeln!(self.output, "declare i8* @__sbx_json_parse_map(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_stringify_map(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_get_str(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_json_get_int(i8*, i8*)").unwrap();
+        writeln!(
+            self.output,
+            "declare i8* @__sbx_json_stringify_array(i64, ...)"
+        )
+        .unwrap();
+        // A3 HTTP runtime (shared C runtime). serve/serve_once take a C
+        // function pointer (const char* (*)(const char*)); all other
+        // functions follow the usual i64/i8* conventions.
+        writeln!(self.output, "declare void @__sbx_serve(i64, i8* (i8*)*)").unwrap();
+        writeln!(
+            self.output,
+            "declare void @__sbx_serve_once(i64, i8* (i8*)*)"
+        )
+        .unwrap();
+        writeln!(self.output, "declare void @__sbx_http_serve_static(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_method()").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_query()").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_body()").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_req_header(i8*)").unwrap();
+        writeln!(self.output, "declare void @__sbx_http_set_status(i64)").unwrap();
+        writeln!(self.output, "declare void @__sbx_http_set_header(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_http_status_code()").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_query_param(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_form_get(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_form_param(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_url_decode(i8*)").unwrap();
+        // A4: cookies, html, templates
+        writeln!(self.output, "declare void @__sbx_http_set_cookie(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_get_cookie(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_http_cookie_get(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_html_escape(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_html_unescape(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_tmpl_render(i64, ...)").unwrap();
+        // json::parse_map returns a map handle (i8*) like user fns returning maps
+        self.map_fns.insert("json::parse_map".to_string());
+        // v2.0 scalar JSON helpers
+        writeln!(self.output, "declare i8* @__sbx_json_stringify(i64)").unwrap();
+        writeln!(
+            self.output,
+            "declare double @__sbx_json_stringify_float(double)"
+        )
+        .unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_get(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_stringify_string(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_stringify_bool(i64)").unwrap();
+        writeln!(self.output, "declare double @__sbx_json_parse_float(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_parse_string(i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_json_has_key(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_json_array_len(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_parse_object(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_map_get(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_json_map_keys(i8*)").unwrap();
+        writeln!(self.output, "declare i64 @__sbx_json_map_len(i8*)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_str_concat(i8*, i8*)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_str_trim(i8*)").unwrap();
         writeln!(self.output, "declare i64 @__sbx_str_starts_with(i8*, i8*)").unwrap();
@@ -441,6 +530,9 @@ impl LlvmGen {
             )
             .unwrap();
             self.entry_allocas.insert(alloca.clone());
+            if matches!(&p.ty, Type::Map(_, _)) {
+                self.map_vars.insert(p.name.clone());
+            }
             self.variables.insert(p.name.clone(), (alloca, ty.clone()));
         }
         // Allocate and store capture params, mapping __cap_<name> to <name> in variables
@@ -512,6 +604,14 @@ impl LlvmGen {
                 let llvm_ty = ty
                     .as_ref()
                     .map_or_else(|| self.infer_llvm_type(value), |t| self.llvm_type(t));
+                let is_map_binding = matches!(ty.as_ref(), Some(Type::Map(_, _)))
+                    || matches!(value, Expr::MapLiteral(_))
+                    || matches!(value, Expr::Call { name, .. } if self.map_fns.contains(name));
+                if is_map_binding {
+                    self.map_vars.insert(name.clone());
+                } else {
+                    self.map_vars.remove(name);
+                }
                 if is_struct_type(&llvm_ty) {
                     // For struct types, StructLiteral already allocs + stores fields.
                     // Just alias the variable name to the same alloca.
@@ -677,6 +777,25 @@ impl LlvmGen {
                 "void".to_string()
             }
             Stmt::Print(expr) => {
+                // Maps print as {k: v, ...} (interpreter/C parity)
+                if self.is_map_expr(expr) {
+                    let val = self.gen_expr(expr);
+                    let r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* @__sbx_map_format(i8* {})",
+                        r, val
+                    )
+                    .unwrap();
+                    let fmt = self.fresh_str("%s\n");
+                    writeln!(
+                        self.output,
+                        "  call i64 (i8*, ...) @printf(i8* bitcast ([4 x i8]* @{} to i8*), i8* {})",
+                        fmt, r
+                    )
+                    .unwrap();
+                    return "void".to_string();
+                }
                 let val = self.gen_expr(expr);
                 let ty = self.infer_llvm_type(expr);
                 self.gen_print_call(&val, &ty);
@@ -1367,6 +1486,18 @@ impl LlvmGen {
                 if name == "len" && args.len() == 1 {
                     let arg = &args[0];
                     let arg_ty = self.infer_llvm_type(arg);
+                    if self.is_map_expr(arg) {
+                        // Map len → __sbx_map_len
+                        let arg_val = self.gen_expr(arg);
+                        let result = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = call i64 @__sbx_map_len(i8* {})",
+                            result, arg_val
+                        )
+                        .unwrap();
+                        return result;
+                    }
                     if arg_ty == "i8*" || arg_ty == "i8**" {
                         // String len → call strlen
                         let arg_val = self.gen_expr(arg);
@@ -1392,12 +1523,118 @@ impl LlvmGen {
                     writeln!(self.output, "  {} = add i64 0, 0", result).unwrap();
                     return result;
                 }
+                // A2: json::stringify_array — array literals cannot be call
+                // operands; emit a variadic call with the element values.
+                if name == "json::stringify_array" && args.len() == 1 {
+                    if let Expr::ArrayLiteral(elems) = &args[0] {
+                        let mut elem_vals = Vec::new();
+                        for e in elems {
+                            elem_vals.push(self.gen_expr(e));
+                        }
+                        let result = self.fresh_var();
+                        let args_str: Vec<String> = std::iter::once(format!("i64 {}", elems.len()))
+                            .chain(elem_vals.into_iter().map(|v| format!("i64 {v}")))
+                            .collect();
+                        writeln!(
+                            self.output,
+                            "  {} = call i8* (i64, ...) @__sbx_json_stringify_array({})",
+                            result,
+                            args_str.join(", ")
+                        )
+                        .unwrap();
+                        return result;
+                    }
+                }
+                // A4: tmpl::render(t, k1, v1, ...) — variadic C ABI:
+                // (long count, const char*...) with the template first.
+                if name == "tmpl::render" && !args.is_empty() && args.len() % 2 == 1 {
+                    let mut vals = Vec::new();
+                    for a in args {
+                        vals.push(self.gen_expr(a));
+                    }
+                    let result = self.fresh_var();
+                    let args_str: Vec<String> = std::iter::once(format!("i64 {}", args.len()))
+                        .chain(vals.into_iter().map(|v| format!("i8* {v}")))
+                        .collect();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* (i64, ...) @__sbx_tmpl_render({})",
+                        result,
+                        args_str.join(", ")
+                    )
+                    .unwrap();
+                    return result;
+                }
+                // A3: http::serve / http::serve_once take the handler as a
+                // *name* string; emit a bitcast of the Sandbox function to the
+                // C runtime's `i8* (i8*)*` handler type.
+                if matches!(name.as_str(), "http::serve" | "http::serve_once") && args.len() >= 2 {
+                    let port_val = self.gen_expr(&args[0]);
+                    let handler_name = match &args[1] {
+                        Expr::Str(s) => s.clone(),
+                        _ => String::new(),
+                    };
+                    let hptr = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {hptr} = bitcast i8* (i8*)* @{} to i8* (i8*)*",
+                        handler_name
+                    )
+                    .unwrap();
+                    let rt_sym = if name == "http::serve_once" {
+                        "__sbx_serve_once"
+                    } else {
+                        "__sbx_serve"
+                    };
+                    let result = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  call void @{}(i64 {}, i8* (i8*)* {})",
+                        rt_sym, port_val, hptr
+                    )
+                    .unwrap();
+                    writeln!(self.output, "  {} = add i64 0, 0", result).unwrap();
+                    return result;
+                }
+                // A3: void builtins — the generic path defaults their ret to
+                // i64, which would emit invalid IR against the C ABI.
+                if matches!(
+                    name.as_str(),
+                    "http::set_status" | "http::set_header" | "http::serve_static"
+                ) {
+                    let mapped = crate::stdlib::c_name(name);
+                    let mut parts: Vec<String> = Vec::new();
+                    for a in args.iter() {
+                        let mut v = self.gen_expr(a);
+                        let mut t = self.infer_llvm_type(a);
+                        if t == "i1" {
+                            let z = self.fresh_var();
+                            writeln!(self.output, "  {z} = zext i1 {v} to i64").unwrap();
+                            v = z;
+                            t = "i64".to_string();
+                        }
+                        parts.push(format!("{} {}", t, v));
+                    }
+                    writeln!(self.output, "  call void @{}({})", mapped, parts.join(", ")).unwrap();
+                    let dummy = self.fresh_var();
+                    writeln!(self.output, "  {} = add i64 0, 0", dummy).unwrap();
+                    return dummy;
+                }
                 // Map stdlib builtin names to their C runtime equivalents
                 let mapped_name = if crate::stdlib::is_builtin(name) {
                     crate::stdlib::c_name(name).to_string()
                 } else {
                     name.replace("::", "_")
                 };
+                // Builtins whose C runtime return type is not a plain long.
+                // Looked up by the ORIGINAL sandbox name (json::*, http::*) —
+                // the generic path below would assume i64 otherwise.
+                let builtin_ret_override =
+                    crate::stdlib::builtin_llvm_ret(if crate::stdlib::is_builtin(name) {
+                        name
+                    } else {
+                        ""
+                    });
                 // Check if this is a call to a lambda-typed variable
                 let (call_name, captures): (String, Vec<(String, String)>) =
                     if let Some(lam) = self.var_lambdas.get(name) {
@@ -1414,6 +1651,9 @@ impl LlvmGen {
                     let mut all_tys = arg_tys;
                     for (_, cty) in &captures {
                         all_tys.push(cty.clone());
+                    }
+                    if let Some(ret) = builtin_ret_override {
+                        return (all_tys, ret.to_string());
                     }
                     (all_tys, "i64".to_string())
                 });
@@ -2037,6 +2277,40 @@ impl LlvmGen {
                 method,
                 args,
             } => {
+                // Map methods (map<string,long>)
+                if self.is_map_expr(target) {
+                    let target_val = self.gen_expr(target);
+                    let c_fn = match method.as_str() {
+                        "insert" => "__sbx_map_insert",
+                        "get" => "__sbx_map_get_default",
+                        "has" => "__sbx_map_has",
+                        "remove" => "__sbx_map_remove",
+                        "keys" => "__sbx_map_keys",
+                        "len" => "__sbx_map_len",
+                        other => other,
+                    };
+                    let mut all_vals = vec![format!("i8* {}", target_val)];
+                    for a in args {
+                        let aty = self.infer_llvm_type(a);
+                        all_vals.push(format!("{} {}", aty, self.gen_expr(a)));
+                    }
+                    // m.get(key) without a default uses 0 (matches m[key])
+                    if method == "get" && args.len() == 1 {
+                        all_vals.push("i64 0".to_string());
+                    }
+                    let result = self.fresh_var();
+                    let ret_ty = self.infer_llvm_type(expr);
+                    writeln!(
+                        self.output,
+                        "  {} = call {} @{}({})",
+                        result,
+                        ret_ty,
+                        c_fn,
+                        all_vals.join(", ")
+                    )
+                    .unwrap();
+                    return result;
+                }
                 // String methods or struct methods
                 let target_ty = self.infer_llvm_type(target);
                 let target_val = self.gen_expr(target);
@@ -2096,6 +2370,19 @@ impl LlvmGen {
                 arr
             }
             Expr::Index { target, index } => {
+                // Map indexing: m["key"] → __sbx_map_get(m, "key", 0)
+                if self.is_map_expr(target) {
+                    let m = self.gen_expr(target);
+                    let k = self.gen_expr(index);
+                    let r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i64 @__sbx_map_get(i8* {}, i8* {}, i64 0)",
+                        r, m, k
+                    )
+                    .unwrap();
+                    return r;
+                }
                 let arr = self.gen_expr(target);
                 let idx = self.gen_expr(index);
                 let gep = self.fresh_var();
@@ -2108,6 +2395,22 @@ impl LlvmGen {
                 let loaded = self.fresh_var();
                 writeln!(self.output, "  {} = load i64, i64* {}", loaded, gep).unwrap();
                 loaded
+            }
+            Expr::MapLiteral(pairs) => {
+                let m = self.fresh_var();
+                writeln!(self.output, "  {} = call i8* @sbx_map_new()", m).unwrap();
+                for (k, v) in pairs {
+                    let kv = self.gen_expr(k);
+                    let vv = self.gen_expr(v);
+                    let discard = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i64 @__sbx_map_insert(i8* {}, i8* {}, i64 {})",
+                        discard, m, kv, vv
+                    )
+                    .unwrap();
+                }
+                m
             }
         }
     }
@@ -2217,6 +2520,7 @@ impl LlvmGen {
             Type::Void => "void".to_string(),
             Type::Custom { name, .. } => name.clone(),
             Type::Option(inner) => format!("Option_{}", Self::type_id(inner)),
+            Type::Map(k, v) => format!("Map_{}_{}", Self::type_id(k), Self::type_id(v)),
             Type::Result(ok, _) => format!("Result_{}", Self::type_id(ok)),
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::type_id(inner)),
@@ -2444,6 +2748,7 @@ impl LlvmGen {
             Type::Void => "void".to_string(),
             Type::Money(_) | Type::Decimal | Type::Unit(_) => "i64".to_string(),
             Type::Array(_) => "i8*".to_string(),
+            Type::Map(_, _) => "i8*".to_string(),
             Type::Custom { name, type_args } => {
                 if self.enum_tags.contains_key(name) {
                     "i64".to_string()
@@ -2479,8 +2784,12 @@ impl LlvmGen {
             Expr::EnumVariant { .. } => "i64".to_string(),
             Expr::Match { .. } => "i64".to_string(),
             Expr::Call { name, .. } => {
-                if let Some((_, ret)) = self.fn_sigs.get(name) {
+                if self.map_fns.contains(name) {
+                    "i8*".to_string()
+                } else if let Some((_, ret)) = self.fn_sigs.get(name) {
                     ret.clone()
+                } else if let Some(ret) = crate::stdlib::builtin_llvm_ret(name) {
+                    ret.to_string()
                 } else {
                     "i64".to_string()
                 }
@@ -2492,6 +2801,7 @@ impl LlvmGen {
                     "i64".to_string()
                 }
             }
+            Expr::MapLiteral(_) => "i8*".to_string(),
             Expr::BinaryOp {
                 op:
                     BinOp::Eq
@@ -2504,6 +2814,13 @@ impl LlvmGen {
                     | BinOp::Or,
                 ..
             } => "i1".to_string(),
+            // String concatenation yields a string (mirrors infer_c_type's
+            // both-sides-string rule in the C backend).
+            Expr::BinaryOp {
+                op: BinOp::Add,
+                left,
+                ..
+            } if matches!(self.infer_llvm_type(left).as_str(), "i8*" | "i8**") => "i8*".to_string(),
             Expr::BinaryOp { .. } => "i64".to_string(),
             Expr::StructLiteral {
                 name, type_args, ..
@@ -2526,6 +2843,13 @@ impl LlvmGen {
             Expr::Range { .. } => "i64".to_string(),
             Expr::FString(_) => "i8*".to_string(),
             Expr::MethodCall { target, method, .. } => {
+                // Map method sugar: keys() yields a string, everything else a long.
+                if self.is_map_expr(target) {
+                    return match method.as_str() {
+                        "keys" => "i8*".to_string(),
+                        _ => "i64".to_string(),
+                    };
+                }
                 // String method sugar: return kind from the shared table
                 // ("s" → i8*, "i" → i64); struct methods → i64.
                 if self.infer_llvm_type(target) == "i8*" {
@@ -2705,6 +3029,16 @@ impl LlvmGen {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// True if this expression evaluates to a map handle (sbx_map*).
+    fn is_map_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::MapLiteral(_) => true,
+            Expr::Ident(n) => self.map_vars.contains(n),
+            Expr::Call { name, .. } => self.map_fns.contains(name),
+            _ => false,
         }
     }
 

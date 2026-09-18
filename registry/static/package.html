@@ -340,7 +340,7 @@
 <body>
   <header>
     <div class="container">
-      <a href="/" class="logo">
+      <a href="../" class="logo">
         <svg viewBox="0 0 32 32" fill="none">
           <rect width="32" height="32" rx="8" fill="#6366f1"/>
           <path d="M8 22L16 10L24 22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -349,8 +349,8 @@
         sandbox
       </a>
       <div class="nav-links">
-        <a href="/">Home</a>
-        <a href="/api/v1/packages">API</a>
+        <a href="../">Home</a>
+        <a href="../api/v1/packages">API</a>
         <a href="https://github.com/sandbox-lang/sandbox" target="_blank">GitHub</a>
       </div>
     </div>
@@ -359,7 +359,7 @@
   <main>
     <div class="container">
       <div class="breadcrumb">
-        <a href="/">Registry</a> / <span id="crumb-name"></span>
+        <a href="../">Registry</a> / <span id="crumb-name"></span>
       </div>
 
       <div class="pkg-header">
@@ -419,7 +419,7 @@
       const pkg = PKG_DATA;
       if (!pkg || !pkg.name) {
         document.querySelector('.container main').innerHTML =
-          '<div style="text-align:center;padding:80px 0"><h2>Package not found</h2><p style="color:var(--text-dim);margin-top:8px"><a href="/" style="color:var(--accent)">Back to registry</a></p></div>';
+          '<div style="text-align:center;padding:80px 0"><h2>Package not found</h2><p style="color:var(--text-dim);margin-top:8px"><a href="../" style="color:var(--accent)">Back to registry</a></p></div>';
         return;
       }
 
@@ -460,7 +460,7 @@
       const downloadDiv = document.getElementById('download-link');
       if (pkg.latest_version) {
         downloadDiv.innerHTML =
-          '<a href="/api/v1/packages/' + pkg.name + '/' + pkg.latest_version + '/download" ' +
+          '<a href="../api/v1/packages/' + pkg.name + '/' + pkg.latest_version + '/download" ' +
           'style="display:inline-flex;align-items:center;gap:8px;color:var(--accent);text-decoration:none;font-size:0.9rem">' +
           '  📦 ' + pkg.name + '-' + pkg.latest_version + '.sb' +
           '</a>' +
@@ -479,7 +479,7 @@
           if (v.yanked) {
             return '<li><span class="ver-link yanked">v' + v.version + '</span><span class="date">yanked</span></li>';
           }
-          return '<li><a class="ver-link" href="/api/v1/packages/' + pkg.name + '/' + v.version + '/download">v' + v.version + '</a><span class="date">' + date + '</span></li>';
+          return '<li><a class="ver-link" href="../api/v1/packages/' + pkg.name + '/' + v.version + '/download">v' + v.version + '</a><span class="date">' + date + '</span></li>';
         }).join('');
       }
 
@@ -489,7 +489,7 @@
       if (latestVersion && latestVersion.dependencies && latestVersion.dependencies.length > 0) {
         depsSection.innerHTML = '<ul class="dep-list">' +
           latestVersion.dependencies.map(d =>
-            '<li><a class="dep-name" href="/packages/' + d.name + '">' + d.name + '</a><span class="dep-spec">' + d.spec + '</span></li>'
+            '<li><a class="dep-name" href="../packages/' + d.name + '">' + d.name + '</a><span class="dep-spec">' + d.spec + '</span></li>'
           ).join('') + '</ul>';
       }
 

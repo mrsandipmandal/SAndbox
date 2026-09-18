@@ -270,7 +270,7 @@
 <body>
   <header>
     <div class="container">
-      <a href="/" class="logo">
+      <a href="./" class="logo">
         <svg viewBox="0 0 32 32" fill="none">
           <rect width="32" height="32" rx="8" fill="#6366f1"/>
           <path d="M8 22L16 10L24 22" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -279,7 +279,7 @@
         sandbox
       </a>
       <div class="nav-links">
-        <a href="/api/v1/packages">API</a>
+        <a href="api/v1/packages">API</a>
         <a href="https://github.com/sandbox-lang/sandbox" target="_blank">GitHub</a>
       </div>
     </div>
@@ -358,7 +358,7 @@
   </footer>
 
   <script>
-    const API = window.location.origin + '/api/v1';
+    const API = window.location.pathname.replace(/\/+$/, '') + '/api/v1';
     const list = document.getElementById('package-list');
     const searchInput = document.getElementById('search');
     const pkgCount = document.getElementById('pkg-count');
@@ -390,7 +390,7 @@
         stats.style.display = 'grid';
 
         list.innerHTML = data.packages.map(pkg => `
-          <div class="package-card" onclick="window.location.href='/packages/${pkg.name}'">
+          <div class="package-card" onclick="window.location.href='packages/${pkg.name}'">
             <div class="package-card-header">
               <span class="package-name">${pkg.name}</span>
               ${pkg.latest_version ? `<span class="package-version">v${pkg.latest_version}</span>` : ''}

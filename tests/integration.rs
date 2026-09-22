@@ -5844,3 +5844,58 @@ fn main() {
         .collect();
     assert_eq!(c_vals, i_vals, "interpreter diverged from C");
 }
+
+#[test]
+fn test_b2_int_types_all_backends() {
+    // B2: sized/unsigned ints + `as` casts. Typed stores (let, assign, fn
+    // return/params) wrap to the declared width on every backend; unit
+    // suffixes must not swallow the next statement's variable name.
+    let source = r#"
+fn clamp8(x: i16) -> i16 {
+    return x * 1000
+}
+fn main() {
+    let a: u8 = 4294967296
+    print(a)
+    print(-1 as u8)
+    print(-1 as i8)
+    print(255 as i8)
+    print(clamp8(100))
+    let mut m: u32 = 4000000000
+    m = m + 1000000000
+    print(m)
+    print(2.9 as u8)
+    print(3.7 as i64)
+    let g = 5
+    g = g + 1
+    print(g)
+}
+"#;
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "B2 C run failed: {}", c_out);
+    assert!(i_ok, "B2 interpreter failed: {}", i_out);
+    let expect = [
+        "0",         // u8 wrap of 2^32
+        "255",       // -1 as u8
+        "-1",        // -1 as i8
+        "-1",        // 255 as i8 (sign-extends)
+        "-31072",    // i16 return wrap of 100000
+        "705032704", // u32 assign wrap of 5e9
+        "2",         // 2.9 as u8
+        "3",         // 3.7 as i64
+        "6",         // g reassigned (unit-suffix regression guard)
+    ];
+    let c_vals: Vec<&str> = c_out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .collect();
+    let i_vals: Vec<&str> = i_out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .collect();
+    assert_eq!(c_vals, expect, "C backend B2 output");
+    assert_eq!(c_vals, i_vals, "interpreter diverged from C on B2 types");
+}

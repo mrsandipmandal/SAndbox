@@ -1,4 +1,5 @@
 mod ast;
+mod b2;
 mod codegen;
 mod compiler;
 mod diagnostic;

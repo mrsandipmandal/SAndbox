@@ -3,12 +3,71 @@ use std::fmt;
 
 // ── Types ──
 
+/// B2: a sized integer type. `bits` is the storage width (8..64), `signed`
+/// selects two's-complement vs unsigned wrap semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntTy {
+    pub bits: u8,
+    pub signed: bool,
+}
+
+impl IntTy {
+    pub fn i(bits: u8) -> Self {
+        Self { bits, signed: true }
+    }
+    pub fn u(bits: u8) -> Self {
+        Self {
+            bits,
+            signed: false,
+        }
+    }
+
+    /// Mask a value to this type's width. Signed types sign-extend from the
+    /// top bit of the width; unsigned types zero-extend.
+    pub fn wrap(self, v: i64) -> i64 {
+        if self.bits >= 64 {
+            return v;
+        }
+        let shift = 64 - self.bits as u32;
+        if self.signed {
+            (v << shift) >> shift
+        } else {
+            (((v as u64) << shift) >> shift) as i64
+        }
+    }
+
+    pub fn min(self) -> i64 {
+        if self.signed {
+            -(1i64 << (self.bits as u32 - 1))
+        } else {
+            0
+        }
+    }
+
+    pub fn max(self) -> i64 {
+        if self.signed {
+            (1i64 << (self.bits as u32 - 1)) - 1
+        } else if self.bits >= 64 {
+            i64::MAX
+        } else {
+            (1i64 << self.bits as u32) - 1
+        }
+    }
+
+    pub fn contains(self, v: i64) -> bool {
+        self.wrap(v) == v
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     I64,
     F64,
     Bool,
     String,
+    // B2: sized/unsigned integers. Values are stored as i64 at rest;
+    // the width/sign matter at casts and typed stores (wrap-to-width).
+    Int(IntTy),
     Money(String),
     Decimal,
     Unit(String),
@@ -27,6 +86,13 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::I64 => write!(f, "i64"),
+            Type::Int(t) => {
+                if t.signed {
+                    write!(f, "i{}", t.bits)
+                } else {
+                    write!(f, "u{}", t.bits)
+                }
+            }
             Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::String => write!(f, "string"),
@@ -96,6 +162,11 @@ pub enum Expr {
     UnaryOp {
         op: UnOp,
         expr: Box<Expr>,
+    },
+    // B2: explicit integer conversion: `expr as i32` etc.
+    Cast {
+        expr: Box<Expr>,
+        ty: Type,
     },
     Call {
         name: String,

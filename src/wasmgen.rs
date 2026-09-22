@@ -383,6 +383,26 @@ impl WasmGen {
                 self.write_indent();
                 writeln!(self.output, "(i64.const {})", n).unwrap();
             }
+            Expr::Cast { expr, ty } => {
+                // B2: mirror the i64-at-rest wrap (shl/ashr trick for unsigned,
+                // sign-extension already natural in i64 for signed).
+                self.gen_wasm_expr(expr);
+                if let Type::Int(t) = ty {
+                    if t.bits < 64 {
+                        let shift = 64 - t.bits as i64;
+                        self.write_indent();
+                        writeln!(self.output, "(i64.shl)").unwrap();
+                        self.write_indent();
+                        writeln!(self.output, "(i64.const {})", shift).unwrap();
+                        self.write_indent();
+                        if t.signed {
+                            writeln!(self.output, "(i64.shr_s)").unwrap();
+                        } else {
+                            writeln!(self.output, "(i64.shr_u)").unwrap();
+                        }
+                    }
+                }
+            }
             Expr::Float(n) => {
                 // Wasm doesn't have f64 literals in WAT, use bit reinterpretation
                 self.write_indent();

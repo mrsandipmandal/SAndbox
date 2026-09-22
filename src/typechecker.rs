@@ -193,6 +193,13 @@ impl TypeChecker {
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::c_type_name(inner)),
             Type::TypeParam(name) => name.clone(),
+            Type::Int(t) => {
+                if t.signed {
+                    format!("i{}", t.bits)
+                } else {
+                    format!("u{}", t.bits)
+                }
+            }
         }
     }
 
@@ -506,6 +513,22 @@ impl TypeChecker {
     fn check_expr(&mut self, expr: &Expr) -> Result<Type> {
         match expr {
             Expr::Int(_) => Ok(Type::I64),
+            Expr::Cast { expr, ty } => {
+                // B2: `expr as T`. Integer<->integer and int<->float casts are
+                // allowed; everything else is rejected.
+                let inner = self.check_expr(expr)?;
+                let int_src = matches!(inner, Type::I64 | Type::Int(_));
+                let int_dst = matches!(ty, Type::I64 | Type::Int(_));
+                if int_src && int_dst {
+                    return Ok(ty.clone());
+                }
+                let f_src = matches!(inner, Type::F64);
+                let f_dst = matches!(ty, Type::F64);
+                if (f_src && int_dst) || (int_src && f_dst) {
+                    return Ok(ty.clone());
+                }
+                Err(anyhow!("Invalid cast from '{}' to '{}'", inner, ty))
+            }
             Expr::Float(_) => Ok(Type::F64),
             Expr::Str(_) => Ok(Type::String),
             Expr::Bool(_) => Ok(Type::Bool),
@@ -560,7 +583,11 @@ impl TypeChecker {
                 let ty = self.check_expr(expr)?;
                 match op {
                     UnOp::Neg => {
-                        if !matches!(ty, Type::I64 | Type::F64 | Type::Decimal | Type::Unit(_)) {
+                        // B2: narrow ints negate in i64 (value-at-rest rules).
+                        if !matches!(
+                            ty,
+                            Type::I64 | Type::F64 | Type::Decimal | Type::Unit(_) | Type::Int(_)
+                        ) {
                             return Err(anyhow!("Cannot negate '{}'", ty));
                         }
                         Ok(ty)
@@ -1472,6 +1499,8 @@ impl TypeChecker {
         }
         // Decimal accepts Int and Float literals
         // Future<T> is compatible with i64 (handle is a long)
+        // B2: narrow ints interconvert with i64 implicitly — values live as
+        // i64 at rest and wrap to the target width at the typed store.
         matches!(
             (expected, actual),
             (Type::Decimal, Type::I64)
@@ -1479,6 +1508,9 @@ impl TypeChecker {
                 | (Type::F64, Type::I64)
                 | (Type::I64, Type::Future(_))
                 | (Type::Future(_), Type::I64)
+                | (Type::Int(_), Type::I64)
+                | (Type::I64, Type::Int(_))
+                | (Type::Int(_), Type::Int(_))
         )
     }
 
@@ -1487,6 +1519,11 @@ impl TypeChecker {
             BinOp::Add | BinOp::Sub => {
                 if lt == rt {
                     return Ok(lt.clone());
+                }
+                // B2: narrow ints promote to i64 in mixed arithmetic (values
+                // are i64 at rest; the store wraps).
+                if Self::is_int_ty(lt) && Self::is_int_ty(rt) {
+                    return Ok(Type::I64);
                 }
                 // Money + Money (same currency)
                 if let (Type::Money(lc), Type::Money(rc)) = (lt, rt) {
@@ -1518,6 +1555,10 @@ impl TypeChecker {
             BinOp::Mul | BinOp::Div => {
                 if lt == rt {
                     return Ok(lt.clone());
+                }
+                // B2: narrow ints promote to i64 in mixed arithmetic.
+                if Self::is_int_ty(lt) && Self::is_int_ty(rt) {
+                    return Ok(Type::I64);
                 }
                 // Money * scalar
                 if let (Type::Money(c), Type::F64) | (Type::F64, Type::Money(c)) = (lt, rt) {
@@ -1554,6 +1595,10 @@ impl TypeChecker {
                 if lt == rt {
                     return Ok(lt.clone());
                 }
+                // B2: narrow ints promote to i64 in mixed arithmetic.
+                if Self::is_int_ty(lt) && Self::is_int_ty(rt) {
+                    return Ok(Type::I64);
+                }
                 Err(anyhow!("Cannot apply {:?} to '{}' and '{}'", op, lt, rt))
             }
             BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
@@ -1570,10 +1615,11 @@ impl TypeChecker {
                     Err(anyhow!("Logical operators require bool operands"))
                 }
             }
-            // B1: bitwise — integers only (i64 today); shifts return the
-            // left operand's type so `1 << x` stays an int.
+            // B1: bitwise — integers only; shifts return the left operand's
+            // type so `1 << x` stays an int. B2: narrow ints participate
+            // (values are i64 at rest).
             BinOp::Shl | BinOp::Shr => {
-                if *lt != Type::I64 || *rt != Type::I64 {
+                if !Self::is_int_ty(lt) || !Self::is_int_ty(rt) {
                     return Err(anyhow!(
                         "Shift operators require integer operands, got '{}' and '{}'",
                         lt,
@@ -1583,9 +1629,9 @@ impl TypeChecker {
                 Ok(lt.clone())
             }
             BinOp::BitAnd | BinOp::BitXor | BinOp::BitOr => {
-                if lt != rt || *lt != Type::I64 {
+                if !Self::is_int_ty(lt) || !Self::is_int_ty(rt) {
                     return Err(anyhow!(
-                        "Bitwise operators require two integers of the same type, got '{}' and '{}'",
+                        "Bitwise operators require two integer operands, got '{}' and '{}'",
                         lt,
                         rt
                     ));
@@ -1593,6 +1639,11 @@ impl TypeChecker {
                 Ok(lt.clone())
             }
         }
+    }
+
+    /// B2: true for i64 and any sized/unsigned int type.
+    fn is_int_ty(ty: &Type) -> bool {
+        matches!(ty, Type::I64 | Type::Int(_))
     }
 
     fn lookup_var(&self, name: &str) -> Result<Type> {

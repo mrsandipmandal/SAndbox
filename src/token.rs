@@ -64,6 +64,16 @@ pub enum Token {
     TypeString,
     TypeMoney,
     TypeDecimal,
+    // B2: sized/unsigned ints + casts
+    TypeI8,
+    TypeI16,
+    TypeI32,
+    TypeU8,
+    TypeU16,
+    TypeU32,
+    TypeU64,
+    TypeUsize,
+    As,
 
     // v1.0: Ledger DSL
     Ledger,

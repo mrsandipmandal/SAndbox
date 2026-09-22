@@ -2553,6 +2553,29 @@ impl CodeGen {
     fn gen_expr(&self, expr: &Expr) -> String {
         match expr {
             Expr::Int(n) => format!("{}", n),
+            Expr::Cast { expr, ty } => {
+                // B2: C's cast operator already truncates/extends to the target
+                // width. u64 is special: values live as i64 at rest, so a
+                // float→u64 cast goes through (long long) to keep the i64 bit
+                // pattern (and stay defined for negative inputs).
+                let inner = self.gen_expr(expr);
+                if matches!(ty, Type::F64) {
+                    format!("((double)({}))", inner)
+                } else if let Type::Int(t) = ty {
+                    if !t.signed && t.bits >= 64 {
+                        let src_f64 = matches!(self.infer_c_type(expr).as_str(), "double");
+                        if src_f64 {
+                            format!("((long long)({}))", inner)
+                        } else {
+                            inner // identity: already the i64-at-rest bit pattern
+                        }
+                    } else {
+                        format!("(({})({}))", self.c_type(ty), inner)
+                    }
+                } else {
+                    format!("(({})({}))", self.c_type(ty), inner)
+                }
+            }
             Expr::Float(n) => format!("{}", n),
             Expr::Str(s) => {
                 let escaped = s
@@ -3391,6 +3414,13 @@ impl CodeGen {
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::type_id(inner)),
             Type::TypeParam(name) => name.clone(),
+            Type::Int(t) => {
+                if t.signed {
+                    format!("i{}", t.bits)
+                } else {
+                    format!("u{}", t.bits)
+                }
+            }
         }
     }
 
@@ -3443,6 +3473,21 @@ impl CodeGen {
             Type::String => "const char*".into(),
             Type::Money(_) | Type::Decimal => "long".into(),
             Type::Unit(_) => "long".into(),
+            Type::Int(t) => {
+                // B2: sized ints. u64 uses unsigned long long; usize = unsigned
+                // long (LP64) so it matches long's width but is unsigned.
+                if t.bits >= 64 {
+                    if t.signed {
+                        "long long".into()
+                    } else {
+                        "unsigned long long".into()
+                    }
+                } else if t.signed {
+                    format!("int{}_t", t.bits)
+                } else {
+                    format!("uint{}_t", t.bits)
+                }
+            }
             Type::Array(inner) => format!("{}*", self.c_type(inner)),
             Type::Void => "void".into(),
             Type::Custom { name, type_args } => {

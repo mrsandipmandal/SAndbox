@@ -576,6 +576,14 @@ impl Parser {
                 | Token::TypeF64
                 | Token::TypeBool
                 | Token::TypeString
+                | Token::TypeI8
+                | Token::TypeI16
+                | Token::TypeI32
+                | Token::TypeU8
+                | Token::TypeU16
+                | Token::TypeU32
+                | Token::TypeU64
+                | Token::TypeUsize
                 | Token::Some_
                 | Token::None_
         );
@@ -606,6 +614,40 @@ impl Parser {
             Token::TypeI64 => {
                 self.advance();
                 Ok(Type::I64)
+            }
+            // B2: sized/unsigned integers
+            Token::TypeI8 => {
+                self.advance();
+                Ok(Type::Int(IntTy::i(8)))
+            }
+            Token::TypeI16 => {
+                self.advance();
+                Ok(Type::Int(IntTy::i(16)))
+            }
+            Token::TypeI32 => {
+                self.advance();
+                Ok(Type::Int(IntTy::i(32)))
+            }
+            Token::TypeU8 => {
+                self.advance();
+                Ok(Type::Int(IntTy::u(8)))
+            }
+            Token::TypeU16 => {
+                self.advance();
+                Ok(Type::Int(IntTy::u(16)))
+            }
+            Token::TypeU32 => {
+                self.advance();
+                Ok(Type::Int(IntTy::u(32)))
+            }
+            Token::TypeU64 => {
+                self.advance();
+                Ok(Type::Int(IntTy::u(64)))
+            }
+            Token::TypeUsize => {
+                self.advance();
+                // usize is 64-bit unsigned on this platform (x86-64)
+                Ok(Type::Int(IntTy::u(64)))
             }
             Token::TypeF64 => {
                 self.advance();
@@ -1011,7 +1053,9 @@ impl Parser {
     }
 
     fn parse_multiplication(&mut self) -> Result<Expr> {
-        let mut left = self.parse_unary()?;
+        // B2: operands go through parse_cast so `x as u32 * 2` parses with
+        // the cast binding tighter than the multiplication.
+        let mut left = self.parse_cast()?;
         loop {
             let op = match self.current_token() {
                 Token::Star => BinOp::Mul,
@@ -1020,7 +1064,7 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_unary()?;
+            let right = self.parse_cast()?;
             left = Expr::BinaryOp {
                 op,
                 left: Box::new(left),
@@ -1099,29 +1143,46 @@ impl Parser {
     fn parse_unary(&mut self) -> Result<Expr> {
         if self.peek_token(&Token::Minus) {
             self.advance();
-            let expr = self.parse_unary()?;
+            let inner = self.parse_unary()?;
             Ok(Expr::UnaryOp {
                 op: UnOp::Neg,
-                expr: Box::new(expr),
+                expr: Box::new(inner),
             })
         } else if self.peek_token(&Token::Bang) {
             self.advance();
-            let expr = self.parse_unary()?;
+            let inner = self.parse_unary()?;
             Ok(Expr::UnaryOp {
                 op: UnOp::Not,
-                expr: Box::new(expr),
+                expr: Box::new(inner),
             })
         } else if self.peek_token(&Token::Tilde) {
             // B1: bitwise complement binds like the other prefix unaries
             self.advance();
-            let expr = self.parse_unary()?;
+            let inner = self.parse_unary()?;
             Ok(Expr::UnaryOp {
                 op: UnOp::BitNot,
-                expr: Box::new(expr),
+                expr: Box::new(inner),
             })
         } else {
             self.parse_postfix()
         }
+    }
+
+    /// B2: `expr as Type` — a conversion whose precedence sits BETWEEN the
+    /// prefix unaries and the binary operators (like Rust's `as`): unary
+    /// binds tighter, so `-1 as u8` casts the negated value (→ 255), and
+    /// binaries bind looser, so `x as u32 + 1` is `(x as u32) + 1`.
+    fn parse_cast(&mut self) -> Result<Expr> {
+        let mut expr = self.parse_unary()?;
+        while self.current_token() == &Token::As {
+            self.advance();
+            let ty = self.parse_type()?;
+            expr = Expr::Cast {
+                expr: Box::new(expr),
+                ty,
+            };
+        }
+        Ok(expr)
     }
 
     fn parse_postfix(&mut self) -> Result<Expr> {
@@ -1276,8 +1337,14 @@ impl Parser {
         match self.current_token().clone() {
             Token::Int(n) => {
                 self.advance();
+                // Unit suffixes (`5 kg`, `3 s`) bind only on the SAME LINE.
+                // Without this, `let x: i64 = 5\n    g = g + 1` parses as
+                // `5 g` across the newline and swallows the next statement's
+                // variable name. (Ints/floats never span lines.)
                 if let Token::Ident(ref unit) = self.current_token() {
-                    if is_unit_name(unit) {
+                    if is_unit_name(unit)
+                        && self.tokens[self.pos].line == self.tokens[self.pos - 1].line
+                    {
                         let unit_name = unit.clone();
                         self.advance();
                         return Ok(Expr::UnitLiteral {
@@ -1299,8 +1366,13 @@ impl Parser {
             }
             Token::Float(n) => {
                 self.advance();
+                // B2/units fix: same-line guard as the Int arm above — a unit
+                // suffix may not reach across a newline to grab the next
+                // statement's leading identifier.
                 if let Token::Ident(ref unit) = self.current_token() {
-                    if is_unit_name(unit) {
+                    if is_unit_name(unit)
+                        && self.tokens[self.pos].line == self.tokens[self.pos - 1].line
+                    {
                         let unit_name = unit.clone();
                         self.advance();
                         return Ok(Expr::UnitLiteral {

@@ -1101,7 +1101,8 @@ pub fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
     let mut lexer = lexer::Lexer::new(source).with_source(filename);
     let tokens = lexer.tokenize()?;
     let mut parser = parser::Parser::new(tokens).with_source(source, filename);
-    let program = parser.parse()?;
+    let mut program = parser.parse()?;
+    crate::b2::desugar_typed_stores(&mut program);
 
     let mut state = InterpreterState::new();
     for item in &program.items {
@@ -1579,6 +1580,17 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
     match expr {
         ast::Expr::Int(n) => Ok(*n),
         ast::Expr::Float(n) => Ok(*n as i64),
+        ast::Expr::Cast { expr, ty } => {
+            // B2: mirror the compiled backends — i64 at rest, wrap to the
+            // target width on cast. Float sources are already fptosi-truncated
+            // by the Float eval arm above, matching C's (long long)f.
+            let v = eval_expr(expr, state)?;
+            if let ast::Type::Int(t) = ty {
+                Ok(t.wrap(v))
+            } else {
+                Ok(v)
+            }
+        }
         ast::Expr::Bool(b) => Ok(if *b { 1 } else { 0 }),
         ast::Expr::Str(s) => {
             // Store with auto key — exec_block will rename it to the variable

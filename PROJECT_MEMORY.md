@@ -114,7 +114,31 @@ docs/explanations: **English**.
   conflation untouched). Parity: `bitwise_ops`, `shift_ops` (ALL backends);
   integration: `test_bitwise_ops_all_backends`,
   `test_bitwise_interpreter_matches_c`.
-- [ ] **B2. Sized/unsigned ints + casts** — `u8..u64`, `i8..i32`, `usize`, `as` casts.
+- [x] **B2. Sized/unsigned ints + casts** — `u8..u64`, `i8..i32`, `usize`, `as` casts.
+  *(Done 2026-09-22.)* DESIGN: **i64-at-rest** — narrow ints live as i64 in
+  every backend; arithmetic/comparisons run at i64; width+sign matter only at
+  *typed stores* (let, assign, param binding, fn return), where the value
+  wraps to the declared type. `usize` = 64-bit unsigned (same repr as i64).
+  Implemented as a post-typecheck AST pass (`src/b2.rs`):
+  `desugar_typed_stores` inserts `Expr::Cast` at every typed store, so all
+  three backends implement exactly one wrapping primitive. The pass threads
+  the variable→type map sequentially through statements (a typed `let` must
+  be visible to later `Assign`s — the map-based first version silently missed
+  re-assignment wraps). New tokens TypeI8..TypeU64/TypeUsize + `As`; ast.rs
+  `Type::Int(IntTy{bits,signed})` + `Expr::Cast`; `as` precedence sits BETWEEN
+  prefix unaries and binaries (new `parse_cast` level feeding
+  parse_multiplication): `-1 as u8` → 255, `x as u32 + 1` → (x as u32) + 1.
+  LLVM: `wrap_i64_to` (signed = trunc+sext, unsigned = shl+**lshr** — ashr
+  sign-extends, wrong for unsigned); Cast = fptosi-to-i64-then-wrap for float
+  sources; Neg emits `fneg double` for float operands (sub 0, x was invalid
+  IR) and infer_llvm_type gained UnaryOp + ArrayLiteral (i64*) arms, fixing a
+  pre-existing untyped `let a = [1,2,3]` LLVM crash. C: uint8_t..uint64_t
+  names, wrap via C casts. PRE-EXISTING BUG FIXED: unit-suffix literals
+  (`5 kg`, `3 s`) grabbed the unit IDENT across newlines, so
+  `let x: i64 = 5\n g = g + 1` parsed as `5 g` and swallowed `g` (vars g/h/m/s
+  + others failed to re-assign); unit suffixes now bind same-line only.
+  Parity: `b2_casts`, `b2_narrow_wrap` (ALL backends); integration:
+  `test_b2_int_types_all_backends`.
 
 ### Known deferred issues (found during work; not scheduled)
 - String arrays (`["a","b"]`) broken differently on all 3 backends (blocks `values()`).

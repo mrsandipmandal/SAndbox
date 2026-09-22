@@ -1,4 +1,5 @@
 use crate::ast::{Program, TopLevel};
+use crate::b2;
 use crate::codegen::CodeGen;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
@@ -161,7 +162,7 @@ impl Compiler {
         self.progress(&format!("  ✓ {} tokens", tokens.len()));
 
         self.progress("  → Parsing...");
-        let program = self.parse_with_vendors(&self.source, !self.quiet)?;
+        let mut program = self.parse_with_vendors(&self.source, !self.quiet)?;
         self.progress(&format!("  ✓ {} top-level items", program.items.len()));
         for (i, item) in program.items.iter().enumerate() {
             match item {
@@ -187,6 +188,7 @@ impl Compiler {
             checker = checker.quiet();
         }
         checker.check(&program)?;
+        b2::desugar_typed_stores(&mut program);
 
         self.progress("  → Generating C code...");
         let mut codegen = CodeGen::new();
@@ -198,9 +200,10 @@ impl Compiler {
 
     /// Compile without printing progress messages (for REPL)
     pub fn compile_quiet(&self) -> Result<String> {
-        let program = self.parse_with_vendors(&self.source, false)?;
+        let mut program = self.parse_with_vendors(&self.source, false)?;
         let mut checker = TypeChecker::new().quiet();
         checker.check(&program)?;
+        b2::desugar_typed_stores(&mut program);
         let mut codegen = CodeGen::new();
         let c_code = codegen.generate(&program, None);
         Ok(c_code)
@@ -215,7 +218,7 @@ impl Compiler {
         self.progress(&format!("  ✓ {} tokens", tokens.len()));
 
         self.progress("  → Parsing and loading vendors...");
-        let program = self.parse_with_vendors(&self.source, !self.quiet)?;
+        let mut program = self.parse_with_vendors(&self.source, !self.quiet)?;
 
         self.progress("  → Type checking...");
         let mut checker = TypeChecker::new();
@@ -223,6 +226,7 @@ impl Compiler {
             checker = checker.quiet();
         }
         checker.check(&program)?;
+        b2::desugar_typed_stores(&mut program);
 
         Ok(program)
     }
@@ -359,12 +363,13 @@ impl Compiler {
 
         println!("  → Parsing...");
         let mut parser = Parser::new(tokens).with_source(&self.source, &self.filename);
-        let program = parser.parse()?;
+        let mut program = parser.parse()?;
         println!("  ✓ {} top-level items", program.items.len());
 
         println!("  → Type checking...");
         let mut checker = TypeChecker::new();
         checker.check(&program)?;
+        b2::desugar_typed_stores(&mut program);
 
         println!("  → Generating C code...");
         let mut codegen = CodeGen::new();

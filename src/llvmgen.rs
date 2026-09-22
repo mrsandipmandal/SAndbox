@@ -1218,6 +1218,55 @@ impl LlvmGen {
     fn gen_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Int(n) => format!("{}", n),
+            Expr::Cast { expr, ty } => {
+                // B2: values live as i64 at rest in allocas and registers, so a
+                // cast materializes the target width's wrap as an i64 bit
+                // pattern. Unsigned truncation = shl+ashr trick; signed
+                // = sext from the truncated width; float→u64 goes via i64
+                // fptosi to match the C backend's i64-at-rest semantics.
+                let inner = self.gen_expr(expr);
+                if matches!(ty, Type::F64) {
+                    let t = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = sitofp {} {} to double",
+                        t,
+                        self.infer_llvm_type(expr),
+                        inner
+                    )
+                    .unwrap();
+                    t
+                } else if matches!(ty, Type::Int(_) | Type::I64) {
+                    // Legacy `as i64` is the same as a 64-bit Int target.
+                    let ty2 = match ty {
+                        Type::Int(t) => *t,
+                        _ => crate::ast::IntTy {
+                            bits: 64,
+                            signed: true,
+                        },
+                    };
+                    let ty2 = &ty2;
+                    let src_f64 = self.infer_llvm_type(expr) == "double";
+                    if src_f64 {
+                        // float → int: fptosi to i64 first (matches the C
+                        // backend's (long long) hop and the interpreter's
+                        // Float truncation), then wrap to the target width.
+                        let t = self.fresh_var();
+                        writeln!(self.output, "  {} = fptosi double {} to i64", t, inner).unwrap();
+                        if ty2.bits >= 64 {
+                            t
+                        } else {
+                            self.wrap_i64_to(t, ty2)
+                        }
+                    } else if ty2.bits >= 64 {
+                        inner // u64/i64: identity on the i64 bit pattern
+                    } else {
+                        self.wrap_i64_to(inner, ty2)
+                    }
+                } else {
+                    inner
+                }
+            }
             Expr::Float(n) => format!("{}", n),
             Expr::Bool(b) => {
                 if *b {
@@ -1494,7 +1543,13 @@ impl LlvmGen {
                 match op {
                     UnOp::Neg => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = sub {} 0, {}", result, ty, val).unwrap();
+                        if ty == "double" {
+                            // B2: float negation is fneg — `sub double 0, x`
+                            // is invalid IR (0 is an integer constant).
+                            writeln!(self.output, "  {} = fneg double {}", result, val).unwrap();
+                        } else {
+                            writeln!(self.output, "  {} = sub {} 0, {}", result, ty, val).unwrap();
+                        }
                         result
                     }
                     UnOp::Not => {
@@ -2561,6 +2616,13 @@ impl LlvmGen {
             Type::Fn(_, _) => "fn_ptr".to_string(),
             Type::Future(inner) => format!("Future_{}", Self::type_id(inner)),
             Type::TypeParam(name) => name.clone(),
+            Type::Int(t) => {
+                if t.signed {
+                    format!("i{}", t.bits)
+                } else {
+                    format!("u{}", t.bits)
+                }
+            }
         }
     }
 
@@ -2783,6 +2845,7 @@ impl LlvmGen {
             Type::String => "i8*".to_string(),
             Type::Void => "void".to_string(),
             Type::Money(_) | Type::Decimal | Type::Unit(_) => "i64".to_string(),
+            Type::Int(_) => "i64".to_string(), // B2: values live as i64 at rest
             Type::Array(_) => "i8*".to_string(),
             Type::Map(_, _) => "i8*".to_string(),
             Type::Custom { name, type_args } => {
@@ -2838,6 +2901,10 @@ impl LlvmGen {
                 }
             }
             Expr::MapLiteral(_) => "i8*".to_string(),
+            // B2 fix: array literals yield an `i64*` (the alloca register), so
+            // an un-annotated `let a = [..]` allocas a matching pointer slot
+            // and later `a[i]` GEPs type-check. (Was broken at HEAD too.)
+            Expr::ArrayLiteral(_) => "i64*".to_string(),
             Expr::BinaryOp {
                 op:
                     BinOp::Eq
@@ -2858,6 +2925,23 @@ impl LlvmGen {
                 ..
             } if matches!(self.infer_llvm_type(left).as_str(), "i8*" | "i8**") => "i8*".to_string(),
             Expr::BinaryOp { .. } => "i64".to_string(),
+            // B2: a unary op's register type matches its operand (fneg double
+            // yields double; sub i64 yields i64) — without this, casts of
+            // negated floats picked the wrong fptosi path.
+            Expr::UnaryOp { expr, .. } => self.infer_llvm_type(expr),
+            Expr::Cast { expr, ty } => {
+                // B2: match the Cast emission below — an Int target always
+                // produces an i64 register (identity or wrap), an F64 target
+                // always a double (sitofp); any other target is an identity
+                // pass-through of the source register type.
+                if matches!(ty, Type::F64) {
+                    "double".to_string()
+                } else if matches!(ty, Type::Int(_) | Type::I64) {
+                    "i64".to_string()
+                } else {
+                    self.infer_llvm_type(expr)
+                }
+            }
             Expr::StructLiteral {
                 name, type_args, ..
             } => {
@@ -3075,6 +3159,33 @@ impl LlvmGen {
             Expr::Ident(n) => self.map_vars.contains(n),
             Expr::Call { name, .. } => self.map_fns.contains(name),
             _ => false,
+        }
+    }
+
+    /// B2: wrap an i64 value to the width/sign of `t`, returning an i64 whose
+    /// bit pattern equals the wrapped value. Signed = trunc+sext; unsigned =
+    /// the shl/ashr trick.
+    fn wrap_i64_to(&mut self, v: String, t: &crate::ast::IntTy) -> String {
+        if t.signed {
+            let trunc = self.fresh_var();
+            writeln!(self.output, "  {} = trunc i64 {} to i{}", trunc, v, t.bits).unwrap();
+            let sext = self.fresh_var();
+            writeln!(
+                self.output,
+                "  {} = sext i{} {} to i64",
+                sext, t.bits, trunc
+            )
+            .unwrap();
+            sext
+        } else {
+            // Zero-extend the low bits: shl by (64-N) then *logical* shift
+            // right. ashr would sign-extend, giving -1 for `-1 as u8`.
+            let shift = 64 - t.bits as u32;
+            let shl = self.fresh_var();
+            writeln!(self.output, "  {} = shl i64 {}, {}", shl, v, shift).unwrap();
+            let lshr = self.fresh_var();
+            writeln!(self.output, "  {} = lshr i64 {}, {}", lshr, shl, shift).unwrap();
+            lshr
         }
     }
 

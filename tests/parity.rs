@@ -172,7 +172,10 @@ fn run_backend(backend: Backend, source: &str, workdir: &TempDir) -> Result<Stri
                 .output()
                 .map_err(|e| format!("spawn failed: {e}"))?;
             if !build.status.success() {
-                return Err("llvm-build failed".to_string());
+                return Err(format!(
+                    "llvm-build failed: {}",
+                    String::from_utf8_lossy(&build.stderr)
+                ));
             }
             if !bin_path.exists() {
                 return Err("llvm-build produced no binary".to_string());
@@ -270,6 +273,59 @@ fn a_shift_helper(v: i64, n: i64) -> i64 {
         // through unsigned long long so overflowing into the sign bit is
         // defined and matches LLVM ashr / the interpreter). Shifts bind
         // tighter than comparisons, looser than addition.
+        backends: ALL,
+    },
+    ParityCase {
+        name: "b2_casts",
+        source: r#"
+fn main() {
+    let a: u8 = 4294967296
+    print(a)
+    print(-1 as u8)
+    print(-1 as i8)
+    print(255 as i8)
+    print(200 as u8 + 100 as u8)
+    let big = 456 as u8
+    print(big)
+    print(big as i64)
+    print(-5 as u64)
+    print(2.9 as u8)
+    print(-2.5 as u8)
+    print(3.7 as i64)
+    let u = 7 as usize
+    print(u)
+}
+"#,
+        // B2: `as` casts and typed stores wrap to the target width at every
+        // store point (let, arithmetic operand promotion, float truncation).
+        // Narrow values live as i64 at rest, so an unsigned wrap prints as
+        // its signed bit pattern (255 → -1 becomes +255 for u8; -5 as u64
+        // stays -5 when read back through i64).
+        backends: ALL,
+    },
+    ParityCase {
+        name: "b2_narrow_wrap",
+        source: r#"
+fn clamp8(x: i16) -> i16 {
+    return x * 1000
+}
+fn main() {
+    print(clamp8(100))
+    print(clamp8(40))
+    let m: u32 = 4000000000
+    m = m + 1000000000
+    print(m)
+    let s: i8 = 100
+    s = s + 100
+    print(s)
+    let z: usize = -1
+    print(z)
+}
+"#,
+        // B2: wrapping happens at function returns, parameter bindings and
+        // re-assignment, not just `let` — 100000 → -31072 (i16), 5000000000
+        // → 705032704 (u32), 200 → -56 (i8). usize is a 64-bit unsigned
+        // wrap, so -1 stays -1 in the i64-at-rest repr.
         backends: ALL,
     },
     ParityCase {

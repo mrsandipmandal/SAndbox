@@ -228,13 +228,29 @@ impl WasmGen {
         writeln!(self.output).unwrap();
         self.indent += 1;
 
-        // Local variables
-        self.write_indent();
-        writeln!(self.output, "(local $temp i64)").unwrap();
+        // Local variables: params are already declared; then declare every
+        // let/assign-bound name (collected recursively so nested if/while
+        // bodies get theirs too).
+        let mut locals: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+        Self::collect_locals(body, &mut locals);
+        for name in &locals[params.len()..] {
+            self.write_indent();
+            writeln!(self.output, "(local ${} i64)", name).unwrap();
+        }
 
         // Function body
         for stmt in body {
             self.gen_wasm_stmt(stmt);
+        }
+
+        // A function with a result must deliver it on every path to the end.
+        // Bodies whose control flow ends without a trailing (return) — e.g. a
+        // value-yielding `if` whose branches both return — still reach the
+        // end in reachable validation state, so pin the end with (unreachable):
+        // it is dead code on real paths and traps on impossible fall-through.
+        if ret.is_some() && !ends_with_return(body) {
+            self.write_indent();
+            writeln!(self.output, "(unreachable)").unwrap();
         }
 
         self.indent -= 1;
@@ -250,20 +266,56 @@ impl WasmGen {
         writeln!(self.output).unwrap();
     }
 
+    /// Collect the names bound by `let`/`assign` statements (recursively
+    /// through if/while/for bodies) so they can be declared as wasm locals.
+    /// Named wasm locals are function-scoped, so shadowing declarations fold
+    /// into one local with assignment semantics.
+    fn collect_locals(stmts: &[Stmt], locals: &mut Vec<String>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { name, .. } | Stmt::Assign { name, .. } => {
+                    if !locals.contains(name) {
+                        locals.push(name.clone());
+                    }
+                }
+                Stmt::If { then, else_, .. } => {
+                    Self::collect_locals(then, locals);
+                    if let Some(else_body) = else_ {
+                        Self::collect_locals(else_body, locals);
+                    }
+                }
+                Stmt::IfLet { then, else_, .. } => {
+                    Self::collect_locals(then, locals);
+                    if let Some(else_body) = else_ {
+                        Self::collect_locals(else_body, locals);
+                    }
+                }
+                Stmt::While { body, .. } => Self::collect_locals(body, locals),
+                Stmt::For { variable, body, .. } => {
+                    if !locals.contains(variable) {
+                        locals.push(variable.clone());
+                    }
+                    Self::collect_locals(body, locals);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn gen_wasm_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { value, .. } => {
+            Stmt::Let { name, value, .. } => {
                 self.write_indent();
-                writeln!(self.output, "(local.set $temp").unwrap();
+                writeln!(self.output, "(local.set ${}", name).unwrap();
                 self.indent += 1;
                 self.gen_wasm_expr(value);
                 self.indent -= 1;
                 self.write_indent();
                 writeln!(self.output, ")").unwrap();
             }
-            Stmt::Assign { value, .. } => {
+            Stmt::Assign { name, value } => {
                 self.write_indent();
-                writeln!(self.output, "(local.set $temp").unwrap();
+                writeln!(self.output, "(local.set ${}", name).unwrap();
                 self.indent += 1;
                 self.gen_wasm_expr(value);
                 self.indent -= 1;
@@ -279,7 +331,7 @@ impl WasmGen {
                 writeln!(self.output, "(if").unwrap();
                 self.indent += 1;
                 // Condition
-                self.gen_wasm_expr(condition);
+                self.gen_wasm_cond(condition);
                 self.write_indent();
                 writeln!(self.output, "(then").unwrap();
                 self.indent += 1;
@@ -312,14 +364,18 @@ impl WasmGen {
                 writeln!(self.output, "(loop $continue").unwrap();
                 self.indent += 1;
 
-                // Condition check
+                // Condition check — gen_wasm_cond yields i32; invert it
+                // for br_if (break when the condition is false).
                 self.write_indent();
                 writeln!(self.output, "(br_if $break").unwrap();
                 self.indent += 1;
-                self.gen_wasm_expr(condition);
-                // Invert condition for br_if (break when condition is false)
                 self.write_indent();
-                writeln!(self.output, "(i64.eqz)").unwrap();
+                writeln!(self.output, "(i32.eqz").unwrap();
+                self.indent += 1;
+                self.gen_wasm_cond(condition);
+                self.indent -= 1;
+                self.write_indent();
+                writeln!(self.output, ")").unwrap();
                 self.indent -= 1;
                 self.write_indent();
                 writeln!(self.output, ")").unwrap();
@@ -340,14 +396,112 @@ impl WasmGen {
                 self.write_indent();
                 writeln!(self.output, ")").unwrap();
             }
-            Stmt::For { body, .. } => {
-                // Simplified: just unroll for now
-                for s in body {
-                    self.gen_wasm_stmt(s);
+            Stmt::For {
+                variable,
+                iterable,
+                body,
+            } => {
+                // Range iteration is lowered to a while-style loop with the
+                // increment outside the continue-target block, so `continue`
+                // still advances the counter. Array/string iteration is not
+                // supported in the wasm backend (documented parity gap).
+                if let Expr::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = iterable
+                {
+                    // i = start
+                    self.write_indent();
+                    writeln!(self.output, "(local.set ${}", variable).unwrap();
+                    self.indent += 1;
+                    self.gen_wasm_expr(start);
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+
+                    self.write_indent();
+                    writeln!(self.output, "(block $break").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "(loop $top").unwrap();
+                    self.indent += 1;
+
+                    // br_if $break when !(i < end) (or !(i <= end) inclusive)
+                    self.write_indent();
+                    writeln!(self.output, "(br_if $break").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "(i32.eqz").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    if *inclusive {
+                        writeln!(self.output, "(i64.le_s").unwrap();
+                    } else {
+                        writeln!(self.output, "(i64.lt_s").unwrap();
+                    }
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "(local.get ${})", variable).unwrap();
+                    self.gen_wasm_expr(end);
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+
+                    // body inside a $continue block: `continue` exits here,
+                    // falling through to the increment.
+                    self.write_indent();
+                    writeln!(self.output, "(block $continue").unwrap();
+                    self.indent += 1;
+                    for s in body {
+                        self.gen_wasm_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+
+                    // i = i + 1; br $top
+                    self.write_indent();
+                    writeln!(self.output, "(local.set ${}", variable).unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "(i64.add").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "(local.get ${})", variable).unwrap();
+                    self.write_indent();
+                    writeln!(self.output, "(i64.const 1)").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+
+                    self.write_indent();
+                    writeln!(self.output, "(br $top)").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
                 }
             }
-            Stmt::Break => {}
-            Stmt::Continue => {}
+            Stmt::Break => {
+                self.write_indent();
+                writeln!(self.output, "(br $break)").unwrap();
+            }
+            Stmt::Continue => {
+                self.write_indent();
+                writeln!(self.output, "(br $continue)").unwrap();
+            }
             Stmt::Return(Some(expr)) => {
                 self.write_indent();
                 self.gen_wasm_expr(expr);
@@ -368,13 +522,91 @@ impl WasmGen {
                 writeln!(self.output, ")").unwrap();
             }
             Stmt::ExprStmt(expr) => {
+                // Statement-position expression: its value is discarded here.
+                // (C treats a function's *last* ExprStmt as an implicit return;
+                // that rule is applied uniformly in the compiler front-end, not
+                // per-backend, so wasmgen never sees one in return position.)
                 self.write_indent();
+                writeln!(self.output, "(drop").unwrap();
+                self.indent += 1;
                 self.gen_wasm_expr(expr);
+                self.indent -= 1;
+                self.write_indent();
+                writeln!(self.output, ")").unwrap();
             }
             Stmt::IfLet { .. } => {
                 // Simplified: skip for WASM backend
             }
         }
+    }
+
+    /// Emit the i64 source of a cast, truncating float literals first.
+    /// Handles `Float` and `-Float` (post-cast-precedence the desugar can
+    /// produce); any other shape is already an i64-valued expression.
+    fn gen_wasm_cast_source(&mut self, expr: &Expr) {
+        let negate;
+        let inner = match expr {
+            Expr::Float(n) => {
+                negate = false;
+                *n
+            }
+            Expr::UnaryOp {
+                op: UnOp::Neg,
+                expr: inner,
+            } => match inner.as_ref() {
+                Expr::Float(n) => {
+                    negate = true;
+                    *n
+                }
+                _ => {
+                    self.gen_wasm_expr(expr);
+                    return;
+                }
+            },
+            _ => {
+                self.gen_wasm_expr(expr);
+                return;
+            }
+        };
+        let value = if negate { -inner } else { inner };
+        self.write_indent();
+        writeln!(self.output, "(i64.trunc_f64_s").unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(self.output, "(f64.const {})", value).unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+    }
+
+    /// Emit an i32 condition for if/while. Comparison operands produce i32
+    /// directly; any other i64-valued expression is truth-tested with a
+    /// non-zero compare.
+    fn gen_wasm_cond(&mut self, expr: &Expr) {
+        if let Expr::BinaryOp { op, left, right } = expr {
+            if is_comparison(op) {
+                let op_name = self.wasm_op(op).to_string();
+                self.write_indent();
+                writeln!(self.output, "(i64.{}", op_name).unwrap();
+                self.indent += 1;
+                self.gen_wasm_expr(left);
+                self.gen_wasm_expr(right);
+                self.indent -= 1;
+                self.write_indent();
+                writeln!(self.output, ")").unwrap();
+                return;
+            }
+        }
+        // Truthiness: non-zero means true.
+        self.write_indent();
+        writeln!(self.output, "(i64.ne").unwrap();
+        self.indent += 1;
+        self.gen_wasm_expr(expr);
+        self.write_indent();
+        writeln!(self.output, "(i64.const 0)").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
     }
 
     fn gen_wasm_expr(&mut self, expr: &Expr) {
@@ -384,23 +616,42 @@ impl WasmGen {
                 writeln!(self.output, "(i64.const {})", n).unwrap();
             }
             Expr::Cast { expr, ty } => {
-                // B2: mirror the i64-at-rest wrap (shl/ashr trick for unsigned,
-                // sign-extension already natural in i64 for signed).
-                self.gen_wasm_expr(expr);
-                if let Type::Int(t) = ty {
-                    if t.bits < 64 {
+                // B2: mirror the i64-at-rest wrap. Float sources truncate
+                // first (like the C backend's always-defined `(long long)`
+                // two-step, truncation toward zero); everything else is
+                // already i64. The wrap is fully nested folded WAT — flat
+                // siblings inside a parent call/local.set parens would be
+                // parsed as extra operands.
+                match ty {
+                    // Narrow int target: wrap. Any 64-bit or non-int target
+                    // (e.g. legacy `Type::I64`) is an identity — the value is
+                    // already a full i64 in wasm — but must still emit the
+                    // source expression, or the operand stack is left empty.
+                    Type::Int(t) if t.bits < 64 => {
                         let shift = 64 - t.bits as i64;
                         self.write_indent();
-                        writeln!(self.output, "(i64.shl)").unwrap();
+                        if t.signed {
+                            writeln!(self.output, "(i64.shr_s").unwrap();
+                        } else {
+                            writeln!(self.output, "(i64.shr_u").unwrap();
+                        }
+                        self.indent += 1;
+                        self.write_indent();
+                        writeln!(self.output, "(i64.shl").unwrap();
+                        self.indent += 1;
+                        self.gen_wasm_cast_source(expr);
                         self.write_indent();
                         writeln!(self.output, "(i64.const {})", shift).unwrap();
+                        self.indent -= 1;
                         self.write_indent();
-                        if t.signed {
-                            writeln!(self.output, "(i64.shr_s)").unwrap();
-                        } else {
-                            writeln!(self.output, "(i64.shr_u)").unwrap();
-                        }
+                        writeln!(self.output, ")").unwrap();
+                        self.write_indent();
+                        writeln!(self.output, "(i64.const {})", shift).unwrap();
+                        self.indent -= 1;
+                        self.write_indent();
+                        writeln!(self.output, ")").unwrap();
                     }
+                    _ => self.gen_wasm_cast_source(expr),
                 }
             }
             Expr::Float(n) => {
@@ -458,6 +709,12 @@ impl WasmGen {
                 self.indent -= 1;
                 self.write_indent();
                 writeln!(self.output, ")").unwrap();
+                // Comparisons produce i32 in wasm; extend back to the i64
+                // value representation so results are printable/storable.
+                if is_comparison(op) {
+                    self.write_indent();
+                    writeln!(self.output, "(i64.extend_i32_u)").unwrap();
+                }
             }
             Expr::UnaryOp { op, expr } => match op {
                 UnOp::Neg => {
@@ -472,10 +729,18 @@ impl WasmGen {
                     writeln!(self.output, ")").unwrap();
                 }
                 UnOp::Not => {
+                    // i64.eqz yields i32; value position needs i64, so
+                    // zero-extend the boolean back up.
+                    self.write_indent();
+                    writeln!(self.output, "(i64.extend_i32_u").unwrap();
+                    self.indent += 1;
                     self.write_indent();
                     writeln!(self.output, "(i64.eqz").unwrap();
                     self.indent += 1;
                     self.gen_wasm_expr(expr);
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, ")").unwrap();
@@ -564,4 +829,24 @@ impl WasmGen {
             write!(self.output, "  ").unwrap();
         }
     }
+}
+
+/// Does this statement list provably end in a `return` on every path?
+/// Used to decide whether a result-producing function needs a trailing
+/// `(unreachable)` to satisfy the wasm validator.
+/// Does this statement list literally end in a `return`? Note an `if` whose
+/// branches all return does NOT count: the if-instruction itself still
+/// completes on the straight-line path, so the function end remains reachable
+/// and needs `(unreachable)` under the validator.
+fn ends_with_return(stmts: &[Stmt]) -> bool {
+    matches!(stmts.last(), Some(Stmt::Return(_)))
+}
+
+/// Comparison operators: wasm emits these as i32-valued results, unlike the
+/// arithmetic/bitwise ops which stay i64.
+fn is_comparison(op: &BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+    )
 }

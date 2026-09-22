@@ -139,6 +139,35 @@ docs/explanations: **English**.
   + others failed to re-assign); unit suffixes now bind same-line only.
   Parity: `b2_casts`, `b2_narrow_wrap` (ALL backends); integration:
   `test_b2_int_types_all_backends`.
+- [x] **B3. Wasm backend parity (integer programs)**
+  *(Done 2026-09-22.)* The wasm backend went from compile-only prototype to a
+  fourth executable backend: real locals (collect_locals declares every
+  let/assign-bound name; params keep their names), named local.set/get,
+  nested folded-WAT narrow-wrap on stores, `f64.trunc_f64_s` float-source
+  casts (Cast-to-i64 emits the source identity — emitting nothing left the
+  stack empty), range `for` (`..`/`..=`) with break/continue via labeled
+  block/loop + BREAK/CONTINUE sentinels, i32 comparisons in condition
+  position (`gen_wasm_cond`; truthiness = `i64.ne 0`) vs i64-extended
+  comparisons in value position (`!x` = `extend_i32_u(i64.eqz)`).
+  Validator subtlety: a result fn whose body ends in a value-if (branches
+  return) still reaches the end in reachable state → trailing `(unreachable)`
+  (`ends_with_return` matches literal trailing Return only).
+  **SHARED FRONT-END PASS** (`b2::implicit_returns`, wired into every
+  pipeline incl. interpreter): fns WITH a declared return type get trailing
+  ExprStmt → explicit `return`, and a trailing value-yielding `if` (both
+  branches) gets branch-level explicit returns — the language's recursion
+  idiom now returns real values on all backends (fact/fib were 0 before).
+  Ungated in unannotated fns it broke real programs (`return void_call()`
+  doesn't compile in C) — has_ret gate is load-bearing.
+  INTERPRETER FIXES: `for` over a Range iterated `0..count`, dropping the
+  start (`1..=3` printed 0,1,2) — loop destructures the Range bounds now.
+  Runner: `scripts/runwasm.mjs` (node; stubs console.log(i64), calls main);
+  needs wabt's wat2wasm. Parity harness gains `Backend::Wasm` (skip with
+  NOTE when wat2wasm/node missing; ci.yml parity job installs wabt).
+  WASM GAPS (allowlist, documented in tests/parity.rs): strings (invalid WAT
+  on print(str)), arrays/maps/structs, match arms never execute, bool
+  literals print 1/0, lambdas. Parity: 11 integer cases ALL_INT incl. new
+  `recursion` (fact+fib).
 
 ### Known deferred issues (found during work; not scheduled)
 - String arrays (`["a","b"]`) broken differently on all 3 backends (blocks `values()`).

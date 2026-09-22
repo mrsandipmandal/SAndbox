@@ -135,13 +135,19 @@ jobs:
 
   # ── Backend Parity ──────────────────────────────────────────────────────────
   parity:
-    name: Backend Parity (C / LLVM / interpreter)
+    name: Backend Parity (C / LLVM / interpreter / wasm)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wabt (wat2wasm) for wasm backend parity
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wabt
+          wat2wasm --version
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4

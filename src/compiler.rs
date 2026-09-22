@@ -189,6 +189,7 @@ impl Compiler {
         }
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
+        b2::implicit_returns(&mut program);
 
         self.progress("  → Generating C code...");
         let mut codegen = CodeGen::new();
@@ -204,6 +205,7 @@ impl Compiler {
         let mut checker = TypeChecker::new().quiet();
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
+        b2::implicit_returns(&mut program);
         let mut codegen = CodeGen::new();
         let c_code = codegen.generate(&program, None);
         Ok(c_code)
@@ -227,6 +229,7 @@ impl Compiler {
         }
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
+        b2::implicit_returns(&mut program);
 
         Ok(program)
     }
@@ -370,6 +373,7 @@ impl Compiler {
         let mut checker = TypeChecker::new();
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
+        b2::implicit_returns(&mut program);
 
         println!("  → Generating C code...");
         let mut codegen = CodeGen::new();

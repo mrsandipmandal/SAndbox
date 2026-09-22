@@ -80,6 +80,12 @@ require_cmd cargo
 require_cmd gcc
 require_cmd python3
 
+# Optional but recommended: wabt enables the wasm backend in the parity gate.
+# Without it the wasm cases are skipped with a NOTE (harness handles this).
+if ! command -v wat2wasm >/dev/null 2>&1; then
+  echo "note: wat2wasm not found — wasm parity cases will be skipped (apt install wabt)"
+fi
+
 # ── Gate 1: check (fmt + clippy + build + tests) ────────────────────────────
 run_gate "cargo fmt"        cargo fmt --all -- --check
 run_gate "cargo clippy"     cargo clippy --all-targets -- -D warnings

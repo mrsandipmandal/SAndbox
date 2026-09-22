@@ -315,6 +315,85 @@ fn rewrite_all(exprs: &[Expr], vars: &HashMap<String, Type>, ret: &Type) -> Vec<
     exprs.iter().map(|e| rewrite_expr(e, vars, ret)).collect()
 }
 
+/// C-backend semantics, made shared: a function whose final statement is an
+/// expression statement returns that expression's value. Desugar it into an
+/// explicit `return` so every backend (C, LLVM, interpreter, wasm) agrees.
+/// Runs after type checking, alongside the typed-store desugar.
+pub fn implicit_returns(program: &mut Program) {
+    for item in program.items.iter_mut() {
+        match item {
+            TopLevel::FnDef { body, ret, .. } => {
+                // Only fns with a declared return type get the implicit-return
+                // rewrite: in unannotated fns the C backend may emit the final
+                // call as a void statement, where `return <void call>` would
+                // not compile.
+                make_last_stmt_return(body, ret.is_some());
+                make_value_if_return(body, ret.is_some());
+            }
+            TopLevel::ImplDef { methods, .. } => {
+                for m in methods.iter_mut() {
+                    if let TopLevel::FnDef { body, ret, .. } = m {
+                        make_last_stmt_return(body, ret.is_some());
+                        make_value_if_return(body, ret.is_some());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn make_last_stmt_return(body: &mut Vec<Stmt>, has_ret: bool) {
+    if !has_ret {
+        return;
+    }
+    if let Some(Stmt::ExprStmt(_)) = body.last() {
+        if let Some(Stmt::ExprStmt(e)) = body.pop() {
+            body.push(Stmt::Return(Some(e)));
+        }
+    }
+}
+
+/// A trailing `if` statement whose branches both produce values is a value-yielding
+/// conditional (the only recursion-friendly form the language has, since there is
+/// no `Expr::If`). With a declared return type, rewrite each branch's final
+/// value-yielding statement into an explicit `return` so every backend agrees.
+fn make_value_if_return(body: &mut [Stmt], has_ret: bool) {
+    if !has_ret {
+        return;
+    }
+    let Some(Stmt::If { then, else_, .. }) = body.last_mut() else {
+        return;
+    };
+    let Some(else_body) = else_ else {
+        return;
+    };
+    if force_return(then) {
+        force_return(else_body);
+    }
+}
+
+/// Convert the final value-yielding statement of a branch into `return`.
+/// Returns false when the branch does not (or cannot) produce a trailing value,
+/// in which case the whole rewrite is abandoned.
+fn force_return(branch: &mut Vec<Stmt>) -> bool {
+    match branch.last_mut() {
+        Some(Stmt::ExprStmt(_)) => {
+            if let Some(Stmt::ExprStmt(e)) = branch.pop() {
+                branch.push(Stmt::Return(Some(e)));
+            }
+            true
+        }
+        Some(Stmt::If { then, else_, .. }) => {
+            let Some(else_body) = else_ else {
+                return false;
+            };
+            force_return(then) && force_return(else_body)
+        }
+        _ => false,
+    }
+}
+
 /// A typed store for a narrow int: wrap via the same cast `as` produces.
 fn wrap_store(value: Expr, ty: &Type) -> Expr {
     Expr::Cast {

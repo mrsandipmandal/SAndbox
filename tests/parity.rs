@@ -10,9 +10,10 @@
 //! *regression* — a backend that used to match now differs, or a new
 //! mismatch on a program tagged as fully supported.
 //!
-//! WASM is compile-only today (`sandbox wasm` emits .wat; no wat2wasm /
-//! wasm runtime is wired), so it is exercised for *compilation success*
-//! only, not output parity.
+//! WASM is a full output backend when tooling is available: `sandbox wasm`
+//! emits .wat, wat2wasm assembles it, and `node scripts/runwasm.mjs` runs
+//! it. When wat2wasm (wabt) or node is missing, wasm cases are SKIPPED with
+//! a note rather than failed, so local runs without wabt still pass.
 
 use std::fs;
 use std::process::{Command, Output};
@@ -105,7 +106,7 @@ fn run_with_timeout(mut cmd: Command, timeout: std::time::Duration) -> Option<Ou
     })
 }
 
-/// The three backends that produce observable program output.
+/// The backends that produce observable program output.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Backend {
     /// C codegen (`sandbox run`)
@@ -114,6 +115,9 @@ enum Backend {
     Llvm,
     /// Tree-walking interpreter (`sandbox interpret`)
     Interp,
+    /// WebAssembly (`sandbox wasm` + wat2wasm + node scripts/runwasm.mjs);
+    /// requires the wabt toolchain and node, skipped when unavailable.
+    Wasm,
 }
 
 impl Backend {
@@ -122,6 +126,7 @@ impl Backend {
             Backend::C => "C",
             Backend::Llvm => "LLVM",
             Backend::Interp => "interpreter",
+            Backend::Wasm => "wasm",
         }
     }
 }
@@ -136,6 +141,7 @@ fn run_backend(backend: Backend, source: &str, workdir: &TempDir) -> Result<Stri
             Backend::C => "c",
             Backend::Llvm => "llvm",
             Backend::Interp => "interp",
+            Backend::Wasm => "wasm",
         }
     ));
     fs::write(&sbx_path, source).map_err(|e| format!("write failed: {e}"))?;
@@ -191,7 +197,76 @@ fn run_backend(backend: Backend, source: &str, workdir: &TempDir) -> Result<Stri
             .ok_or_else(|| "execution timed out".to_string())?;
             Ok(filter_output(&String::from_utf8_lossy(&run.stdout)))
         }
+        Backend::Wasm => run_wasm_backend(source, workdir),
     }
+}
+
+/// Is the wasm execution toolchain available (wat2wasm on PATH + node)?
+fn wasm_toolchain_available() -> bool {
+    let wat2wasm = Command::new("wat2wasm").arg("--version").output();
+    let node = Command::new("node").arg("--version").output();
+    matches!((wat2wasm, node),
+        (Ok(w), Ok(n)) if w.status.success() && n.status.success())
+}
+
+/// Execute a wasm program: sandbox wasm → wat2wasm → node scripts/runwasm.mjs.
+fn run_wasm_backend(source: &str, workdir: &TempDir) -> Result<String, String> {
+    let bin = sandbox_bin();
+    let sbx_path = workdir.path().join("prog_wasm.sbx");
+    let wat_path = workdir.path().join("prog.wat");
+    let wasm_path = workdir.path().join("prog.wasm");
+    fs::write(&sbx_path, source).map_err(|e| format!("write failed: {e}"))?;
+
+    let gen = Command::new(&bin)
+        .args([
+            "wasm",
+            sbx_path.to_str().unwrap(),
+            "-o",
+            wat_path.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|e| format!("spawn failed: {e}"))?;
+    if !gen.status.success() {
+        return Err(format!(
+            "wasm exited {}: {}",
+            gen.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&gen.stderr)
+        ));
+    }
+
+    let asm = Command::new("wat2wasm")
+        .args([
+            wat_path.to_str().unwrap(),
+            "-o",
+            wasm_path.to_str().unwrap(),
+        ])
+        .output()
+        .map_err(|_| "wat2wasm not found".to_string())?;
+    if !asm.status.success() {
+        return Err(format!(
+            "wat2wasm failed: {}",
+            String::from_utf8_lossy(&asm.stderr)
+        ));
+    }
+
+    let runner = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/runwasm.mjs");
+    let run = run_with_timeout(
+        {
+            let mut c = Command::new("node");
+            c.arg(runner).arg(wasm_path.to_str().unwrap());
+            c
+        },
+        std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+    )
+    .ok_or_else(|| "wasm execution timed out".to_string())?;
+    if !run.status.success() {
+        return Err(format!(
+            "node runner exited {}: {}",
+            run.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&run.stderr)
+        ));
+    }
+    Ok(filter_output(&String::from_utf8_lossy(&run.stdout)))
 }
 
 /// Compile-only check for the WASM backend (.wat emission).
@@ -229,10 +304,23 @@ struct ParityCase {
     backends: &'static [Backend],
 }
 
-const ALL: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp];
 const C_AND_INTERP: &[Backend] = &[Backend::C, Backend::Interp];
 const C_ONLY: &[Backend] = &[Backend::C];
 const LLVM_ONLY: &[Backend] = &[Backend::Llvm];
+/// Integer-only programs the wasm backend also runs identically.
+const C_INTERP_WASM: &[Backend] = &[Backend::C, Backend::Interp, Backend::Wasm];
+/// Integer programs across every backend, wasm included.
+const ALL_INT: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp, Backend::Wasm];
+// Known wasm-backend gaps (cases demoted to C_AND_INTERP; closing one means
+// implementing it in src/wasmgen.rs and widening the tag):
+//   - strings: no string codegen (print(str) emits invalid WAT) → method_*,
+//     str_methods, fstring, json_string_*, a4_* , http_* cases
+//   - arrays/maps/structs: no heap data types → for_over_array*,
+//     map_basics, map_filter_reduce, struct_field_access, shadow_mfr_chain
+//   - match arms: `match` compiles but never executes its arm →
+//     match_int_literal, match_guard, enum_match, enum_payload
+//   - bool literals print 1/0 instead of true/false → bool_logic
+//   - lambdas/closures: not implemented → lambda_expr, lambda_capture
 
 const CORPUS: &[ParityCase] = &[
     ParityCase {
@@ -252,7 +340,7 @@ fn main() {
 "#,
         // B1: & | ^ ~ on two's-complement i64 — identical results across
         // C (operators), LLVM (and/or/xor), and the interpreter (Rust ops).
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "shift_ops",
@@ -273,7 +361,7 @@ fn a_shift_helper(v: i64, n: i64) -> i64 {
         // through unsigned long long so overflowing into the sign bit is
         // defined and matches LLVM ashr / the interpreter). Shifts bind
         // tighter than comparisons, looser than addition.
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "b2_casts",
@@ -301,7 +389,7 @@ fn main() {
         // Narrow values live as i64 at rest, so an unsigned wrap prints as
         // its signed bit pattern (255 → -1 becomes +255 for u8; -5 as u64
         // stays -5 when read back through i64).
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "b2_narrow_wrap",
@@ -326,7 +414,7 @@ fn main() {
         // re-assignment, not just `let` — 100000 → -31072 (i16), 5000000000
         // → 705032704 (u32), 200 → -56 (i8). usize is a 64-bit unsigned
         // wrap, so -1 stays -1 in the i64-at-rest repr.
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "method_string",
@@ -389,7 +477,7 @@ fn main() {
     print(17 % 5)
 }
 "#,
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "bool_logic",
@@ -420,7 +508,26 @@ fn main() {
     print(double(double(3)))
 }
 "#,
-        backends: ALL,
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "recursion",
+        source: r#"
+fn fact(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+fn fib(n: i64) -> i64 {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+fn main() {
+    print(fact(10))
+    print(fib(15))
+}
+"#,
+        // Value-yielding trailing `if` — the language's recursion idiom,
+        // desugared to explicit returns by the shared front-end pass — must
+        // agree everywhere, including wasm's validator-strict codegen.
+        backends: ALL_INT,
     },
     ParityCase {
         name: "if_else_chain",
@@ -441,7 +548,7 @@ fn main() {
     }
 }
 "#,
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "while_loop",
@@ -455,7 +562,7 @@ fn main() {
 }
 "#,
         // Known gap: LLVM while-loop variable update emits stale values.
-        backends: C_AND_INTERP,
+        backends: C_INTERP_WASM,
     },
     ParityCase {
         name: "for_range",
@@ -466,7 +573,7 @@ fn main() {
     }
 }
 "#,
-        backends: ALL,
+        backends: ALL_INT,
     },
     ParityCase {
         name: "for_over_array",
@@ -492,7 +599,7 @@ fn main() {
         // All backends must agree: for-in over an array literal was a
         // silent no-op in the interpreter and invalid IR in LLVM until
         // literal iteration was implemented in both.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "for_in_array_break_continue",
@@ -512,7 +619,7 @@ fn main() {
 "#,
         // All backends must agree: the C backend used to unroll array-literal
         // iteration, so break/continue failed to compile ("not within a loop").
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "map_basics",
@@ -555,7 +662,7 @@ fn main() {
         // All backends must agree: maps (map<string, i64>) are a new type —
         // literal, index, insert/get/has/remove/keys/len, empty literal, fn
         // args/returns, by-reference mutation, and string-variable keys.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "http_url_decode",
@@ -569,7 +676,7 @@ fn main() {
 "#,
         // A3: percent-decoding + '+'→space, pure helper. All backends agree
         // on decode semantics including %2F (%2f uppercase hex) etc.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "http_query_params",
@@ -587,7 +694,7 @@ fn main() {
 "#,
         // A3: value extraction from a query string — present, numeric,
         // valueless ("="), bare flag, absent, and percent-decoded values.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "http_form_parse",
@@ -604,7 +711,7 @@ fn main() {
 "#,
         // A3: form-encoded body parsing ('+'→space in values), mirroring
         // query_param semantics — same pair grammar, different source.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "a4_html_escape",
@@ -621,7 +728,7 @@ fn main() {
 "#,
         // A4: HTML escaping round-trips; numeric + named entity decoding;
         // unknown entities pass through untouched.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "a4_tmpl_render",
@@ -636,7 +743,7 @@ fn main() {
 "#,
         // A4: %{key} substitution — repeated keys, unknown keys left as-is,
         // templates without placeholders untouched.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "a4_cookie_get",
@@ -651,7 +758,7 @@ fn main() {
 }
 "#,
         // A4: Cookie header parsing (RFC 6265 '; '-separated pairs).
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "json_parse_basics",
@@ -676,7 +783,7 @@ fn main() {
         // numeric fields, true/false/null mapping (1/0/0), string-field
         // skipping, insertion order through stringify, and get_int on
         // negative numbers.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "json_stringify_roundtrip",
@@ -701,7 +808,7 @@ fn main() {
         // A2: map → JSON text → map roundtrip preserves order and values;
         // array literals stringify as [1,2,3]; array element access is
         // bounds-safe (out of range → 0). All backends must agree.
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "json_string_fields",
@@ -766,7 +873,7 @@ fn main() {
     print(p.x + p.y)
 }
 "#,
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "lambda_expr",
@@ -802,7 +909,7 @@ fn main() {
     print(r)
 }
 "#,
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "match_guard",
@@ -838,7 +945,7 @@ fn main() {
     print(r)
 }
 "#,
-        backends: ALL,
+        backends: C_AND_INTERP,
     },
     ParityCase {
         name: "enum_payload",
@@ -943,7 +1050,7 @@ fn main() {
     }
 }
 "#,
-        backends: C_AND_INTERP,
+        backends: C_INTERP_WASM,
     },
     ParityCase {
         name: "str_methods",
@@ -967,6 +1074,7 @@ fn parity_all_backends_agree() {
 
     let mut failures: Vec<String> = Vec::new();
     let mut ran = 0usize;
+    let wasm_available = wasm_toolchain_available();
 
     for case in CORPUS {
         // WASM: compile-only smoke for every case.
@@ -976,6 +1084,13 @@ fn parity_all_backends_agree() {
         }
 
         for &backend in case.backends {
+            if backend == Backend::Wasm && !wasm_available {
+                println!(
+                    "NOTE: skipping [{}] — wat2wasm/node not available (install wabt)",
+                    case.name
+                );
+                continue;
+            }
             ran += 1;
             let dir = TempDir::new().unwrap();
             match run_backend(backend, case.source, &dir) {

@@ -1103,6 +1103,7 @@ pub fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
     let mut parser = parser::Parser::new(tokens).with_source(source, filename);
     let mut program = parser.parse()?;
     crate::b2::desugar_typed_stores(&mut program);
+    crate::b2::implicit_returns(&mut program);
 
     let mut state = InterpreterState::new();
     for item in &program.items {
@@ -1525,9 +1526,23 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                         continue;
                     }
                 }
-                // Regular numeric range
-                let count = eval_expr(iterable, state)?;
-                for i in 0..count {
+                // Regular numeric range. A Range expression evaluates to its
+                // element count in value position; loop position needs the
+                // actual bounds, so destructure it directly.
+                let (range_start, range_count) = match iterable {
+                    ast::Expr::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } => {
+                        let s = eval_expr(start, state)?;
+                        let e = eval_expr(end, state)?;
+                        let c = if *inclusive { e - s + 1 } else { e - s };
+                        (s, if c > 0 { c } else { 0 })
+                    }
+                    _ => (0, eval_expr(iterable, state)?),
+                };
+                for i in range_start..range_start + range_count {
                     state.vars.insert(variable.clone(), i);
                     match exec_block(body, state)? {
                         Some(BREAK_SENTINEL) => break,

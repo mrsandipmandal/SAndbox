@@ -2562,13 +2562,16 @@ impl CodeGen {
                 if matches!(ty, Type::F64) {
                     format!("((double)({}))", inner)
                 } else if let Type::Int(t) = ty {
-                    if !t.signed && t.bits >= 64 {
-                        let src_f64 = matches!(self.infer_c_type(expr).as_str(), "double");
-                        if src_f64 {
-                            format!("((long long)({}))", inner)
-                        } else {
-                            inner // identity: already the i64-at-rest bit pattern
-                        }
+                    let src_f64 = matches!(self.infer_c_type(expr).as_str(), "double");
+                    if src_f64 {
+                        // Float sources: (long long) first — the i64 truncation
+                        // is always defined, while a direct float→narrow cast is
+                        // UB when the value is out of the narrow range (gcc
+                        // constant-folds ((uint8_t)(-2.5)) to 0, diverging from
+                        // the interpreter/LLVM trunc-then-wrap result of 254).
+                        format!("(({})((long long)({})))", self.c_type(ty), inner)
+                    } else if !t.signed && t.bits >= 64 {
+                        inner // identity: already the i64-at-rest bit pattern
                     } else {
                         format!("(({})({}))", self.c_type(ty), inner)
                     }

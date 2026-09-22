@@ -1040,8 +1040,11 @@ fn test_http_server_end_to_end() {
     use std::time::{Duration, Instant};
 
     let bin = sandbox_bin();
+    // --quiet keeps progress lines off stdout; the server child only serves
+    // one-shot requests (one connection per accept), so the polling probe IS
+    // the request.
     let mut child = Command::new(&bin)
-        .args(["run", "examples/http_server_demo.sbx"])
+        .args(["run", "--quiet", "examples/http_server_demo.sbx"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

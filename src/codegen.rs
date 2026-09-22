@@ -2529,6 +2529,20 @@ impl CodeGen {
                 }
             }
             Expr::Match { .. } => "long".into(),
+            // B2: a cast's C type is the target type (so `-2.5 as u8` no
+            // longer classifies as "long" and skips the (long long) float
+            // hop). Unary ops propagate ONLY float-ness — `!x`/`~x` yield
+            // ints for printing (bool_logic expects 1/0, not true/false),
+            // and negating a bool is also numeric in C.
+            Expr::Cast { ty, .. } => self.c_type(ty),
+            Expr::UnaryOp { expr, .. } => {
+                let inner = self.infer_c_type(expr);
+                if inner == "double" {
+                    "double".into()
+                } else {
+                    "long".into()
+                }
+            }
             Expr::Lambda { params, ret, .. } => {
                 let ret_str = ret.as_ref().map_or("void".to_string(), |t| self.c_type(t));
                 let params_str: Vec<String> = params.iter().map(|p| self.c_type(&p.ty)).collect();

@@ -1039,12 +1039,30 @@ fn main() {
 fn test_http_server_end_to_end() {
     use std::time::{Duration, Instant};
 
+    // Dedicated minimal program on a DEDICATED port: the A3 features test
+    // spawns examples/http_server_demo.sbx on 8080 in a parallel test thread,
+    // and these one-shot servers accept exactly one connection each — sharing
+    // a port let the two tests steal each other's connection (CI flake).
+    let source = r#"
+fn handler(path: string) -> string {
+    let body = json::stringify_string(path)
+    return body
+}
+
+fn main() {
+    http::serve(8081, "handler", 0)
+}
+"#;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let sbx = tmp.path().join("oneshot.sbx");
+    std::fs::write(&sbx, source).unwrap();
+
     let bin = sandbox_bin();
     // --quiet keeps progress lines off stdout; the server child only serves
     // one-shot requests (one connection per accept), so the polling probe IS
     // the request.
     let mut child = Command::new(&bin)
-        .args(["run", "--quiet", "examples/http_server_demo.sbx"])
+        .args(["run", "--quiet", sbx.to_str().unwrap()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -1063,7 +1081,7 @@ fn test_http_server_end_to_end() {
             break; // server process died before accepting
         }
         if let Ok(mut s) = std::net::TcpStream::connect_timeout(
-            &"127.0.0.1:8080".parse().unwrap(),
+            &"127.0.0.1:8081".parse().unwrap(),
             Duration::from_millis(500),
         ) {
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));

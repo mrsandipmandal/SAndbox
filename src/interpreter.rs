@@ -896,6 +896,7 @@ struct CapturedScope {
     vars: std::collections::HashMap<String, i64>,
     str_vars: std::collections::HashMap<String, String>,
     arr_vars: std::collections::HashMap<String, Vec<i64>>,
+    strarr_vars: std::collections::HashMap<String, Vec<String>>,
     map_vars: std::collections::HashMap<String, Vec<(String, i64)>>,
     struct_instances: std::collections::HashMap<String, Vec<i64>>,
     struct_type_of: std::collections::HashMap<String, String>,
@@ -911,6 +912,8 @@ struct InterpreterState {
     vars: std::collections::HashMap<String, i64>,
     str_vars: std::collections::HashMap<String, String>,
     arr_vars: std::collections::HashMap<String, Vec<i64>>,
+    /// C1: string-array bindings ("[a, b]" literals, keys() results, params)
+    strarr_vars: std::collections::HashMap<String, Vec<String>>,
     /// map<string,long> bindings as insertion-ordered (key, value) pairs.
     map_vars: std::collections::HashMap<String, Vec<(String, i64)>>,
     lambdas: LambdaMap,
@@ -932,6 +935,7 @@ impl InterpreterState {
             vars: std::collections::HashMap::new(),
             str_vars: std::collections::HashMap::new(),
             arr_vars: std::collections::HashMap::new(),
+            strarr_vars: std::collections::HashMap::new(),
             map_vars: std::collections::HashMap::new(),
             lambdas: std::collections::HashMap::new(),
             functions: std::collections::HashMap::new(),
@@ -951,6 +955,7 @@ impl InterpreterState {
         self.str_vars
             .keys()
             .chain(self.arr_vars.keys())
+            .chain(self.strarr_vars.keys())
             .chain(self.lambdas.keys())
             .chain(self.struct_instances.keys())
             .chain(self.enum_instances.keys())
@@ -981,6 +986,12 @@ impl InterpreterState {
                 .arr_vars
                 .keys()
                 .filter(|k| k.starts_with("__auto_arr_") && !before.contains(*k))
+                .max_by(|a, b| a.cmp(b))
+                .cloned(),
+            p if p.starts_with("__auto_sarr_") => self
+                .strarr_vars
+                .keys()
+                .filter(|k| k.starts_with("__auto_sarr_") && !before.contains(*k))
                 .max_by(|a, b| a.cmp(b))
                 .cloned(),
             p if p.starts_with("__lambda_") => self
@@ -1027,6 +1038,12 @@ impl InterpreterState {
                         return true;
                     }
                 }
+                p if p.starts_with("__auto_sarr_") => {
+                    if let Some(a) = self.strarr_vars.remove(&key) {
+                        self.strarr_vars.insert(name.to_string(), a);
+                        return true;
+                    }
+                }
                 p if p.starts_with("__lambda_") => {
                     if let Some(l) = self.lambdas.remove(&key) {
                         self.lambdas.insert(name.to_string(), l);
@@ -1060,6 +1077,7 @@ impl InterpreterState {
     fn is_bound_typed(&self, name: &str) -> bool {
         self.str_vars.contains_key(name)
             || self.arr_vars.contains_key(name)
+            || self.strarr_vars.contains_key(name)
             || self.lambdas.contains_key(name)
             || self.struct_instances.contains_key(name)
             || self.enum_instances.contains_key(name)
@@ -1074,6 +1092,12 @@ impl InterpreterState {
             .extend(scope.str_vars.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.arr_vars
             .extend(scope.arr_vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+        self.strarr_vars.extend(
+            scope
+                .strarr_vars
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
         self.map_vars
             .extend(scope.map_vars.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.struct_instances.extend(
@@ -1174,6 +1198,7 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 // Snapshot auto-keys before eval, clear old bindings, evaluate, transfer new keys
                 let str_before = state.snapshot_auto_keys("__auto_");
                 let arr_before = state.snapshot_auto_keys("__auto_arr_");
+                let sarr_before = state.snapshot_auto_keys("__auto_sarr_");
                 let lam_before = state.snapshot_auto_keys("__lambda_");
                 let struct_before = state.snapshot_auto_keys("__struct_");
                 let enum_before = state.snapshot_auto_keys("__enum_");
@@ -1181,10 +1206,21 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 let int_val = eval_expr(value, state)?;
                 state.str_vars.remove(name);
                 state.arr_vars.remove(name);
+                state.strarr_vars.remove(name);
                 state.lambdas.remove(name);
                 state.map_vars.remove(name);
                 state.transfer_new_key("__auto_", name, &str_before);
                 state.transfer_new_key("__auto_arr_", name, &arr_before);
+                state.transfer_new_key("__auto_sarr_", name, &sarr_before);
+                // C1: `let copy = names` / `copy = names` alias an existing
+                // string array (fresh-literal transfers can't fire for Idents)
+                if !state.strarr_vars.contains_key(name.as_str()) {
+                    if let ast::Expr::Ident(src) = value {
+                        if let Some(arr) = state.strarr_vars.get(src.as_str()).cloned() {
+                            state.strarr_vars.insert(name.clone(), arr);
+                        }
+                    }
+                }
                 state.transfer_new_key("__lambda_", name, &lam_before);
                 state.transfer_new_key("__struct_", name, &struct_before);
                 state.transfer_new_key("__enum_", name, &enum_before);
@@ -1207,12 +1243,14 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 // Snapshot, eval (old value still accessible), clear old bindings, transfer new
                 let str_before = state.snapshot_auto_keys("__auto_");
                 let arr_before = state.snapshot_auto_keys("__auto_arr_");
+                let sarr_before = state.snapshot_auto_keys("__auto_sarr_");
                 let struct_before = state.snapshot_auto_keys("__struct_");
                 let enum_before = state.snapshot_auto_keys("__enum_");
                 let map_before = state.snapshot_auto_keys("__auto_map_");
                 let int_val = eval_expr(value, state)?;
                 state.str_vars.remove(name);
                 state.arr_vars.remove(name);
+                state.strarr_vars.remove(name);
                 state.lambdas.remove(name);
                 state.map_vars.remove(name);
                 state.struct_instances.remove(name);
@@ -1220,6 +1258,16 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 state.enum_instances.remove(name);
                 state.transfer_new_key("__auto_", name, &str_before);
                 state.transfer_new_key("__auto_arr_", name, &arr_before);
+                state.transfer_new_key("__auto_sarr_", name, &sarr_before);
+                // C1: `let copy = names` / `copy = names` alias an existing
+                // string array (fresh-literal transfers can't fire for Idents)
+                if !state.strarr_vars.contains_key(name.as_str()) {
+                    if let ast::Expr::Ident(src) = value {
+                        if let Some(arr) = state.strarr_vars.get(src.as_str()).cloned() {
+                            state.strarr_vars.insert(name.clone(), arr);
+                        }
+                    }
+                }
                 state.transfer_new_key("__struct_", name, &struct_before);
                 state.transfer_new_key("__enum_", name, &enum_before);
                 state.transfer_new_key("__auto_map_", name, &map_before);
@@ -1237,6 +1285,23 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 }
             }
             ast::Stmt::Print(expr) => {
+                // C1: string arrays print as [a, b]
+                if let ast::Expr::Ident(n) = expr {
+                    if let Some(arr) = state.strarr_vars.get(n.as_str()).cloned() {
+                        println!("[{}]", arr.join(", "));
+                        continue;
+                    }
+                }
+                if let ast::Expr::ArrayLiteral(elems) = expr {
+                    if matches!(elems.first(), Some(ast::Expr::Str(_))) {
+                        let vals: Vec<String> = elems
+                            .iter()
+                            .map(|e| resolve_str(e, state).unwrap_or_default())
+                            .collect();
+                        println!("[{}]", vals.join(", "));
+                        continue;
+                    }
+                }
                 // Smart print: resolve strings/arrays from idents, eval everything else
                 match expr {
                     ast::Expr::Ident(n) => {
@@ -1377,6 +1442,8 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                             state.str_vars.keys().cloned().collect();
                         let arr_before: std::collections::HashSet<String> =
                             state.arr_vars.keys().cloned().collect();
+                        let sarr_before_p: std::collections::HashSet<String> =
+                            state.strarr_vars.keys().cloned().collect();
                         let val = eval_expr(expr, state)?;
                         let new_str = state
                             .str_vars
@@ -1405,6 +1472,19 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                                 } else {
                                     println!("{}", val);
                                 }
+                            } else if let Some(key) = state
+                                .strarr_vars
+                                .keys()
+                                .filter(|k| !sarr_before_p.contains(*k))
+                                .max_by(|a, b| a.cmp(b))
+                                .cloned()
+                            {
+                                // C1: fresh string-array value (m.keys())
+                                if let Some(arr) = state.strarr_vars.get(&key) {
+                                    println!("[{}]", arr.join(", "));
+                                } else {
+                                    println!("{}", val);
+                                }
                             } else {
                                 println!("{}", val);
                             }
@@ -1414,9 +1494,27 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
             }
             ast::Stmt::Return(Some(expr)) => {
                 let val = eval_expr(expr, state)?;
-                // Record plain string returns (http handler dispatch reads this).
+                // Record plain string returns (http handler dispatch reads this;
+                // C1 also surfaces string-array element reads).
                 match expr {
                     ast::Expr::Str(v) => state.last_returned_str = Some(v.clone()),
+                    ast::Expr::FString(parts) => {
+                        if parts.len() == 1 {
+                            if let ast::FStringPart::Literal(lit) = &parts[0] {
+                                state.last_returned_str = Some(lit.clone());
+                            }
+                        }
+                    }
+                    ast::Expr::Index { target, .. } => {
+                        // C1: `return names[0]` — element string is the newest __auto_
+                        if let ast::Expr::Ident(n) = target.as_ref() {
+                            if state.strarr_vars.contains_key(n.as_str()) {
+                                if let Some(s) = take_auto_str(state) {
+                                    state.last_returned_str = Some(s);
+                                }
+                            }
+                        }
+                    }
                     ast::Expr::Ident(n) => {
                         if let Some(s) = state.str_vars.get(n) {
                             state.last_returned_str = Some(s.clone());
@@ -1509,6 +1607,24 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                         }
                     }
                     continue;
+                }
+                // C1: named string-array iteration — element is a string
+                if let ast::Expr::Ident(n) = iterable {
+                    if let Some(arr) = state.strarr_vars.get(n).cloned() {
+                        for v in arr {
+                            state.vars.remove(variable);
+                            state.arr_vars.remove(variable);
+                            state.strarr_vars.remove(variable);
+                            state.str_vars.insert(variable.clone(), v);
+                            match exec_block(body, state)? {
+                                Some(BREAK_SENTINEL) => break,
+                                Some(CONTINUE_SENTINEL) => continue,
+                                Some(val) => return Ok(Some(val)),
+                                None => {}
+                            }
+                        }
+                        continue;
+                    }
                 }
                 // Named array variable iteration
                 if let ast::Expr::Ident(n) = iterable {
@@ -1617,6 +1733,7 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
             // Check strings first, then arrays, then integers
             if state.str_vars.contains_key(name)
                 || state.arr_vars.contains_key(name)
+                || state.strarr_vars.contains_key(name)
                 || state.lambdas.contains_key(name)
             {
                 Ok(0) // these types use 0 as the integer representation
@@ -1625,6 +1742,17 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
             }
         }
         ast::Expr::ArrayLiteral(elems) => {
+            // C1: string-element arrays are real string arrays (parity with the
+            // compiled backends' sbx_strarr handles).
+            if matches!(elems.first(), Some(ast::Expr::Str(_))) {
+                let vals: Vec<String> = elems
+                    .iter()
+                    .map(|e| resolve_str(e, state).unwrap_or_default())
+                    .collect();
+                let key = format!("__auto_sarr_{}", state.strarr_vars.len());
+                state.strarr_vars.insert(key, vals);
+                return Ok(0);
+            }
             let mut vals = Vec::new();
             for e in elems {
                 let v = eval_expr(e, state)?;
@@ -1828,6 +1956,7 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         vars: state.vars.clone(),
                         str_vars: state.str_vars.clone(),
                         arr_vars: state.arr_vars.clone(),
+                        strarr_vars: state.strarr_vars.clone(),
                         struct_instances: state.struct_instances.clone(),
                         struct_type_of: state.struct_type_of.clone(),
                         enum_instances: state.enum_instances.clone(),
@@ -2020,6 +2149,14 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
             }
             let idx = eval_expr(index, state)? as usize;
             if let ast::Expr::Ident(n) = target.as_ref() {
+                // C1: string-array indexing yields a string (auto-keyed like
+                // Str literals, so print/let pick it up)
+                if let Some(arr) = state.strarr_vars.get(n) {
+                    let s = arr.get(idx).cloned().unwrap_or_default();
+                    let key = format!("__auto_{}", state.str_vars.len());
+                    state.str_vars.insert(key, s);
+                    return Ok(0);
+                }
                 if let Some(arr) = state.arr_vars.get(n) {
                     return Ok(arr.get(idx).copied().unwrap_or(0));
                 }
@@ -2046,6 +2183,8 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         ast::Expr::Ident(n) => {
                             if let Some(s) = state.str_vars.get(n) {
                                 println!("{}", s);
+                            } else if let Some(arr) = state.strarr_vars.get(n) {
+                                println!("[{}]", arr.join(", "));
                             } else if let Some(arr) = state.arr_vars.get(n) {
                                 let elems: Vec<String> =
                                     arr.iter().map(|v| v.to_string()).collect();
@@ -2059,15 +2198,23 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         // C backend prints bool literals as true/false
                         ast::Expr::Bool(b) => println!("{}", if *b { "true" } else { "false" }),
                         ast::Expr::ArrayLiteral(elems) => {
-                            let vals: Vec<String> = elems
-                                .iter()
-                                .map(|e| match e {
-                                    ast::Expr::Str(s) => s.to_string(),
-                                    ast::Expr::Int(n) => n.to_string(),
-                                    _ => "?".to_string(),
-                                })
-                                .collect();
-                            println!("[{}]", vals.join(", "));
+                            // C1: string-element arrays print their strings
+                            if matches!(elems.first(), Some(ast::Expr::Str(_))) {
+                                let vals: Vec<String> = elems
+                                    .iter()
+                                    .map(|e| resolve_str(e, state).unwrap_or_default())
+                                    .collect();
+                                println!("[{}]", vals.join(", "));
+                            } else {
+                                let vals: Vec<String> = elems
+                                    .iter()
+                                    .map(|e| match e {
+                                        ast::Expr::Int(n) => n.to_string(),
+                                        _ => "?".to_string(),
+                                    })
+                                    .collect();
+                                println!("[{}]", vals.join(", "));
+                            }
                         }
                         other => {
                             let str_before: std::collections::HashSet<String> =
@@ -2121,6 +2268,8 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                     state.str_vars.keys().cloned().collect();
                 let arr_keys_before: std::collections::HashSet<String> =
                     state.arr_vars.keys().cloned().collect();
+                let sarr_keys_before: std::collections::HashSet<String> =
+                    state.strarr_vars.keys().cloned().collect();
                 let _val = eval_expr(&args[0], state)?;
                 // Check for new string auto-key
                 let new_str_key = state
@@ -2146,6 +2295,18 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         return Ok(a.len() as i64);
                     }
                 }
+                // C1: check for new string-array auto-key (e.g. len(m.keys()))
+                let new_sarr_key = state
+                    .strarr_vars
+                    .keys()
+                    .filter(|k| !sarr_keys_before.contains(*k))
+                    .max_by(|a, b| a.cmp(b))
+                    .cloned();
+                if let Some(key) = new_sarr_key {
+                    if let Some(a) = state.strarr_vars.get(&key) {
+                        return Ok(a.len() as i64);
+                    }
+                }
                 // Fallback: check named variables
                 match &args[0] {
                     ast::Expr::Str(s) => return Ok(s.len() as i64),
@@ -2154,6 +2315,9 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                             return Ok(s.len() as i64);
                         }
                         if let Some(a) = state.arr_vars.get(n) {
+                            return Ok(a.len() as i64);
+                        }
+                        if let Some(a) = state.strarr_vars.get(n) {
                             return Ok(a.len() as i64);
                         }
                         if let Some(m) = state.map_vars.get(n) {
@@ -2196,6 +2360,7 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                                 vars: state.vars.clone(),
                                 str_vars: state.str_vars.clone(),
                                 arr_vars: state.arr_vars.clone(),
+                                strarr_vars: state.strarr_vars.clone(),
                                 struct_instances: state.struct_instances.clone(),
                                 struct_type_of: state.struct_type_of.clone(),
                                 enum_instances: state.enum_instances.clone(),
@@ -2253,6 +2418,7 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                                 vars: state.vars.clone(),
                                 str_vars: state.str_vars.clone(),
                                 arr_vars: state.arr_vars.clone(),
+                                strarr_vars: state.strarr_vars.clone(),
                                 struct_instances: state.struct_instances.clone(),
                                 struct_type_of: state.struct_type_of.clone(),
                                 enum_instances: state.enum_instances.clone(),
@@ -2311,6 +2477,7 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                                 vars: state.vars.clone(),
                                 str_vars: state.str_vars.clone(),
                                 arr_vars: state.arr_vars.clone(),
+                                strarr_vars: state.strarr_vars.clone(),
                                 struct_instances: state.struct_instances.clone(),
                                 struct_type_of: state.struct_type_of.clone(),
                                 enum_instances: state.enum_instances.clone(),
@@ -2949,6 +3116,12 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         if let Some(m) = state.map_vars.get(arg_name.as_str()) {
                             local_state.map_vars.insert(param.name.clone(), m.clone());
                         }
+                        // C1: string arrays pass as handles (copy in, write back)
+                        if let Some(a) = state.strarr_vars.get(arg_name.as_str()) {
+                            local_state
+                                .strarr_vars
+                                .insert(param.name.clone(), a.clone());
+                        }
                     }
                 }
                 let result = exec_block(&body, &mut local_state)?.unwrap_or_default();
@@ -2957,6 +3130,9 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                     if let ast::Expr::Ident(arg_name) = arg {
                         if let Some(m) = local_state.map_vars.get(param.name.as_str()) {
                             state.map_vars.insert(arg_name.clone(), m.clone());
+                        }
+                        if let Some(a) = local_state.strarr_vars.get(param.name.as_str()) {
+                            state.strarr_vars.insert(arg_name.clone(), a.clone());
                         }
                     }
                 }
@@ -3033,11 +3209,33 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
             if !matches!(target.as_ref(), ast::Expr::Ident(_)) {
                 let before: std::collections::HashSet<String> =
                     state.str_vars.keys().cloned().collect();
+                let before_maps: std::collections::HashSet<String> =
+                    state.map_vars.keys().cloned().collect();
+                let before_sarrs: std::collections::HashSet<String> =
+                    state.strarr_vars.keys().cloned().collect();
                 eval_expr(target, state)?;
+                // C1: chained targets may produce a string, a map, or a
+                // string array — bind whichever fresh auto-key appeared.
                 if let Some(k) = state
                     .str_vars
                     .keys()
                     .filter(|k| k.starts_with("__auto_") && !before.contains(*k))
+                    .max_by(|x, y| x.cmp(y))
+                    .cloned()
+                {
+                    chain_target = Some(ast::Expr::Ident(k));
+                } else if let Some(k) = state
+                    .map_vars
+                    .keys()
+                    .filter(|k| k.starts_with("__auto_map_") && !before_maps.contains(*k))
+                    .max_by(|x, y| x.cmp(y))
+                    .cloned()
+                {
+                    chain_target = Some(ast::Expr::Ident(k));
+                } else if let Some(k) = state
+                    .strarr_vars
+                    .keys()
+                    .filter(|k| k.starts_with("__auto_sarr_") && !before_sarrs.contains(*k))
                     .max_by(|x, y| x.cmp(y))
                     .cloned()
                 {
@@ -3112,13 +3310,17 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         return Ok((m_mut.len() != old_len) as i64);
                     }
                     "keys" if args.is_empty() => {
-                        let joined = m
-                            .iter()
-                            .map(|(k, _)| k.clone())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let out_key = format!("__auto_{}", state.str_vars.len());
-                        state.str_vars.insert(out_key, joined);
+                        // C1: real string array (parity with sbx_strarr backends)
+                        let ks: Vec<String> = m.iter().map(|(k, _)| k.clone()).collect();
+                        let out_key = format!("__auto_sarr_{}", state.strarr_vars.len());
+                        state.strarr_vars.insert(out_key, ks);
+                        return Ok(0);
+                    }
+                    "values" if args.is_empty() => {
+                        // C1: real int array (parity with __sbx_map_values)
+                        let vs: Vec<i64> = m.iter().map(|(_, v)| *v).collect();
+                        let out_key = format!("__auto_arr_{}", state.arr_vars.len());
+                        state.arr_vars.insert(out_key, vs);
                         return Ok(0);
                     }
                     "len" if args.is_empty() => return Ok(m.len() as i64),

@@ -51,8 +51,7 @@ docs/explanations: **English**.
 - [x] **A1. Maps/dicts** — `map<string, int>`: `{"a": 1}` literals, `m["key"]`,
   `len(m)`, methods `insert/get/has/remove/keys`, ordered iteration. C runtime
   `sbx_map_*` shared by C + LLVM backends; interpreter uses ordered Rust map.
-  Parity case `map_basics` (ALL backends). *(values() deferred: needs dynamic
-  string arrays.)*
+  Parity case `map_basics` (ALL backends). `values()` shipped in C1.
 - [x] **A2. JSON** — real JSON on maps + arrays: `json::parse_map(s)` (recursive-descent,
   C runtime shared by C+LLVM; Rust mirror in the interpreter), `json::stringify_map(m)`,
   `json::get_str(m, k, def)`, `json::get_int`, `json::stringify_array`, `json::array_get_int`;
@@ -170,7 +169,11 @@ docs/explanations: **English**.
   `recursion` (fact+fib).
 
 ### Known deferred issues (found during work; not scheduled)
-- String arrays (`["a","b"]`) broken differently on all 3 backends (blocks `values()`).
+- ~~String arrays (`["a","b"]`) broken differently on all 3 backends (blocks `values()`)~~
+  **Fixed (C1, 2026-09-23)**: heap-handle design. `sbx_strarr` for string arrays,
+  `sbx_i64arr` for i64 arrays (incl. `map.values()`); both carry runtime length so
+  len/index/for/print agree across C/LLVM/interpreter. `keys()`/`values()` now return
+  real arrays. Parity: `str_array_basics`, `map_keys_values` (C+LLVM+interp).
 - `break`/`continue` inside range loops mis-scope in edge cases; C corrupts its
   induction slot when the body redeclares a range-loop variable (LLVM/interp shadow).
 - Brand-new name declared in a branch and used after it: C rejects, interp accepts,
@@ -180,5 +183,9 @@ docs/explanations: **English**.
 - 2026-09-15: Roadmap direction set (web first; machine-level = compiler-only).
   Maps = `map<string, int>` only (arrays are i64-only today; string arrays are
   broken — see deferred issues). Insertion-ordered maps (deterministic parity).
+- 2026-09-23: C1 string/i64 arrays use opaque heap handles (`sbx_strarr`/
+  `sbx_i64arr`, i8* at the LLVM ABI) that carry their own length — arrays are
+  reference values (aliasing on `let b = a`), and bare-`long*`-style arrays
+  without runtime length are never exposed to Sandbox code.
 - 2026-09-15: Deploy pipeline = GHCR push + SSH compose deploy, rollback on
   failed health check; production environment requires user approval.

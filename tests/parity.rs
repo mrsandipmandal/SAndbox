@@ -305,6 +305,8 @@ struct ParityCase {
 }
 
 const C_AND_INTERP: &[Backend] = &[Backend::C, Backend::Interp];
+/// Programs with strings the wasm backend can't run yet (documented gap).
+const C_LLVM_INTERP: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp];
 const C_ONLY: &[Backend] = &[Backend::C];
 const LLVM_ONLY: &[Backend] = &[Backend::Llvm];
 /// Integer-only programs the wasm backend also runs identically.
@@ -663,6 +665,65 @@ fn main() {
         // literal, index, insert/get/has/remove/keys/len, empty literal, fn
         // args/returns, by-reference mutation, and string-variable keys.
         backends: C_AND_INTERP,
+    },
+    ParityCase {
+        name: "str_array_basics",
+        source: r#"
+fn count(names: [string]) -> i64 {
+    return len(names)
+}
+fn second(names: [string]) -> string {
+    return names[1]
+}
+fn main() {
+    let names = ["alice", "bob", "carol"]
+    print(names)
+    print(len(names))
+    print(names[0])
+    print(names[2])
+    for n in names {
+        print(n)
+    }
+    print(count(names))
+    print(second(names))
+    let empty: [string] = []
+    print(len(empty))
+    let copy = names
+    print(copy[1])
+    copy = ["x", "y", "z"]
+    print(copy[0])
+    print(copy[2])
+}
+"#,
+        // C1: string arrays as first-class values — handle literals, len,
+        // bounds-checked indexing, for-over-elements, [string] params,
+        // string-returning fns, empty literal with annotation, handle
+        // aliasing and reassignment. C/LLVM/interp agree; wasm has no
+        // string support yet (documented gap).
+        backends: C_LLVM_INTERP,
+    },
+    ParityCase {
+        name: "map_keys_values",
+        source: r#"
+fn main() {
+    let scores = {"alpha": 10, "beta": 20, "gamma": 30}
+    let ks = scores.keys()
+    print(len(ks))
+    print(ks[0])
+    print(ks[1])
+    print(ks[2])
+    let vs = scores.values()
+    print(vs[0] + vs[1] + vs[2])
+    let total = 0
+    for v in vs {
+        total = total + v
+    }
+    print(total)
+}
+"#,
+        // C1: keys() returns a real string array (was a comma-joined string),
+        // values() a real i64 array — len/index/for all agree across backends.
+        backends: C_LLVM_INTERP,
     },
     ParityCase {
         name: "http_url_decode",

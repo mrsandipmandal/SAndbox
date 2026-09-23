@@ -395,7 +395,7 @@ impl TypeChecker {
             Stmt::Let {
                 name, ty, value, ..
             } => {
-                let val_ty = self.check_expr(value)?;
+                let val_ty = self.check_expr_expected(value, ty.as_ref())?;
                 if let Some(expected) = ty {
                     if !self.types_compatible(expected, &val_ty) {
                         return Err(anyhow!(
@@ -511,6 +511,12 @@ impl TypeChecker {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type> {
+        self.check_expr_expected(expr, None)
+    }
+
+    /// Type-check with an optional expected type (C1: lets `[]` literals
+    /// inherit their element type from the annotation).
+    fn check_expr_expected(&mut self, expr: &Expr, expected: Option<&Type>) -> Result<Type> {
         match expr {
             Expr::Int(_) => Ok(Type::I64),
             Expr::Cast { expr, ty } => {
@@ -538,6 +544,10 @@ impl TypeChecker {
             Expr::Ident(name) => self.lookup_var(name),
             Expr::ArrayLiteral(elems) => {
                 if elems.is_empty() {
+                    if let Some(Type::Array(inner)) = expected {
+                        // C1: `let empty: [T] = []` inherits the element type
+                        return Ok(Type::Array(inner.clone()));
+                    }
                     return Ok(Type::Array(Box::new(Type::I64)));
                 }
                 let first = self.check_expr(&elems[0])?;
@@ -1350,16 +1360,15 @@ impl TypeChecker {
                             }
                             return Ok(Type::Bool);
                         }
-                        "keys" | "len" if args.is_empty() => {
-                            if method == "keys" {
-                                return Ok(Type::String);
-                            }
-                            return Ok(Type::I64);
+                        "keys" if args.is_empty() => {
+                            // C1: real string array (was a comma-joined string)
+                            return Ok(Type::Array(Box::new(Type::String)));
                         }
                         "values" if args.is_empty() => {
-                            return Err(anyhow!(
-                                "Map method 'values' is not supported yet (needs dynamic arrays)"
-                            ));
+                            return Ok(Type::Array(Box::new(Type::I64)));
+                        }
+                        "len" if args.is_empty() => {
+                            return Ok(Type::I64);
                         }
                         _ => {
                             return Err(anyhow!(

@@ -35,6 +35,13 @@ pub struct LlvmGen {
     /// Functions declared to return map<string,long> — their call results are
     /// map handles even though the LLVM type is an ambiguous i8*.
     map_fns: std::collections::HashSet<String>,
+    /// C1: variables known to hold sbx_strarr* values (string arrays) —
+    /// lets the backend distinguish string-array i8* handles from string i8*
+    /// at index/len/for time.
+    strarr_vars: std::collections::HashSet<String>,
+    /// C1: variables known to hold sbx_i64arr* values (map.values() results) —
+    /// distinguishes i64-array i8* handles from string i8*.
+    i64arr_vars: std::collections::HashSet<String>,
     /// Allocas created in the entry block (dominate every use site), so a
     /// `let` redeclaration can safely reuse them instead of re-allocating in
     /// a loop/branch body (which would not dominate later uses).
@@ -77,6 +84,8 @@ impl LlvmGen {
             loop_stack: Vec::new(),
             map_vars: std::collections::HashSet::new(),
             map_fns: std::collections::HashSet::new(),
+            strarr_vars: std::collections::HashSet::new(),
+            i64arr_vars: std::collections::HashSet::new(),
             entry_allocas: std::collections::HashSet::new(),
             left_entry: false,
             induction_vars: std::collections::HashSet::new(),
@@ -237,6 +246,16 @@ impl LlvmGen {
         writeln!(self.output, "declare i64 @__sbx_map_len(i8*)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_map_keys(i8*)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_map_format(i8*)").unwrap();
+        // C1 string-array runtime (shared with the C backend; pointers as i8*)
+        writeln!(self.output, "declare i8* @sbx_strarr_new(i64)").unwrap();
+        writeln!(self.output, "declare void @sbx_strarr_push(i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i8* @sbx_strarr_get(i8*, i64)").unwrap();
+        writeln!(self.output, "declare i64 @sbx_strarr_len(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_strarr_format(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @sbx_i64arr_get(i8*, i64)").unwrap();
+        writeln!(self.output, "declare i64 @sbx_i64arr_len(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_i64arr_format(i8*)").unwrap();
+        writeln!(self.output, "declare i8* @__sbx_map_values(i8*)").unwrap();
         writeln!(
             self.output,
             "declare i64 @__sbx_json_array_get_int(i8*, i64)"
@@ -533,6 +552,10 @@ impl LlvmGen {
             if matches!(&p.ty, Type::Map(_, _)) {
                 self.map_vars.insert(p.name.clone());
             }
+            // C1: [string]-typed params hold an sbx_strarr* handle (i8* ABI)
+            if matches!(&p.ty, Type::Array(inner) if matches!(**inner, Type::String)) {
+                self.strarr_vars.insert(p.name.clone());
+            }
             self.variables.insert(p.name.clone(), (alloca, ty.clone()));
         }
         // Allocate and store capture params, mapping __cap_<name> to <name> in variables
@@ -611,6 +634,22 @@ impl LlvmGen {
                     self.map_vars.insert(name.clone());
                 } else {
                     self.map_vars.remove(name);
+                }
+                // C1: track string-array bindings (handle is i8* at the ABI level)
+                let is_strarr_binding = matches!(ty.as_ref(), Some(Type::Array(inner)) if matches!(**inner, Type::String))
+                    || self.is_strarr_expr(value);
+                if is_strarr_binding {
+                    self.strarr_vars.insert(name.clone());
+                } else {
+                    self.strarr_vars.remove(name);
+                }
+                // C1: track i64-array bindings (map.values() results)
+                let is_i64arr_binding = matches!(ty.as_ref(), Some(Type::Array(inner)) if matches!(**inner, Type::I64))
+                    || self.is_i64arr_expr(value);
+                if is_i64arr_binding {
+                    self.i64arr_vars.insert(name.clone());
+                } else {
+                    self.i64arr_vars.remove(name);
                 }
                 if is_struct_type(&llvm_ty) {
                     // For struct types, StructLiteral already allocs + stores fields.
@@ -777,6 +816,44 @@ impl LlvmGen {
                 "void".to_string()
             }
             Stmt::Print(expr) => {
+                // C1: string arrays print as [a, b] (interpreter/C parity)
+                if self.is_strarr_expr(expr) {
+                    let val = self.gen_expr(expr);
+                    let r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* @__sbx_strarr_format(i8* {})",
+                        r, val
+                    )
+                    .unwrap();
+                    let fmt = self.fresh_str("%s\n");
+                    writeln!(
+                        self.output,
+                        "  call i64 (i8*, ...) @printf(i8* bitcast ([4 x i8]* @{} to i8*), i8* {})",
+                        fmt, r
+                    )
+                    .unwrap();
+                    return "void".to_string();
+                }
+                // C1: i64 arrays print as [a, b] (interpreter/C parity)
+                if self.is_i64arr_expr(expr) {
+                    let val = self.gen_expr(expr);
+                    let r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* @__sbx_i64arr_format(i8* {})",
+                        r, val
+                    )
+                    .unwrap();
+                    let fmt = self.fresh_str("%s\n");
+                    writeln!(
+                        self.output,
+                        "  call i64 (i8*, ...) @printf(i8* bitcast ([4 x i8]* @{} to i8*), i8* {})",
+                        fmt, r
+                    )
+                    .unwrap();
+                    return "void".to_string();
+                }
                 // Maps print as {k: v, ...} (interpreter/C parity)
                 if self.is_map_expr(expr) {
                     let val = self.gen_expr(expr);
@@ -983,6 +1060,194 @@ impl LlvmGen {
                     self.loop_stack.pop();
 
                     // End block
+                    writeln!(self.output, "{}:", end_label).unwrap();
+                    self.block_terminated = false;
+                    "void".to_string()
+                } else if self.is_strarr_expr(iterable) {
+                    // C1: for n over a string array (checked BEFORE the plain
+                    // i8* string branch — a handle is also i8*)
+                    let arr_val = self.gen_expr(iterable);
+                    let loop_var = variable.clone();
+                    let cond_label = self.fresh_label("for.cond");
+                    let body_label = self.fresh_label("for.body");
+                    let end_label = self.fresh_label("for.end");
+                    let incr_label = self.fresh_label("for.incr");
+
+                    let counter_alloca = self.fresh_var();
+                    writeln!(self.output, "  {} = alloca i64", counter_alloca).unwrap();
+                    writeln!(self.output, "  store i64 0, i64* {}", counter_alloca).unwrap();
+                    let var_alloca = self.fresh_var();
+                    writeln!(self.output, "  {} = alloca i8*", var_alloca).unwrap();
+                    self.variables
+                        .insert(loop_var, (var_alloca.clone(), "i8*".to_string()));
+
+                    self.loop_stack
+                        .push((end_label.clone(), incr_label.clone()));
+
+                    writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                    self.block_terminated = true;
+
+                    writeln!(self.output, "{}:", cond_label).unwrap();
+                    self.block_terminated = false;
+                    let loaded_counter = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = load i64, i64* {}",
+                        loaded_counter, counter_alloca
+                    )
+                    .unwrap();
+                    let len_r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i64 @sbx_strarr_len(i8* {})",
+                        len_r, arr_val
+                    )
+                    .unwrap();
+                    let cmp = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = icmp slt i64 {}, {}",
+                        cmp, loaded_counter, len_r
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.output,
+                        "  br i1 {}, label %{}, label %{}",
+                        cmp, body_label, end_label
+                    )
+                    .unwrap();
+                    self.block_terminated = true;
+
+                    writeln!(self.output, "{}:", body_label).unwrap();
+                    self.block_terminated = false;
+                    let elem_val = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* @sbx_strarr_get(i8* {}, i64 {})",
+                        elem_val, arr_val, loaded_counter
+                    )
+                    .unwrap();
+                    writeln!(self.output, "  store i8* {}, i8** {}", elem_val, var_alloca).unwrap();
+
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    if !self.block_terminated {
+                        writeln!(self.output, "  br label %{}", incr_label).unwrap();
+                        self.block_terminated = true;
+                    }
+
+                    writeln!(self.output, "{}:", incr_label).unwrap();
+                    self.block_terminated = false;
+                    let loaded2 = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = load i64, i64* {}",
+                        loaded2, counter_alloca
+                    )
+                    .unwrap();
+                    let incr = self.fresh_var();
+                    writeln!(self.output, "  {} = add i64 {}, 1", incr, loaded2).unwrap();
+                    writeln!(self.output, "  store i64 {}, i64* {}", incr, counter_alloca).unwrap();
+                    writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                    self.block_terminated = true;
+
+                    self.loop_stack.pop();
+
+                    writeln!(self.output, "{}:", end_label).unwrap();
+                    self.block_terminated = false;
+                    "void".to_string()
+                } else if self.is_i64arr_expr(iterable) {
+                    // C1: for v over an sbx_i64arr handle (map.values() or a
+                    // named i64-array var) — mirrors the strarr arm above.
+                    let arr_val = self.gen_expr(iterable);
+                    let loop_var = variable.clone();
+                    let cond_label = self.fresh_label("for.cond");
+                    let body_label = self.fresh_label("for.body");
+                    let end_label = self.fresh_label("for.end");
+                    let incr_label = self.fresh_label("for.incr");
+
+                    let counter_alloca = self.fresh_var();
+                    writeln!(self.output, "  {} = alloca i64", counter_alloca).unwrap();
+                    writeln!(self.output, "  store i64 0, i64* {}", counter_alloca).unwrap();
+                    let var_alloca = self.fresh_var();
+                    writeln!(self.output, "  {} = alloca i64", var_alloca).unwrap();
+                    self.variables
+                        .insert(loop_var, (var_alloca.clone(), "i64".to_string()));
+
+                    self.loop_stack
+                        .push((end_label.clone(), incr_label.clone()));
+
+                    writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                    self.block_terminated = true;
+
+                    writeln!(self.output, "{}:", cond_label).unwrap();
+                    self.block_terminated = false;
+                    let loaded_counter = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = load i64, i64* {}",
+                        loaded_counter, counter_alloca
+                    )
+                    .unwrap();
+                    let len_r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i64 @sbx_i64arr_len(i8* {})",
+                        len_r, arr_val
+                    )
+                    .unwrap();
+                    let cmp = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = icmp slt i64 {}, {}",
+                        cmp, loaded_counter, len_r
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.output,
+                        "  br i1 {}, label %{}, label %{}",
+                        cmp, body_label, end_label
+                    )
+                    .unwrap();
+                    self.block_terminated = true;
+
+                    writeln!(self.output, "{}:", body_label).unwrap();
+                    self.block_terminated = false;
+                    let elem_val = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i64 @sbx_i64arr_get(i8* {}, i64 {})",
+                        elem_val, arr_val, loaded_counter
+                    )
+                    .unwrap();
+                    writeln!(self.output, "  store i64 {}, i64* {}", elem_val, var_alloca).unwrap();
+
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    if !self.block_terminated {
+                        writeln!(self.output, "  br label %{}", incr_label).unwrap();
+                        self.block_terminated = true;
+                    }
+
+                    writeln!(self.output, "{}:", incr_label).unwrap();
+                    self.block_terminated = false;
+                    let loaded2 = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = load i64, i64* {}",
+                        loaded2, counter_alloca
+                    )
+                    .unwrap();
+                    let incr = self.fresh_var();
+                    writeln!(self.output, "  {} = add i64 {}, 1", incr, loaded2).unwrap();
+                    writeln!(self.output, "  store i64 {}, i64* {}", incr, counter_alloca).unwrap();
+                    writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                    self.block_terminated = true;
+
+                    self.loop_stack.pop();
+
                     writeln!(self.output, "{}:", end_label).unwrap();
                     self.block_terminated = false;
                     "void".to_string()
@@ -1201,6 +1466,102 @@ impl LlvmGen {
                         self.loop_stack.pop();
 
                         // End block
+                        writeln!(self.output, "{}:", end_label).unwrap();
+                        self.block_terminated = false;
+                        "void".to_string()
+                    } else if self.is_strarr_expr(iterable) {
+                        // C1: for x over a string array — element is a string
+                        // (i8*) bound through the runtime's bounds-checked get.
+                        let arr = self.gen_expr(iterable);
+                        let loop_var = variable.clone();
+                        let cond_label = self.fresh_label("for.cond");
+                        let body_label = self.fresh_label("for.body");
+                        let end_label = self.fresh_label("for.end");
+                        let incr_label = self.fresh_label("for.incr");
+
+                        let counter_alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca i64", counter_alloca).unwrap();
+                        writeln!(self.output, "  store i64 0, i64* {}", counter_alloca).unwrap();
+                        let var_alloca = self.fresh_var();
+                        writeln!(self.output, "  {} = alloca i8*", var_alloca).unwrap();
+                        self.variables
+                            .insert(loop_var.clone(), (var_alloca.clone(), "i8*".to_string()));
+
+                        self.loop_stack
+                            .push((end_label.clone(), incr_label.clone()));
+
+                        writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                        self.block_terminated = true;
+
+                        writeln!(self.output, "{}:", cond_label).unwrap();
+                        self.block_terminated = false;
+                        let loaded_counter = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = load i64, i64* {}",
+                            loaded_counter, counter_alloca
+                        )
+                        .unwrap();
+                        let len_r = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = call i64 @sbx_strarr_len(i8* {})",
+                            len_r, arr
+                        )
+                        .unwrap();
+                        let cmp = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = icmp slt i64 {}, {}",
+                            cmp, loaded_counter, len_r
+                        )
+                        .unwrap();
+                        writeln!(
+                            self.output,
+                            "  br i1 {}, label %{}, label %{}",
+                            cmp, body_label, end_label
+                        )
+                        .unwrap();
+                        self.block_terminated = true;
+
+                        writeln!(self.output, "{}:", body_label).unwrap();
+                        self.block_terminated = false;
+                        let elem_val = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = call i8* @sbx_strarr_get(i8* {}, i64 {})",
+                            elem_val, arr, loaded_counter
+                        )
+                        .unwrap();
+                        writeln!(self.output, "  store i8* {}, i8** {}", elem_val, var_alloca)
+                            .unwrap();
+
+                        for s in body {
+                            self.gen_stmt(s);
+                        }
+                        if !self.block_terminated {
+                            writeln!(self.output, "  br label %{}", incr_label).unwrap();
+                            self.block_terminated = true;
+                        }
+
+                        writeln!(self.output, "{}:", incr_label).unwrap();
+                        self.block_terminated = false;
+                        let loaded2 = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = load i64, i64* {}",
+                            loaded2, counter_alloca
+                        )
+                        .unwrap();
+                        let incr = self.fresh_var();
+                        writeln!(self.output, "  {} = add i64 {}, 1", incr, loaded2).unwrap();
+                        writeln!(self.output, "  store i64 {}, i64* {}", incr, counter_alloca)
+                            .unwrap();
+                        writeln!(self.output, "  br label %{}", cond_label).unwrap();
+                        self.block_terminated = true;
+
+                        self.loop_stack.pop();
+
                         writeln!(self.output, "{}:", end_label).unwrap();
                         self.block_terminated = false;
                         "void".to_string()
@@ -1584,6 +1945,30 @@ impl LlvmGen {
                         writeln!(
                             self.output,
                             "  {} = call i64 @__sbx_map_len(i8* {})",
+                            result, arg_val
+                        )
+                        .unwrap();
+                        return result;
+                    }
+                    // C1: string-array length → runtime helper
+                    if self.is_strarr_expr(arg) {
+                        let arg_val = self.gen_expr(arg);
+                        let result = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = call i64 @sbx_strarr_len(i8* {})",
+                            result, arg_val
+                        )
+                        .unwrap();
+                        return result;
+                    }
+                    // C1: i64-array handle length → runtime helper
+                    if self.is_i64arr_expr(arg) {
+                        let arg_val = self.gen_expr(arg);
+                        let result = self.fresh_var();
+                        writeln!(
+                            self.output,
+                            "  {} = call i64 @sbx_i64arr_len(i8* {})",
                             result, arg_val
                         )
                         .unwrap();
@@ -2377,6 +2762,7 @@ impl LlvmGen {
                         "has" => "__sbx_map_has",
                         "remove" => "__sbx_map_remove",
                         "keys" => "__sbx_map_keys",
+                        "values" => "__sbx_map_values",
                         "len" => "__sbx_map_len",
                         other => other,
                     };
@@ -2443,6 +2829,30 @@ impl LlvmGen {
                 result
             }
             Expr::ArrayLiteral(elems) => {
+                // C1: string-element arrays build an sbx_strarr handle via the
+                // shared runtime (int arrays keep the stack-allocation path).
+                // Empty literals also take this path (strarr_new(0) is a valid
+                // empty handle) — the legacy empty-int-alloca produced garbage.
+                if matches!(elems.first(), Some(Expr::Str(_))) || elems.is_empty() {
+                    let n = elems.len().max(1) as i64;
+                    let arr = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* @sbx_strarr_new(i64 {})",
+                        arr, n
+                    )
+                    .unwrap();
+                    for e in elems {
+                        let val = self.gen_expr(e);
+                        writeln!(
+                            self.output,
+                            "  call void @sbx_strarr_push(i8* {}, i8* {})",
+                            arr, val
+                        )
+                        .unwrap();
+                    }
+                    return arr;
+                }
                 // Allocate an array on the stack and store elements
                 let n = elems.len();
                 let arr = self.fresh_var();
@@ -2470,6 +2880,32 @@ impl LlvmGen {
                         self.output,
                         "  {} = call i64 @__sbx_map_get(i8* {}, i8* {}, i64 0)",
                         r, m, k
+                    )
+                    .unwrap();
+                    return r;
+                }
+                // C1: string-array indexing → bounds-checked runtime get
+                if self.is_strarr_expr(target) {
+                    let a = self.gen_expr(target);
+                    let i = self.gen_expr(index);
+                    let r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i8* @sbx_strarr_get(i8* {}, i64 {})",
+                        r, a, i
+                    )
+                    .unwrap();
+                    return r;
+                }
+                // C1: i64-array handle indexing → runtime get
+                if self.is_i64arr_expr(target) {
+                    let a = self.gen_expr(target);
+                    let i = self.gen_expr(index);
+                    let r = self.fresh_var();
+                    writeln!(
+                        self.output,
+                        "  {} = call i64 @sbx_i64arr_get(i8* {}, i64 {})",
+                        r, a, i
                     )
                     .unwrap();
                     return r;
@@ -2904,7 +3340,19 @@ impl LlvmGen {
             // B2 fix: array literals yield an `i64*` (the alloca register), so
             // an un-annotated `let a = [..]` allocas a matching pointer slot
             // and later `a[i]` GEPs type-check. (Was broken at HEAD too.)
-            Expr::ArrayLiteral(_) => "i64*".to_string(),
+            // C1: string-element arrays are sbx_strarr* handles (i8* ABI).
+            // An EMPTY literal with a `[string]` annotation also types as the
+            // handle — llvmgen's Let uses the annotation when present, but
+            // un-annotated empties keep the legacy i64* int-array shape.
+            Expr::ArrayLiteral(elems) => {
+                if matches!(elems.first(), Some(Expr::Str(_))) || elems.is_empty() {
+                    "i8*".to_string()
+                } else {
+                    "i64*".to_string()
+                }
+            }
+            // C1: string-array indexing yields a string element
+            Expr::Index { target, .. } if self.is_strarr_expr(target) => "i8*".to_string(),
             Expr::BinaryOp {
                 op:
                     BinOp::Eq
@@ -2963,10 +3411,12 @@ impl LlvmGen {
             Expr::Range { .. } => "i64".to_string(),
             Expr::FString(_) => "i8*".to_string(),
             Expr::MethodCall { target, method, .. } => {
-                // Map method sugar: keys() yields a string, everything else a long.
+                // Map method sugar: keys() yields a string-array handle (i8*),
+                // values() an i64* array, everything else a long.
                 if self.is_map_expr(target) {
                     return match method.as_str() {
                         "keys" => "i8*".to_string(),
+                        "values" => "i8*".to_string(),
                         _ => "i64".to_string(),
                     };
                 }
@@ -3158,6 +3608,28 @@ impl LlvmGen {
             Expr::MapLiteral(_) => true,
             Expr::Ident(n) => self.map_vars.contains(n),
             Expr::Call { name, .. } => self.map_fns.contains(name),
+            _ => false,
+        }
+    }
+
+    /// C1: true if this expression evaluates to a string-array handle
+    /// (sbx_strarr*, passed as i8* at the ABI level).
+    fn is_strarr_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::ArrayLiteral(elems) => matches!(elems.first(), Some(Expr::Str(_))),
+            Expr::Ident(n) => self.strarr_vars.contains(n),
+            Expr::MethodCall { target, method, .. } => self.is_map_expr(target) && method == "keys",
+            _ => false,
+        }
+    }
+
+    /// C1: expressions that yield an sbx_i64arr* handle (i8* at the ABI level)
+    fn is_i64arr_expr(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(n) => self.i64arr_vars.contains(n),
+            Expr::MethodCall { target, method, .. } => {
+                self.is_map_expr(target) && method == "values"
+            }
             _ => false,
         }
     }

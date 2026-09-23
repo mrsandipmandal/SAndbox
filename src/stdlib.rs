@@ -785,7 +785,16 @@ pub fn builtins() -> HashMap<String, StdlibFn> {
             "m".into(),
             Type::Map(Box::new(Type::String), Box::new(Type::I64)),
         )],
-        Type::String,
+        Type::Array(Box::new(Type::String)),
+    );
+    register(
+        &mut m,
+        "map::values",
+        vec![(
+            "m".into(),
+            Type::Map(Box::new(Type::String), Box::new(Type::I64)),
+        )],
+        Type::Array(Box::new(Type::I64)),
     );
     // Set — opaque pointer handle (i64)
     register(&mut m, "set_of::new", vec![], Type::I64);
@@ -1468,20 +1477,117 @@ static const char* __sbx_map_format(sbx_map* m) {
     return out;
 }
 
-/* Keys joined with ", " in insertion order (string arrays are not supported yet). */
-static const char* __sbx_map_keys(sbx_map* m) {
-    long total = 1;
-    for (long k = 0; k < m->ord_len; k++) total += (long)strlen(m->ord_keys[k]) + 2;
-    char* out = (char*)sbx_rc_alloc((size_t)total);
-    out[0] = '\0';
-    size_t off = 0;
-    for (long k = 0; k < m->ord_len; k++) {
-        if (k > 0) { out[off++] = ','; out[off++] = ' '; }
-        size_t kl = strlen(m->ord_keys[k]);
-        memcpy(out + off, m->ord_keys[k], kl);
-        off += kl;
+/* ── String arrays: sbx_strarr — growable const char* array (heap-backed
+   handle, mirrors the sbx_map* pattern: literals/keys()/params all pass the
+   same pointer, so indexing/len/for work uniformly without length tracking). ── */
+typedef struct { const char** items; long len; long cap; } sbx_strarr;
+
+static sbx_strarr* sbx_strarr_new(long cap_hint) {
+    sbx_strarr* a = (sbx_strarr*)malloc(sizeof(sbx_strarr));
+    if (cap_hint < 1) cap_hint = 1;
+    a->items = (const char**)malloc(sizeof(const char*) * (size_t)cap_hint);
+    a->len = 0;
+    a->cap = cap_hint;
+    return a;
+}
+
+static void sbx_strarr_push(sbx_strarr* a, const char* s) {
+    if (a->len >= a->cap) {
+        long ncap = a->cap * 2;
+        const char** ni = (const char**)malloc(sizeof(const char*) * (size_t)ncap);
+        for (long i = 0; i < a->len; i++) ni[i] = a->items[i];
+        free(a->items);
+        a->items = ni;
+        a->cap = ncap;
     }
+    a->items[a->len++] = s;
+}
+
+static const char* sbx_strarr_get(sbx_strarr* a, long i) {
+    if (i < 0 || i >= a->len) return "";
+    return a->items[i];
+}
+
+static void sbx_strarr_set(sbx_strarr* a, long i, const char* s) {
+    if (i < 0 || i >= a->len) return;
+    a->items[i] = s;
+}
+
+static long sbx_strarr_len(sbx_strarr* a) {
+    return a->len;
+}
+
+/* Human-readable "[a, b]" form (print parity with the interpreter). */
+static const char* __sbx_strarr_format(sbx_strarr* a) {
+    long total = 3;
+    for (long i = 0; i < a->len; i++) total += (long)strlen(a->items[i]) + 3;
+    char* out = (char*)malloc((size_t)total);
+    size_t off = 0;
+    out[off++] = '[';
+    for (long i = 0; i < a->len; i++) {
+        if (i > 0) { out[off++] = ','; out[off++] = ' '; }
+        size_t l = strlen(a->items[i]);
+        memcpy(out + off, a->items[i], l);
+        off += l;
+    }
+    out[off++] = ']';
     out[off] = '\0';
+    return out;
+}
+
+/* Keys in insertion order as a real string array (sbx_strarr handle). */
+static sbx_strarr* __sbx_map_keys(sbx_map* m) {
+    sbx_strarr* out = sbx_strarr_new(m->ord_len > 0 ? m->ord_len : 1);
+    for (long k = 0; k < m->ord_len; k++) sbx_strarr_push(out, m->ord_keys[k]);
+    return out;
+}
+
+/* ── C1: i64-array heap handle (sbx_i64arr) — mirrors sbx_strarr so that
+   map.values() and friends carry a runtime length everywhere (len, for, print). ── */
+typedef struct { long* items; long len; long cap; } sbx_i64arr;
+
+static sbx_i64arr* sbx_i64arr_new(long cap) {
+    if (cap < 1) cap = 1;
+    sbx_i64arr* a = (sbx_i64arr*)malloc(sizeof(sbx_i64arr));
+    a->items = (long*)malloc(sizeof(long) * (size_t)cap);
+    a->len = 0; a->cap = cap;
+    return a;
+}
+
+static void sbx_i64arr_push(sbx_i64arr* a, long v) {
+    if (a->len >= a->cap) {
+        a->cap *= 2;
+        a->items = (long*)realloc(a->items, sizeof(long) * (size_t)a->cap);
+    }
+    a->items[a->len++] = v;
+}
+
+static long sbx_i64arr_get(sbx_i64arr* a, long i) { return a->items[i]; }
+
+static long sbx_i64arr_len(sbx_i64arr* a) { return a->len; }
+
+static const char* __sbx_i64arr_format(sbx_i64arr* a) {
+    long total = 3;
+    for (long i = 0; i < a->len; i++) total += 21;
+    char* out = (char*)malloc((size_t)total);
+    size_t off = 0;
+    out[off++] = '[';
+    for (long i = 0; i < a->len; i++) {
+        if (i > 0) { out[off++] = ','; out[off++] = ' '; }
+        off += (size_t)snprintf(out + off, 24, "%ld", a->items[i]);
+    }
+    out[off++] = ']';
+    out[off] = '\0';
+    return out;
+}
+
+/* Values in insertion order as a plain long array (caller tracks the length
+   via __sbx_map_len(m) at the binding site). */
+/* Values in insertion order as a real i64 array (sbx_i64arr handle, carries
+   its length — unlike a bare long* — so len/for/print agree across backends). */
+static sbx_i64arr* __sbx_map_values(sbx_map* m) {
+    sbx_i64arr* out = sbx_i64arr_new(m->ord_len > 0 ? m->ord_len : 1);
+    for (long k = 0; k < m->ord_len; k++) sbx_i64arr_push(out, m->ord_vals[k]);
     return out;
 }
 

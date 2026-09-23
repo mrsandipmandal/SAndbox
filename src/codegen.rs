@@ -2035,7 +2035,11 @@ impl CodeGen {
                 if is_shadow {
                     // Variable already declared — emit assignment instead of redeclaration
                     writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
-                } else if matches!(value, Expr::ArrayLiteral(_)) && c_ty.ends_with('*') {
+                } else if matches!(value, Expr::ArrayLiteral(_))
+                    && c_ty.ends_with('*')
+                    && c_ty != "sbx_strarr*"
+                    && c_ty != "sbx_i64arr*"
+                {
                     let arr_ty = c_ty.trim_end_matches('*');
                     let len = if let Expr::ArrayLiteral(elems) = value {
                         elems.len()
@@ -2068,7 +2072,13 @@ impl CodeGen {
                     .get(name.as_str())
                     .map(|s| s.as_str())
                     .unwrap_or("long");
-                if var_type.ends_with('*') && matches!(value, Expr::ArrayLiteral(_)) {
+                if var_type == "sbx_strarr*" {
+                    // C1: string-array reassignment swaps the heap handle (from an
+                    // array literal, another strarr var, or map.values()). Length
+                    // is always read at runtime via sbx_strarr_len, so no tracking.
+                    self.write_indent();
+                    writeln!(self.output, "{} = {};", name, self.gen_expr(value)).unwrap();
+                } else if var_type.ends_with('*') && matches!(value, Expr::ArrayLiteral(_)) {
                     // Array reassignment: copy elements one by one
                     if let Expr::ArrayLiteral(elems) = value {
                         let len = elems.len();
@@ -2185,6 +2195,117 @@ impl CodeGen {
                     for s in body {
                         self.gen_stmt(s);
                     }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                } else if self.infer_c_type(iterable) == "sbx_strarr*" {
+                    // C1: for x over a string array — element is a string binding,
+                    // stored in the string-variable space (parity with interp/LLVM)
+                    let arr_val = self.gen_expr(iterable);
+                    self.write_indent();
+                    writeln!(self.output, "{{").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "sbx_strarr* __sarr = {};", arr_val).unwrap();
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "for (long __i = 0; __i < sbx_strarr_len(__sarr); __i++) {{"
+                    )
+                    .unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "const char* {} = sbx_strarr_get(__sarr, __i);",
+                        variable
+                    )
+                    .unwrap();
+                    self.var_types
+                        .insert(variable.clone(), "const char*".to_string());
+                    if !self.declared_vars.contains(variable) {
+                        self.declared_vars.push(variable.clone());
+                    }
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                } else if matches!(iterable, Expr::MethodCall { method, .. } if method == "values")
+                    && self.infer_c_type(iterable) == "sbx_i64arr*"
+                {
+                    // C1: for v over m.values() — a fresh sbx_i64arr handle is
+                    // materialized so break/continue work (same shape as the
+                    // strarr arm below).
+                    let arr_val = self.gen_expr(iterable);
+                    self.write_indent();
+                    writeln!(self.output, "{{").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "sbx_i64arr* __varr = {};", arr_val).unwrap();
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "for (long __i = 0; __i < sbx_i64arr_len(__varr); __i++) {{"
+                    )
+                    .unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "long {} = sbx_i64arr_get(__varr, __i);",
+                        variable
+                    )
+                    .unwrap();
+                    self.var_types.insert(variable.clone(), "long".to_string());
+                    if !self.declared_vars.contains(variable) {
+                        self.declared_vars.push(variable.clone());
+                    }
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
+                } else if self.infer_c_type(iterable) == "sbx_i64arr*" {
+                    // C1: for v over a named i64-array variable
+                    let arr_val = self.gen_expr(iterable);
+                    self.write_indent();
+                    writeln!(self.output, "{{").unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(self.output, "sbx_i64arr* __varr = {};", arr_val).unwrap();
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "for (long __i = 0; __i < sbx_i64arr_len(__varr); __i++) {{"
+                    )
+                    .unwrap();
+                    self.indent += 1;
+                    self.write_indent();
+                    writeln!(
+                        self.output,
+                        "long {} = sbx_i64arr_get(__varr, __i);",
+                        variable
+                    )
+                    .unwrap();
+                    self.var_types.insert(variable.clone(), "long".to_string());
+                    if !self.declared_vars.contains(variable) {
+                        self.declared_vars.push(variable.clone());
+                    }
+                    for s in body {
+                        self.gen_stmt(s);
+                    }
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, "}}").unwrap();
                     self.indent -= 1;
                     self.write_indent();
                     writeln!(self.output, "}}").unwrap();
@@ -2380,6 +2501,14 @@ impl CodeGen {
                         self.gen_expr(expr)
                     )
                     .unwrap();
+                } else if var_type == Some("sbx_strarr*") {
+                    // C1: string array → [a, b] (interpreter parity)
+                    writeln!(
+                        self.output,
+                        "printf(\"%s\\n\", __sbx_strarr_format({}));",
+                        self.gen_expr(expr)
+                    )
+                    .unwrap();
                 } else if var_type.map(|t| t.ends_with('*')).unwrap_or(false) {
                     // Array: use __sbx_print_arr if we know the length, else fallback
                     if let Some(len_expr) = self.array_lengths.get(name.as_str()) {
@@ -2415,6 +2544,22 @@ impl CodeGen {
                 let val = self.gen_expr(expr);
                 if expr_ty == "const char*" || expr_ty == "string" {
                     writeln!(self.output, "printf(\"%s\\n\", {});", val).unwrap();
+                } else if expr_ty == "sbx_strarr*" {
+                    // C1: string array handle → [a, b]
+                    writeln!(
+                        self.output,
+                        "printf(\"%s\\n\", __sbx_strarr_format({}));",
+                        val
+                    )
+                    .unwrap();
+                } else if expr_ty == "sbx_i64arr*" {
+                    // C1: i64 array handle → [a, b]
+                    writeln!(
+                        self.output,
+                        "printf(\"%s\\n\", __sbx_i64arr_format({}));",
+                        val
+                    )
+                    .unwrap();
                 } else if expr_ty == "double" {
                     writeln!(self.output, "printf(\"%f\\n\", {});", val).unwrap();
                 } else if expr_ty == "int" {
@@ -2440,7 +2585,12 @@ impl CodeGen {
             Expr::MoneyLiteral { .. } | Expr::DecimalLiteral(_) => "long".into(),
             Expr::UnitLiteral { .. } => "long".into(),
             Expr::ArrayLiteral(elems) if !elems.is_empty() => {
-                format!("{}*", self.infer_c_type(&elems[0]))
+                // C1: string-element arrays are sbx_strarr* handles
+                if matches!(elems[0], Expr::Str(_)) {
+                    "sbx_strarr*".into()
+                } else {
+                    format!("{}*", self.infer_c_type(&elems[0]))
+                }
             }
             Expr::MapLiteral(_) => "sbx_map*".into(),
             Expr::StructLiteral {
@@ -2507,10 +2657,12 @@ impl CodeGen {
                 }
             }
             Expr::MethodCall { target, method, .. } => {
-                // Map method sugar: keys() yields a string, everything else a long.
+                // Map method sugar: keys() yields a string array handle,
+                // values() a long*, everything else a long.
                 if self.infer_c_type(target) == "sbx_map*" {
                     return match method.as_str() {
-                        "keys" => "const char*".into(),
+                        "keys" => "sbx_strarr*".into(),
+                        "values" => "sbx_i64arr*".into(),
                         _ => "long".into(),
                     };
                 }
@@ -2552,6 +2704,10 @@ impl CodeGen {
             Expr::ErrExpr(_) => "const char*".into(),
             Expr::Range { .. } => "sbx_range_t".into(),
             Expr::FString(_) => "const char*".into(),
+            // C1: string-array indexing yields a string element
+            Expr::Index { target, .. } if self.infer_c_type(target) == "sbx_strarr*" => {
+                "const char*".into()
+            }
             _ => "long".into(),
         }
     }
@@ -2726,6 +2882,14 @@ impl CodeGen {
                     // so it must be tested before the array/sizeof branch)
                     if self.infer_c_type(arg) == "sbx_map*" {
                         return format!("__sbx_map_len({})", self.gen_expr(arg));
+                    }
+                    // C1: string-array length → runtime helper
+                    if self.infer_c_type(arg) == "sbx_strarr*" {
+                        return format!("sbx_strarr_len({})", self.gen_expr(arg));
+                    }
+                    // C1: i64-array handle length → runtime helper
+                    if self.infer_c_type(arg) == "sbx_i64arr*" {
+                        return format!("sbx_i64arr_len({})", self.gen_expr(arg));
                     }
                     let c_ty = self.infer_c_type(arg);
                     if c_ty == "const char*" || c_ty == "char*" {
@@ -2907,6 +3071,18 @@ impl CodeGen {
                     let k = self.gen_expr(index);
                     return format!("__sbx_map_get({}, {}, 0)", t, k);
                 }
+                // C1: string-array indexing → runtime get (bounds-checked,
+                // returns "" out of range on every backend)
+                if self.infer_c_type(target) == "sbx_strarr*" {
+                    let t = self.gen_expr(target);
+                    let i = self.gen_expr(index);
+                    return format!("sbx_strarr_get({}, {})", t, i);
+                }
+                if self.infer_c_type(target) == "sbx_i64arr*" {
+                    let t = self.gen_expr(target);
+                    let i = self.gen_expr(index);
+                    return format!("sbx_i64arr_get({}, {})", t, i);
+                }
                 format!("({})[{}]", self.gen_expr(target), self.gen_expr(index))
             }
             Expr::MapLiteral(pairs) => {
@@ -2926,6 +3102,25 @@ impl CodeGen {
                 format!("({{ sbx_map* {} = sbx_map_new(); {}{}; }})", tmp, body, tmp)
             }
             Expr::ArrayLiteral(elems) => {
+                // C1: string-element arrays become an sbx_strarr handle built at
+                // runtime (a brace initializer would need a length-tracked
+                // char*[] anyway); int-element arrays keep the braced form.
+                if matches!(elems.first(), Some(Expr::Str(_))) || elems.is_empty() {
+                    let idx = self.var_counter.get();
+                    self.var_counter.set(idx + 1);
+                    let tmp = format!("__stra{}", idx);
+                    let mut body = String::new();
+                    for e in elems {
+                        body.push_str(&format!("sbx_strarr_push({}, {}); ", tmp, self.gen_expr(e)));
+                    }
+                    return format!(
+                        "({{ sbx_strarr* {} = sbx_strarr_new({}); {}{}; }})",
+                        tmp,
+                        elems.len().max(1),
+                        body,
+                        tmp
+                    );
+                }
                 let elems_str: Vec<String> = elems.iter().map(|e| self.gen_expr(e)).collect();
                 format!("{{ {} }}", elems_str.join(", "))
             }
@@ -3211,6 +3406,7 @@ impl CodeGen {
                         "has" => "__sbx_map_has",
                         "remove" => "__sbx_map_remove",
                         "keys" => "__sbx_map_keys",
+                        "values" => "__sbx_map_values",
                         "len" => "__sbx_map_len",
                         other => other,
                     };
@@ -3505,7 +3701,16 @@ impl CodeGen {
                     format!("uint{}_t", t.bits)
                 }
             }
-            Type::Array(inner) => format!("{}*", self.c_type(inner)),
+            Type::Array(inner) => {
+                // C1: string arrays are heap-backed handle values (sbx_strarr*),
+                // mirroring the sbx_map* pattern — same pointer for literals,
+                // params and keys() results.
+                if matches!(**inner, Type::String) {
+                    "sbx_strarr*".into()
+                } else {
+                    format!("{}*", self.c_type(inner))
+                }
+            }
             Type::Void => "void".into(),
             Type::Custom { name, type_args } => {
                 if name == "Self" {

@@ -71,6 +71,8 @@ fn filter_output(raw: &str) -> String {
 }
 
 /// Run a command with a hard timeout; returns None if it timed out.
+/// Every subprocess the harness spawns goes through here: corpus programs
+/// can loop forever on a backend bug, and a plain .output() would hang CI.
 fn run_with_timeout(mut cmd: Command, timeout: std::time::Duration) -> Option<Output> {
     use std::io::Read;
     let mut child = cmd
@@ -79,26 +81,31 @@ fn run_with_timeout(mut cmd: Command, timeout: std::time::Duration) -> Option<Ou
         .spawn()
         .ok()?;
     let deadline = std::time::Instant::now() + timeout;
+    // Wait for exit with a deadline FIRST. Reading to EOF before checking
+    // the clock hangs on children that never print and never exit; reading
+    // before waiting hangs on children that out-print the pipe buffer.
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() > deadline {
+                    let _ = child.kill();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(_) => return None,
+        }
+    };
+    // The child has exited, so its pipes are closed — these reads reach EOF.
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    // Corpus programs are short-lived; read to EOF rather than using
-    // wait_with_output, which can hang on a runaway binary's stderr.
-    while let Some(out) = child.stdout.as_mut() {
-        let mut buf = [0u8; 8192];
-        match out.read(&mut buf) {
-            Ok(0) => break, // EOF
-            Ok(n) => stdout.extend_from_slice(&buf[..n]),
-            Err(_) => break,
-        }
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            return None;
-        }
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_end(&mut stdout);
     }
     if let Some(mut err) = child.stderr.take() {
         let _ = err.read_to_end(&mut stderr);
     }
-    let status = child.wait().ok()?;
     Some(Output {
         status,
         stdout,
@@ -153,10 +160,15 @@ fn run_backend(backend: Backend, source: &str, workdir: &TempDir) -> Result<Stri
             } else {
                 "interpret"
             };
-            let out = Command::new(&bin)
-                .args([mode, sbx_path.to_str().unwrap()])
-                .output()
-                .map_err(|e| format!("spawn failed: {e}"))?;
+            let out = run_with_timeout(
+                {
+                    let mut c = Command::new(&bin);
+                    c.args([mode, sbx_path.to_str().unwrap()]);
+                    c
+                },
+                std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+            )
+            .ok_or_else(|| format!("{mode} timed out"))?;
             if !out.status.success() {
                 return Err(format!(
                     "{} exited {}",
@@ -168,15 +180,20 @@ fn run_backend(backend: Backend, source: &str, workdir: &TempDir) -> Result<Stri
         }
         Backend::Llvm => {
             let bin_path = workdir.path().join("llvm_prog");
-            let build = Command::new(&bin)
-                .args([
-                    "llvm-build",
-                    sbx_path.to_str().unwrap(),
-                    "-o",
-                    bin_path.to_str().unwrap(),
-                ])
-                .output()
-                .map_err(|e| format!("spawn failed: {e}"))?;
+            let build = run_with_timeout(
+                {
+                    let mut c = Command::new(&bin);
+                    c.args([
+                        "llvm-build",
+                        sbx_path.to_str().unwrap(),
+                        "-o",
+                        bin_path.to_str().unwrap(),
+                    ]);
+                    c
+                },
+                std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+            )
+            .ok_or_else(|| "llvm-build timed out".to_string())?;
             if !build.status.success() {
                 return Err(format!(
                     "llvm-build failed: {}",
@@ -217,15 +234,20 @@ fn run_wasm_backend(source: &str, workdir: &TempDir) -> Result<String, String> {
     let wasm_path = workdir.path().join("prog.wasm");
     fs::write(&sbx_path, source).map_err(|e| format!("write failed: {e}"))?;
 
-    let gen = Command::new(&bin)
-        .args([
-            "wasm",
-            sbx_path.to_str().unwrap(),
-            "-o",
-            wat_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    let gen = run_with_timeout(
+        {
+            let mut c = Command::new(&bin);
+            c.args([
+                "wasm",
+                sbx_path.to_str().unwrap(),
+                "-o",
+                wat_path.to_str().unwrap(),
+            ]);
+            c
+        },
+        std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+    )
+    .ok_or_else(|| "sandbox wasm timed out".to_string())?;
     if !gen.status.success() {
         return Err(format!(
             "wasm exited {}: {}",
@@ -234,14 +256,19 @@ fn run_wasm_backend(source: &str, workdir: &TempDir) -> Result<String, String> {
         ));
     }
 
-    let asm = Command::new("wat2wasm")
-        .args([
-            wat_path.to_str().unwrap(),
-            "-o",
-            wasm_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|_| "wat2wasm not found".to_string())?;
+    let asm = run_with_timeout(
+        {
+            let mut c = Command::new("wat2wasm");
+            c.args([
+                wat_path.to_str().unwrap(),
+                "-o",
+                wasm_path.to_str().unwrap(),
+            ]);
+            c
+        },
+        std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+    )
+    .ok_or_else(|| "wat2wasm timed out (or not found)".to_string())?;
     if !asm.status.success() {
         return Err(format!(
             "wat2wasm failed: {}",
@@ -275,15 +302,20 @@ fn wasm_compiles(source: &str, workdir: &TempDir) -> Result<(), String> {
     let sbx_path = workdir.path().join("prog_wasm.sbx");
     let wat_path = workdir.path().join("prog.wat");
     fs::write(&sbx_path, source).map_err(|e| format!("write failed: {e}"))?;
-    let out = Command::new(&bin)
-        .args([
-            "wasm",
-            sbx_path.to_str().unwrap(),
-            "-o",
-            wat_path.to_str().unwrap(),
-        ])
-        .output()
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    let out = run_with_timeout(
+        {
+            let mut c = Command::new(&bin);
+            c.args([
+                "wasm",
+                sbx_path.to_str().unwrap(),
+                "-o",
+                wat_path.to_str().unwrap(),
+            ]);
+            c
+        },
+        std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+    )
+    .ok_or_else(|| "sandbox wasm timed out".to_string())?;
     if !out.status.success() {
         return Err(format!("wasm exited {}", out.status.code().unwrap_or(-1)));
     }
@@ -309,8 +341,6 @@ const C_AND_INTERP: &[Backend] = &[Backend::C, Backend::Interp];
 const C_LLVM_INTERP: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp];
 const C_ONLY: &[Backend] = &[Backend::C];
 const LLVM_ONLY: &[Backend] = &[Backend::Llvm];
-/// Integer-only programs the wasm backend also runs identically.
-const C_INTERP_WASM: &[Backend] = &[Backend::C, Backend::Interp, Backend::Wasm];
 /// Integer programs across every backend, wasm included.
 const ALL_INT: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp, Backend::Wasm];
 // Known wasm-backend gaps (cases demoted to C_AND_INTERP; closing one means
@@ -559,12 +589,16 @@ fn main() {
     let i = 0
     while i < 3 {
         print(i)
-        let i = i + 1
+        i = i + 1
     }
 }
 "#,
-        // Known gap: LLVM while-loop variable update emits stale values.
-        backends: C_INTERP_WASM,
+        // Loop counters must ASSIGN (`i = i + 1`): a body `let i = i + 1`
+        // declares a fresh block-scoped shadow, so the condition's `i` never
+        // changes and the program diverges by design (same as Rust). The old
+        // body-`let` form was also where the LLVM while-loop stale-value gap
+        // lived; with assignment semantics all four backends agree.
+        backends: ALL_INT,
     },
     ParityCase {
         name: "for_range",
@@ -1100,7 +1134,7 @@ fn main() {
 fn main() {
     let i = 0
     while i < 10 {
-        let i = i + 1
+        i = i + 1
         if i == 2 {
             continue
         }
@@ -1111,7 +1145,9 @@ fn main() {
     }
 }
 "#,
-        backends: C_INTERP_WASM,
+        // Same as while_loop: counters assign instead of shadow-let, which
+        // would re-declare a fresh binding each iteration and loop forever.
+        backends: ALL_INT,
     },
     ParityCase {
         name: "str_methods",
@@ -1123,6 +1159,49 @@ fn main() {
 }
 "#,
         backends: C_AND_INTERP,
+    },
+    ParityCase {
+        name: "block_scope_shadow",
+        source: r#"
+fn main() {
+    let y = 5
+    if true {
+        let y = 7
+        print(y)
+    }
+    print(y)
+}
+"#,
+        // Block scoping: a `let` inside a branch is a NEW binding — the b2
+        // renamer gives shadowing declarations a fresh name before codegen,
+        // so every backend sees 7 then 5 instead of 7 then 7. Uses outside
+        // a binding's block are typechecker errors (see the block_scope
+        // integration tests); wasm runs this too since it's integer-only.
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "block_scope_fresh",
+        source: r#"
+fn main() {
+    let total = 0
+    if true {
+        let bonus = 40
+        total = total + bonus
+    }
+    print(total + 2)
+    let sum = 0
+    for i in 0..3 {
+        let step = i * 2
+        sum = sum + step
+    }
+    print(sum)
+}
+"#,
+        // Block scoping: branch/loop-local declarations are usable inside
+        // their own block, assignments to outer variables still escape the
+        // block, and the interpreter re-scopes each while/if arm so nothing
+        // leaks across iterations (42 / 6 on every backend).
+        backends: ALL_INT,
     },
 ];
 

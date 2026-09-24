@@ -15,7 +15,7 @@
 //! All three backends then implement exactly one wrapping primitive
 //! (`Expr::Cast`), keeping C / LLVM / interpreter bit-identical by construction.
 
-use crate::ast::{Expr, Program, Stmt, TopLevel, Type};
+use crate::ast::{Expr, FStringPart, Pattern, Program, Stmt, TopLevel, Type};
 use std::collections::HashMap;
 
 /// Rewrite `program` in place, wrapping every typed store with a cast to the
@@ -404,4 +404,331 @@ fn wrap_store(value: Expr, ty: &Type) -> Expr {
 
 fn is_narrow(ty: &Type) -> bool {
     matches!(ty, Type::Int(_))
+}
+
+// ── Block scoping (branch-scoping fix) ──
+//
+// Rule (Rust-style, PROJECT_MEMORY.md): `let` binds in the innermost block,
+// an inner block may shadow an outer name, and using a name outside its
+// block is a typechecker error. Before this pass the AST had no notion of
+// blocks, so a shadowing `let` mutated the outer binding in every backend
+// (C reused the C symbol, LLVM reused the alloca, the interpreter overwrote
+// the map entry) — `let y = 5 { let y = 7 } print(y)` printed 7 7.
+//
+// This pass gives every shadowing declaration a distinct internal name and
+// rewrites the reads that refer to it, so all four backends keep seeing
+// plain distinct bindings. Scopes never leak: each block body is rewritten
+// against a snapshot of the parent's mapping.
+
+use std::cell::Cell;
+
+thread_local! {
+    static SHADOW_COUNTER: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Rewrite `program` in place, renaming shadowing declarations to fresh
+/// internal names. Run after typechecking, alongside the other b2 passes.
+pub fn resolve_block_scoping(program: &mut Program) {
+    SHADOW_COUNTER.with(|c| c.set(0));
+    for item in &mut program.items {
+        match item {
+            TopLevel::FnDef { params, body, .. } | TopLevel::AsyncFnDef { params, body, .. } => {
+                let mut scope: HashMap<String, String> = params
+                    .iter()
+                    .map(|p| (p.name.clone(), p.name.clone()))
+                    .collect();
+                *body = scope_stmts(std::mem::take(body), &mut scope);
+            }
+            TopLevel::ImplDef { methods, .. } => {
+                for m in methods {
+                    if let TopLevel::FnDef { params, body, .. } = m {
+                        let mut scope: HashMap<String, String> = params
+                            .iter()
+                            .map(|p| (p.name.clone(), p.name.clone()))
+                            .collect();
+                        *body = scope_stmts(std::mem::take(body), &mut scope);
+                    }
+                }
+            }
+            TopLevel::TestDef { body, .. } => {
+                let mut scope = HashMap::new();
+                *body = scope_stmts(std::mem::take(body), &mut scope);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn fresh_shadow(base: &str) -> String {
+    let n = SHADOW_COUNTER.with(|c| {
+        let n = c.get();
+        c.set(n + 1);
+        n
+    });
+    format!("{}__s{}", base, n)
+}
+
+fn scope_stmts(stmts: Vec<Stmt>, scope: &mut HashMap<String, String>) -> Vec<Stmt> {
+    let mut out = Vec::with_capacity(stmts.len());
+    for s in stmts {
+        out.push(scope_stmt(s, scope));
+    }
+    out
+}
+
+fn scope_stmt(stmt: Stmt, scope: &mut HashMap<String, String>) -> Stmt {
+    match stmt {
+        Stmt::Let {
+            name,
+            ty,
+            value,
+            mutable,
+        } => {
+            let value = scope_expr(value, scope);
+            // A redeclaration of a live name is a shadow: bind a fresh
+            // internal name. First declaration keeps the source name.
+            let final_name = if scope.contains_key(&name) {
+                fresh_shadow(&name)
+            } else {
+                name.clone()
+            };
+            scope.insert(name, final_name.clone());
+            Stmt::Let {
+                name: final_name,
+                ty,
+                value,
+                mutable,
+            }
+        }
+        Stmt::Assign { name, value } => {
+            let value = scope_expr(value, scope);
+            let name = scope.get(&name).cloned().unwrap_or(name);
+            Stmt::Assign { name, value }
+        }
+        Stmt::If {
+            condition,
+            then,
+            else_,
+        } => {
+            let condition = scope_expr(condition, scope);
+            let mut inner = scope.clone();
+            let then = scope_stmts(then, &mut inner);
+            let else_ = else_.map(|b| {
+                let mut einner = scope.clone();
+                scope_stmts(b, &mut einner)
+            });
+            Stmt::If {
+                condition,
+                then,
+                else_,
+            }
+        }
+        Stmt::IfLet {
+            pattern,
+            value,
+            then,
+            else_,
+        } => {
+            let value = Box::new(scope_expr((*value).clone(), scope));
+            let mut inner = scope.clone();
+            if let Pattern::Variable(name) = &pattern {
+                inner.insert(name.clone(), name.clone());
+            }
+            let then = scope_stmts(then, &mut inner);
+            let else_ = else_.map(|b| {
+                let mut einner = scope.clone();
+                scope_stmts(b, &mut einner)
+            });
+            Stmt::IfLet {
+                pattern,
+                value,
+                then,
+                else_,
+            }
+        }
+        Stmt::While { condition, body } => {
+            // The condition is evaluated in the ENCLOSING scope, before any
+            // body declaration exists (matches the typechecker/interpreter):
+            // rewrite it against `scope`, not the body's shadowed view, or a
+            // body `let` on the same name would redirect the condition to an
+            // uninitialized fresh binding and the loop would never terminate.
+            let condition = scope_expr(condition, scope);
+            let mut inner = scope.clone();
+            let body = scope_stmts(body, &mut inner);
+            Stmt::While { condition, body }
+        }
+        Stmt::For {
+            variable,
+            iterable,
+            body,
+        } => {
+            let iterable = scope_expr(iterable, scope);
+            let mut inner = scope.clone();
+            // The loop variable shadows any outer binding of the same name.
+            let var_final = if inner.contains_key(&variable) {
+                fresh_shadow(&variable)
+            } else {
+                variable.clone()
+            };
+            inner.insert(variable, var_final.clone());
+            let body = scope_stmts(body, &mut inner);
+            Stmt::For {
+                variable: var_final,
+                iterable,
+                body,
+            }
+        }
+        Stmt::ExprStmt(e) => Stmt::ExprStmt(scope_expr(e, scope)),
+        Stmt::Print(e) => Stmt::Print(scope_expr(e, scope)),
+        Stmt::Return(Some(e)) => Stmt::Return(Some(scope_expr(e, scope))),
+        Stmt::Break | Stmt::Continue | Stmt::Return(None) => stmt,
+    }
+}
+
+fn scope_expr(expr: Expr, scope: &mut HashMap<String, String>) -> Expr {
+    match expr {
+        Expr::Ident(name) => Expr::Ident(scope.get(&name).cloned().unwrap_or(name)),
+        Expr::BinaryOp { op, left, right } => Expr::BinaryOp {
+            op,
+            left: Box::new(scope_expr(*left, scope)),
+            right: Box::new(scope_expr(*right, scope)),
+        },
+        Expr::UnaryOp { op, expr } => Expr::UnaryOp {
+            op,
+            expr: Box::new(scope_expr(*expr, scope)),
+        },
+        Expr::Cast { expr, ty } => Expr::Cast {
+            expr: Box::new(scope_expr(*expr, scope)),
+            ty,
+        },
+        Expr::Call {
+            name,
+            type_args,
+            args,
+        } => Expr::Call {
+            name,
+            type_args,
+            args: args.into_iter().map(|a| scope_expr(a, scope)).collect(),
+        },
+        Expr::MethodCall {
+            target,
+            method,
+            args,
+        } => Expr::MethodCall {
+            target: Box::new(scope_expr(*target, scope)),
+            method,
+            args: args.into_iter().map(|a| scope_expr(a, scope)).collect(),
+        },
+        Expr::ArrayLiteral(elems) => {
+            Expr::ArrayLiteral(elems.into_iter().map(|e| scope_expr(e, scope)).collect())
+        }
+        Expr::MapLiteral(pairs) => Expr::MapLiteral(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (scope_expr(k, scope), scope_expr(v, scope)))
+                .collect(),
+        ),
+        Expr::Index { target, index } => Expr::Index {
+            target: Box::new(scope_expr(*target, scope)),
+            index: Box::new(scope_expr(*index, scope)),
+        },
+        Expr::FieldAccess { target, field } => Expr::FieldAccess {
+            target: Box::new(scope_expr(*target, scope)),
+            field,
+        },
+        Expr::StructLiteral {
+            name,
+            type_args,
+            fields,
+        } => Expr::StructLiteral {
+            name,
+            type_args,
+            fields: fields
+                .into_iter()
+                .map(|(f, e)| (f, scope_expr(e, scope)))
+                .collect(),
+        },
+        Expr::Match { scrutinee, arms } => Expr::Match {
+            scrutinee: Box::new(scope_expr(*scrutinee, scope)),
+            arms: arms
+                .into_iter()
+                .map(|arm| {
+                    let mut inner = scope.clone();
+                    if let Pattern::Variable(n) = &arm.pattern {
+                        inner.insert(n.clone(), n.clone());
+                    }
+                    crate::ast::MatchArm {
+                        pattern: arm.pattern,
+                        guard: arm.guard.map(|g| Box::new(scope_expr(*g, &mut inner))),
+                        body: scope_stmts(arm.body, &mut inner),
+                    }
+                })
+                .collect(),
+        },
+        Expr::Lambda { params, ret, body } => {
+            let mut inner: HashMap<String, String> = params
+                .iter()
+                .map(|p| (p.name.clone(), p.name.clone()))
+                .collect();
+            Expr::Lambda {
+                params,
+                ret,
+                body: scope_stmts(body, &mut inner),
+            }
+        }
+        Expr::UnitLiteral { value, unit } => Expr::UnitLiteral {
+            value: Box::new(scope_expr(*value, scope)),
+            unit,
+        },
+        Expr::OkExpr(e) => Expr::OkExpr(Box::new(scope_expr(*e, scope))),
+        Expr::ErrExpr(e) => Expr::ErrExpr(Box::new(scope_expr(*e, scope))),
+        Expr::SomeExpr(e) => Expr::SomeExpr(Box::new(scope_expr(*e, scope))),
+        Expr::NoneExpr => Expr::NoneExpr,
+        Expr::PanicExpr(e) => Expr::PanicExpr(Box::new(scope_expr(*e, scope))),
+        Expr::TryExpr(e) => Expr::TryExpr(Box::new(scope_expr(*e, scope))),
+        Expr::AssertExpr { condition, message } => Expr::AssertExpr {
+            condition: Box::new(scope_expr(*condition, scope)),
+            message: message.map(|m| Box::new(scope_expr(*m, scope))),
+        },
+        Expr::AssertEqExpr {
+            left,
+            right,
+            message,
+        } => Expr::AssertEqExpr {
+            left: Box::new(scope_expr(*left, scope)),
+            right: Box::new(scope_expr(*right, scope)),
+            message: message.map(|m| Box::new(scope_expr(*m, scope))),
+        },
+        Expr::EnumVariant {
+            enum_name,
+            type_args,
+            variant,
+            payload,
+        } => Expr::EnumVariant {
+            enum_name,
+            type_args,
+            variant,
+            payload: payload.map(|p| Box::new(scope_expr(*p, scope))),
+        },
+        Expr::Range {
+            start,
+            end,
+            inclusive,
+        } => Expr::Range {
+            start: Box::new(scope_expr(*start, scope)),
+            end: Box::new(scope_expr(*end, scope)),
+            inclusive,
+        },
+        Expr::FString(parts) => Expr::FString(
+            parts
+                .into_iter()
+                .map(|p| match p {
+                    FStringPart::Literal(l) => FStringPart::Literal(l),
+                    FStringPart::Expr(e) => FStringPart::Expr(Box::new(scope_expr(*e, scope))),
+                })
+                .collect(),
+        ),
+        // Leaves
+        other => other,
+    }
 }

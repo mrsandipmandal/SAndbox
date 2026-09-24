@@ -190,6 +190,7 @@ impl Compiler {
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
         b2::implicit_returns(&mut program);
+        b2::resolve_block_scoping(&mut program);
 
         self.progress("  → Generating C code...");
         let mut codegen = CodeGen::new();
@@ -206,6 +207,7 @@ impl Compiler {
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
         b2::implicit_returns(&mut program);
+        b2::resolve_block_scoping(&mut program);
         let mut codegen = CodeGen::new();
         let c_code = codegen.generate(&program, None);
         Ok(c_code)
@@ -230,6 +232,7 @@ impl Compiler {
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
         b2::implicit_returns(&mut program);
+        b2::resolve_block_scoping(&mut program);
 
         Ok(program)
     }
@@ -374,6 +377,7 @@ impl Compiler {
         checker.check(&program)?;
         b2::desugar_typed_stores(&mut program);
         b2::implicit_returns(&mut program);
+        b2::resolve_block_scoping(&mut program);
 
         println!("  → Generating C code...");
         let mut codegen = CodeGen::new();

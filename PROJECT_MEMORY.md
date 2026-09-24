@@ -176,8 +176,9 @@ docs/explanations: **English**.
   real arrays. Parity: `str_array_basics`, `map_keys_values` (C+LLVM+interp).
 - `break`/`continue` inside range loops mis-scope in edge cases; C corrupts its
   induction slot when the body redeclares a range-loop variable (LLVM/interp shadow).
-- Brand-new name declared in a branch and used after it: C rejects, interp accepts,
-  LLVM emitted invalid IR (needs a scoping/typechecker decision first).
+  **Partially addressed 2026-09-24**: block-scoping renamer gives For bodies a
+  fresh scope, so body `let`s no longer collide with the C induction slot; only
+  `break`/`continue` edge cases remain (would need structured control flow).
 
 ## Decisions log
 - 2026-09-15: Roadmap direction set (web first; machine-level = compiler-only).
@@ -189,3 +190,24 @@ docs/explanations: **English**.
   without runtime length are never exposed to Sandbox code.
 - 2026-09-15: Deploy pipeline = GHCR push + SSH compose deploy, rollback on
   failed health check; production environment requires user approval.
+- 2026-09-24: **Block scoping is Rust-style, enforced in the typechecker.**
+  `let` binds in the innermost block; inner blocks may shadow (a shadowing
+  `let` is a NEW binding, not reassignment); using a name outside its block
+  is an `Undefined variable` check error. Implementation: a front-end desugar
+  pass `b2::resolve_block_scoping` (runs in all 4 compile pipelines, NOT in
+  `Compiler::check`) renames shadowing `let`s to fresh `name__sN` and rewrites
+  reads/assigns via a scope map, so no backend needs shadowing logic; If/While
+  now push typechecker scopes like For/IfLet/Match already did. The
+  interpreter additionally snapshots/restores its var maps around If/While
+  arms (per-iteration for loops bodies) so runtime state can't leak across
+  iterations — but it stays lax on unbound idents (evaluates 0): the
+  typechecker is the enforcement point, matching B3's documented interp gaps.
+  Parity: `block_scope_shadow`, `block_scope_fresh` (ALL_INT); integration:
+  `block_scope_use_after_branch_is_rejected`,
+  `block_scope_shadowing_is_fresh_binding`. Corpus modernized: `while_loop`
+  and `break_continue` used `let i = i + 1` counters, which under the new
+  rule shadow the loop variable and diverge by design (like Rust) — rewritten
+  to `i = i + 1` and widened to ALL_INT (LLVM's old while-loop stale-value
+  gap was in that body-`let` form and is now closed). Parity harness hardened:
+  every subprocess spawn goes through `run_with_timeout` (with a post-EOF
+  exit wait), so a runaway program can no longer hang CI.

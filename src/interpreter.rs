@@ -968,6 +968,50 @@ impl InterpreterState {
     /// After evaluating an expression, find the newest auto key (by prefix) that
     /// wasn't in `before` and transfer it to `name` in the appropriate map.
     /// Returns true if a key was transferred.
+    /// Block scoping: capture the *keys* of every binding map. Branch-local
+    /// declarations vanish on block exit (their keys are restored as absent),
+    /// while assignments to outer names keep their new values (keys present
+    /// before and after are untouched). Renamed shadows from the b2 pass make
+    /// shadowing lets distinct keys, so this is exact.
+    fn snapshot_scope_keys(&self) -> Vec<Vec<String>> {
+        vec![
+            self.vars.keys().cloned().collect(),
+            self.str_vars.keys().cloned().collect(),
+            self.arr_vars.keys().cloned().collect(),
+            self.strarr_vars.keys().cloned().collect(),
+            self.map_vars.keys().cloned().collect(),
+            self.lambdas.keys().cloned().collect(),
+            self.struct_instances.keys().cloned().collect(),
+            self.struct_type_of.keys().cloned().collect(),
+            self.enum_instances.keys().cloned().collect(),
+        ]
+    }
+
+    fn restore_scope_keys(&mut self, before: &[Vec<String>]) {
+        Self::restore_map_keys(&mut self.vars, &before[0]);
+        Self::restore_map_keys(&mut self.str_vars, &before[1]);
+        Self::restore_map_keys(&mut self.arr_vars, &before[2]);
+        Self::restore_map_keys(&mut self.strarr_vars, &before[3]);
+        Self::restore_map_keys(&mut self.map_vars, &before[4]);
+        Self::restore_map_keys(&mut self.lambdas, &before[5]);
+        Self::restore_map_keys(&mut self.struct_instances, &before[6]);
+        Self::restore_map_keys(&mut self.struct_type_of, &before[7]);
+        Self::restore_map_keys(&mut self.enum_instances, &before[8]);
+    }
+
+    fn restore_map_keys<V>(map: &mut std::collections::HashMap<String, V>, before: &[String]) {
+        let now: std::collections::HashSet<&String> = map.keys().collect();
+        // Keys that did not exist before the block: branch-local declarations.
+        let fresh: Vec<String> = now
+            .into_iter()
+            .filter(|k| !before.contains(k))
+            .cloned()
+            .collect();
+        for k in fresh {
+            map.remove(&k);
+        }
+    }
+
     fn transfer_new_key(
         &mut self,
         prefix: &str,
@@ -1128,6 +1172,7 @@ pub fn interpret(source: &str, filename: &str) -> anyhow::Result<()> {
     let mut program = parser.parse()?;
     crate::b2::desugar_typed_stores(&mut program);
     crate::b2::implicit_returns(&mut program);
+    crate::b2::resolve_block_scoping(&mut program);
 
     let mut state = InterpreterState::new();
     for item in &program.items {
@@ -1533,14 +1578,18 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 else_,
             } => {
                 let cond = eval_expr(condition, state)?;
-                if cond != 0 {
-                    if let Some(val) = exec_block(then, state)? {
-                        return Ok(Some(val));
-                    }
+                // Block scoping: declarations inside a branch do not escape it.
+                let scope_keys = state.snapshot_scope_keys();
+                let escaped = if cond != 0 {
+                    exec_block(then, state)?
                 } else if let Some(else_body) = else_ {
-                    if let Some(val) = exec_block(else_body, state)? {
-                        return Ok(Some(val));
-                    }
+                    exec_block(else_body, state)?
+                } else {
+                    None
+                };
+                state.restore_scope_keys(&scope_keys);
+                if let Some(val) = escaped {
+                    return Ok(Some(val));
                 }
             }
             ast::Stmt::While { condition, body } => loop {
@@ -1548,7 +1597,12 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 if cond == 0 {
                     break;
                 }
-                match exec_block(body, state)? {
+                // Block scoping: each iteration's declarations vanish at the
+                // end of that iteration (mirrors C/LLVM block scoping).
+                let scope_keys = state.snapshot_scope_keys();
+                let outcome = exec_block(body, state)?;
+                state.restore_scope_keys(&scope_keys);
+                match outcome {
                     Some(BREAK_SENTINEL) => break,
                     Some(CONTINUE_SENTINEL) => continue,
                     Some(val) => return Ok(Some(val)),

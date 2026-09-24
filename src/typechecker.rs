@@ -429,9 +429,15 @@ impl TypeChecker {
                 if cond_ty != Type::Bool {
                     return Err(anyhow!("If condition must be bool, got '{}'", cond_ty));
                 }
+                // Block scoping: declarations inside a branch do not escape it
+                // (matches For/IfLet/Match, which already push scopes).
+                self.scopes.push(HashMap::new());
                 self.check_block(then)?;
+                self.scopes.pop();
                 if let Some(else_body) = else_ {
+                    self.scopes.push(HashMap::new());
                     self.check_block(else_body)?;
+                    self.scopes.pop();
                 }
             }
             Stmt::IfLet {
@@ -460,9 +466,12 @@ impl TypeChecker {
                 if cond_ty != Type::Bool {
                     return Err(anyhow!("While condition must be bool, got '{}'", cond_ty));
                 }
+                // Block scoping: the body is its own scope.
+                self.scopes.push(HashMap::new());
                 self.loop_depth += 1;
                 self.check_block(body)?;
                 self.loop_depth -= 1;
+                self.scopes.pop();
             }
             Stmt::For {
                 variable,

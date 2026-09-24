@@ -5920,3 +5920,77 @@ fn main() {
     assert_eq!(c_vals, expect, "C backend B2 output");
     assert_eq!(c_vals, i_vals, "interpreter diverged from C on B2 types");
 }
+
+/// Block scoping, rule side: a name declared inside a branch does not escape
+/// it. The typechecker must reject the use AFTER the block (this is the old
+/// scoping divergence — C rejected it, the interpreter accepted it, and LLVM
+/// emitted invalid IR).
+#[test]
+fn block_scope_use_after_branch_is_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let sbx_path = tmp.path().join("scope.sbx");
+    fs::write(
+        &sbx_path,
+        r#"
+fn main() {
+    let x = 1
+    if x == 1 {
+        let y = 5
+        print(y)
+    }
+    print(y)
+}
+"#,
+    )
+    .unwrap();
+
+    let (out, ok) = run_sandbox(&["check", sbx_path.to_str().unwrap()]);
+    assert!(!ok, "check accepted a use-after-branch: {out}");
+    assert!(
+        out.contains("Undefined variable 'y'"),
+        "expected undefined-variable error, got: {out}"
+    );
+}
+
+/// Block scoping, value side: a shadowing `let` is a NEW binding (7 then 5,
+/// not 7 then 7) and branch/loop-local declarations work inside their block
+/// with the same results on the C backend and the interpreter.
+#[test]
+fn block_scope_shadowing_is_fresh_binding() {
+    let source = r#"
+fn main() {
+    let y = 5
+    if true {
+        let y = 7
+        print(y)
+    }
+    print(y)
+    let total = 0
+    for i in 0..3 {
+        let step = i * 2
+        total = total + step
+    }
+    print(total)
+}
+"#;
+    // Both paths typecheck — shadowing is legal, use-before-decl is not.
+    let tmp = TempDir::new().unwrap();
+    let sbx_path = tmp.path().join("scope_ok.sbx");
+    fs::write(&sbx_path, source).unwrap();
+    let (check_out, ok) = run_sandbox(&["check", sbx_path.to_str().unwrap()]);
+    assert!(ok, "check rejected a legal shadowing program: {check_out}");
+
+    fn vals(s: &str) -> Vec<&str> {
+        s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim())
+            .collect()
+    }
+    let expect = ["7", "5", "6"];
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "C run failed: {}", c_out);
+    assert!(i_ok, "interpreter failed: {}", i_out);
+    assert_eq!(vals(&c_out), expect, "C backend block scoping");
+    assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
+}

@@ -449,6 +449,58 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "b2_typed_indices",
+        source: r#"
+fn main() {
+    let a = [10, 20, 30]
+    print(a[2 as usize])
+    print(a[1 as u8])
+    print(a[2 as i32])
+    let idx: usize = 1
+    print(a[idx])
+    let j: u8 = 2
+    print(a[j])
+    let n: i8 = -1
+    print(a[n as usize + 1])
+    for i in 0..3 {
+        print(a[i as usize])
+    }
+}
+"#,
+        // B2 completion: array indexing accepts every integer type — `as`
+        // casts and variables bound with a declared narrow type alike
+        // (values are i64 at rest, so indices need no conversion).
+        // Previously `a[2 as usize]` was rejected with "Array index must be
+        // i64", while `let idx: usize = 1` silently passed because the
+        // checker stored the value's type instead of the declared one.
+        backends: C_LLVM_INTERP,
+    },
+    ParityCase {
+        name: "b2_declared_type_bindings",
+        source: r#"
+fn describe(t: u8) -> i64 {
+    return t as i64 * 10
+}
+fn main() {
+    let w: u8 = 200
+    print(w)
+    w = 300
+    print(w)
+    let c: usize = 0
+    c = c + 2
+    print(c)
+    print(describe(w))
+    let small: i16 = 3
+    print(small * 1000)
+}
+"#,
+        // B2 completion: `let x: T = v` binds the DECLARED type T, not the
+        // value's type — later checks (assignments, call args, indexing)
+        // see the annotation. Re-assignment goes through the same implicit
+        // narrow/wrap store as `let` (300 → 44 in u8), so hosts agree.
+        backends: C_LLVM_INTERP,
+    },
+    ParityCase {
         name: "method_string",
         source: r#"
 fn main() {

@@ -6046,3 +6046,45 @@ fn main() {
     assert_eq!(vals(&c_out), expect, "C backend loop-var assignment");
     assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
 }
+
+#[test]
+fn b2_typed_indices_and_declared_bindings() {
+    // B2 completion: (1) array indexing accepts every integer type, so `as`
+    // casts and declared-narrow variables work as indices; (2) `let x: T = v`
+    // binds the declared type T, so later checks see the annotation (the old
+    // checker stored the value's type, hiding `let idx: usize` from checks).
+    let source = r#"
+fn describe(t: u8) -> i64 {
+    return t as i64 * 10
+}
+fn main() {
+    let a = [10, 20, 30]
+    print(a[2 as usize])
+    print(a[1 as u8])
+    let idx: usize = 1
+    print(a[idx])
+    let j: u8 = 2
+    print(a[j])
+    for i in 0..3 {
+        print(a[i as usize])
+    }
+    let w: u8 = 200
+    w = 300
+    print(w)
+    print(describe(w))
+}
+"#;
+    let expect = ["30", "20", "20", "30", "10", "20", "30", "44", "440"];
+    fn vals(s: &str) -> Vec<&str> {
+        s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim())
+            .collect()
+    }
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "C run failed: {}", c_out);
+    assert!(i_ok, "interpreter failed: {}", i_out);
+    assert_eq!(vals(&c_out), expect, "C backend typed indices");
+    assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
+}

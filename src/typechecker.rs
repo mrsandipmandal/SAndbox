@@ -396,7 +396,7 @@ impl TypeChecker {
                 name, ty, value, ..
             } => {
                 let val_ty = self.check_expr_expected(value, ty.as_ref())?;
-                if let Some(expected) = ty {
+                let bind_ty = if let Some(expected) = ty {
                     if !self.types_compatible(expected, &val_ty) {
                         return Err(anyhow!(
                             "Type mismatch: expected '{}', got '{}' for '{}'",
@@ -405,8 +405,19 @@ impl TypeChecker {
                             name
                         ));
                     }
-                }
-                self.scopes.last_mut().unwrap().insert(name.clone(), val_ty);
+                    // B2: bind the DECLARED type, not the value's type —
+                    // `let idx: usize = 1` must be visible as usize to later
+                    // checks (array indexing, call args, comparisons).
+                    // Implicit-narrow stores (Int(_) <-> i64) stay compatible
+                    // everywhere via types_compatible.
+                    expected.clone()
+                } else {
+                    val_ty
+                };
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name.clone(), bind_ty);
             }
             Stmt::Assign { name, value } => {
                 let val_ty = self.check_expr(value)?;
@@ -903,7 +914,10 @@ impl TypeChecker {
                         Ok(v_ty.as_ref().clone())
                     }
                     _ => {
-                        if index_ty != Type::I64 {
+                        // B2: any integer-typed index indexes an array —
+                        // values are i64 at rest and narrow ints are valid
+                        // indices (`a[i as usize]`, `let i: u8 = ...`).
+                        if !Self::is_int_ty(&index_ty) {
                             return Err(anyhow!("Array index must be i64, got '{}'", index_ty));
                         }
                         match &target_ty {

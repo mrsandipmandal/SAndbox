@@ -261,3 +261,21 @@ docs/explanations: **English**.
   edge (pre-existing, all backends agree): a while-loop condition reading a
   variable that the body only shadow-lets never sees updates — infinite by
   the same Rust-style-shadowing semantics, not a backend divergence.
+- 2026-09-25: **B2 completion: typed array indices + declared-type `let`
+  bindings.** Roadmap item B2 (sized/unsigned ints, `as` casts) was already
+  implemented; probing found two typechecker gaps and fixed both in
+  `src/typechecker.rs`:
+  (1) `Expr::Index` rejected narrow indices ("Array index must be i64, got
+  'u64'") — now any `is_int_ty` index is accepted, since values are i64 at
+  rest and need no conversion (`a[2 as usize]`, `a[j]` with `j: u8`).
+  (2) `Stmt::Let` stored the **value's** type in scope, ignoring the
+  annotation — so `let idx: usize = 1` passed as an index by accident while
+  the equivalent cast was rejected. Now the declared type is bound (after a
+  `types_compatible` check); assignments to declared-narrow vars already go
+  through the implicit wrap store, so behavior is unchanged on all hosts.
+  NOT changed (pre-existing, out of scope): LLVM `len(array_ident)` returns
+  0 (arrays have no runtime header in the LLVM backend — the reason parity
+  cases like `for_over_array` run C+interp only); wasm has no array/`len`
+  lowering (documented unsupported classes). Parity:
+  `b2_typed_indices`, `b2_declared_type_bindings` (C_LLVM_INTERP);
+  integration: `b2_typed_indices_and_declared_bindings`.

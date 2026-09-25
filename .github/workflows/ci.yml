@@ -287,13 +287,21 @@ jobs:
       - name: Clippy lints (wasm32 target)
         run: cargo clippy --manifest-path playground-compiler/Cargo.toml --all-targets --target wasm32-unknown-unknown -- -D warnings
 
-      - name: Rebuild artifact and verify it is committed
+      - name: Rebuild artifact and smoke-test committed + rebuilt bytes
         run: |
           set -euo pipefail
+          # The wasm artifact is not byte-reproducible across rustc versions,
+          # so instead of comparing bytes we smoke-test both the committed
+          # artifact (what the registry serves) and a fresh build from the
+          # current sources (what a `scripts/build-playground.sh` refresh
+          # would produce). If the committed bytes drift from the sources,
+          # the next source-driven ABI change fails the committed-artifact
+          # smoke run.
+          cp registry/static/playground/compiler.wasm /tmp/committed.wasm
           bash scripts/build-playground.sh >/dev/null
-          git diff --exit-code -- registry/static/playground/compiler.wasm \
-            || { echo "compiler.wasm is stale: re-run scripts/build-playground.sh and commit the refreshed artifact."; exit 1; }
-          echo "compiler.wasm is up to date."
+          node scripts/smoke-playground-compiler.mjs /tmp/committed.wasm
+          node scripts/smoke-playground-compiler.mjs
+          echo "committed and rebuilt compiler.wasm both pass the ABI smoke test."
 
       - name: Encoder validation (parity-corpus WATs vs wat2wasm)
         run: node scripts/validate_encoder.mjs

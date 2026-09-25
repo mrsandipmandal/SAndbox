@@ -214,6 +214,24 @@ impl Compiler {
     }
 
     fn parse_for_codegen(&self) -> Result<Program> {
+        self.parse_for_codegen_with_packages(None)
+    }
+
+    /// Parse, inject package sources, typecheck, run the b2 passes, and
+    /// return the program.
+    ///
+    /// With `packages = None` (CLI path) `use` statements resolve against
+    /// `.sandbox/vendor/` on the filesystem, exactly as before. With
+    /// `packages = Some(name → source)` (in-browser playground path) the
+    /// sources come from the registry over HTTP instead — there is no
+    /// filesystem inside the browser — and are wrapped in ModuleDefs the
+    /// same way `load_vendored_packages` wraps vendored ones. A package
+    /// that fails to parse is an error naming the package, not a silent
+    /// skip, so the playground can surface bad publishes cleanly.
+    pub fn parse_for_codegen_with_packages(
+        &self,
+        packages: Option<&std::collections::HashMap<String, String>>,
+    ) -> Result<Program> {
         self.progress(&format!("[sandbox] Compiling {}", self.filename));
 
         self.progress("  → Lexing...");
@@ -221,8 +239,32 @@ impl Compiler {
         let tokens = lexer.tokenize()?;
         self.progress(&format!("  ✓ {} tokens", tokens.len()));
 
-        self.progress("  → Parsing and loading vendors...");
-        let mut program = self.parse_with_vendors(&self.source, !self.quiet)?;
+        self.progress("  → Parsing...");
+        let mut parser = Parser::new(tokens).with_source(&self.source, &self.filename);
+        let mut program = parser.parse()?;
+        self.progress(&format!("  ✓ {} top-level items", program.items.len()));
+
+        match packages {
+            Some(packages) => {
+                for (name, source) in packages {
+                    let vendor_program = Self::parse_vendor_source(source)
+                        .map_err(|e| anyhow!("package `{}` failed to parse: {}", name, e))?;
+                    let module = TopLevel::ModuleDef {
+                        name: name.clone(),
+                        items: vendor_program.items,
+                        doc: None,
+                    };
+                    program.items.insert(0, module);
+                }
+                if !packages.is_empty() {
+                    self.progress(&format!("  ✓ Injected {} package(s)", packages.len()));
+                }
+            }
+            None => {
+                Self::load_file_modules(&mut program, &self.filename);
+                Self::load_vendored_packages(&mut program, &self.filename);
+            }
+        }
 
         self.progress("  → Type checking...");
         let mut checker = TypeChecker::new();

@@ -22,6 +22,34 @@ pub async fn dashboard() -> Html<&'static str> {
     Html(include_str!("../static/index.html"))
 }
 
+// ─── Playground (in-browser .sbx → wasm compiler) ───────────────────────────
+//
+// All artifacts live under static/playground/ so they are inside the
+// registry/ Docker build context.
+
+pub async fn playground_page() -> Html<&'static str> {
+    Html(include_str!("../static/playground/playground.html"))
+}
+
+pub async fn playground_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8".to_string(),
+        )],
+        include_str!("../static/playground/playground.js"),
+    )
+        .into_response()
+}
+
+pub async fn playground_wasm() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/wasm".to_string())],
+        include_bytes!("../static/playground/compiler.wasm").as_slice(),
+    )
+        .into_response()
+}
+
 // ─── Package Detail Page (HTML) ─────────────────────────────────────────────
 
 pub async fn package_page(

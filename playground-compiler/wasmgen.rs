@@ -63,9 +63,7 @@ impl WasmGen {
                     .replace('\\', "\\\\")
                     .replace('"', "\\\"")
                     .replace('\n', "\\0a");
-                // Bare string literal — standard WAT data segments do not
-                // parenthesize individual strings (wat2wasm rejects that).
-                writeln!(self.output, "\"{}\"", escaped).unwrap();
+                writeln!(self.output, "(\"{}\")", escaped).unwrap();
             }
             self.indent -= 1;
             self.write_indent();

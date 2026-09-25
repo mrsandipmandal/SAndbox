@@ -32,6 +32,15 @@ pub fn build_app_with_config(pool: SqlitePool, config: RateLimitConfig) -> Route
 
     Router::new()
         .route("/", axum::routing::get(handlers::dashboard))
+        .route("/playground", axum::routing::get(handlers::playground_page))
+        .route(
+            "/playground/playground.js",
+            axum::routing::get(handlers::playground_js),
+        )
+        .route(
+            "/playground/compiler.wasm",
+            axum::routing::get(handlers::playground_wasm),
+        )
         .route(
             "/packages/:name",
             axum::routing::get(handlers::package_page),

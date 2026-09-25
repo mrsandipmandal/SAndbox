@@ -1920,3 +1920,53 @@ async fn test_signature_shown_in_package_info() {
     assert!(versions[0]["signature"].as_str().is_some());
     assert_eq!(versions[0]["signed_by"].as_str().unwrap(), "user_siginfo");
 }
+
+#[tokio::test]
+async fn test_playground_routes() {
+    let (base, _pool) = spawn_server().await;
+    let client = Client::new();
+
+    // Page
+    let resp = client
+        .get(format!("{}/playground", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let html = resp.text().await.unwrap();
+    assert!(html.contains("Sandbox Playground"));
+    assert!(html.contains("/playground/playground.js"));
+
+    // JS asset
+    let resp = client
+        .get(format!("{}/playground/playground.js", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("application/javascript"));
+    let js = resp.text().await.unwrap();
+    assert!(js.contains("/playground/compiler.wasm"));
+    assert!(js.contains("/api/v1/packages"));
+
+    // Compiler artifact must be a well-formed wasm module
+    let resp = client
+        .get(format!("{}/playground/compiler.wasm", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/wasm"
+    );
+    let bytes = resp.bytes().await.unwrap();
+    assert!(bytes.len() > 8);
+    assert_eq!(&bytes[0..4], b"\0asm", "compiler.wasm missing wasm magic");
+}

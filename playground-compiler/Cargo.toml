@@ -1,0 +1,17 @@
+[package]
+name = "sandbox-playground-compiler"
+version = "1.2.0"
+edition = "2021"
+description = "Sandbox compiler compiled to WebAssembly for the in-browser playground"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "lib.rs"
+
+[dependencies]
+anyhow = { version = "1", default-features = false }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"

@@ -6,14 +6,15 @@
 //   2. The "Block scoping" example compiles to WAT, encodes to a binary via
 //      the page's own encodeWat(), instantiates, and runs (7 then 5 — the
 //      inner shadowed binding first, then the outer one).
-//   3. A `use` package injected through the packages blob resolves: the
-//      "Registry package" example prints factorial(10) = 3628800. Package
-//      source is read from registry-data/ — no running registry needed.
+//   3. A `use` package injected through the packages blob resolves: a small
+//      factorial package prints factorial(10) = 3628800. The package source
+//      is inline so the script is self-contained (no running registry, no
+//      local registry-data checkout needed).
 //   4. A type error surfaces on the error path: out = 0 and the message
 //      names the undefined variable.
 //
 // Usage: node scripts/smoke-playground-compiler.mjs [compiler.wasm]
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -103,22 +104,25 @@ if (r1.outPtr !== 0) {
     JSON.stringify(logs));
 }
 
-// 3. Package injection via the packages blob.
-const pkgDir = 'registry-data/packages/sandbox_math_ext';
-const versions = (await readdir(pkgDir)).filter((f) => /^\d+\.\d+\.\d+\.sb$/.test(f))
-  .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-check('math_ext package present in registry-data', versions.length > 0);
-if (versions.length > 0) {
-  const pkgSource = await readFile(path.join(pkgDir, versions.at(-1)), 'utf8');
-  const example = 'use sandbox_math_ext::factorial\n\nfn main() {\n    print(factorial(10))\n}';
-  const blob = `sandbox_math_ext=${pkgSource}\0`;
-  const r2 = compile(exports, example, blob);
-  check('package use compiles', r2.outPtr !== 0, r2.outPtr === 0 ? readEnvelope(exports, r2.errAddr) : '');
-  if (r2.outPtr !== 0) {
-    const logs = runBinary(encodeWat(readEnvelope(exports, r2.outPtr)));
-    check('factorial(10) = 3628800', JSON.stringify(logs) === JSON.stringify(['3628800']),
-      JSON.stringify(logs));
-  }
+// 3. Package injection via the packages blob (inline package source keeps
+// this self-contained in CI).
+const pkgSource = `// minimal stand-in for sandbox_math_ext
+fn factorial(n: i64) -> i64 {
+    let acc = 1
+    for i in 2..=n {
+        acc = acc * i
+    }
+    return acc
+}`;
+if (!/fn factorial/.test(pkgSource)) throw new Error('inline package source broken');
+const example = 'use sandbox_math_ext::factorial\n\nfn main() {\n    print(factorial(10))\n}';
+const blob = `sandbox_math_ext=${pkgSource}\0`;
+const r2 = compile(exports, example, blob);
+check('package use compiles', r2.outPtr !== 0, r2.outPtr === 0 ? readEnvelope(exports, r2.errAddr) : '');
+if (r2.outPtr !== 0) {
+  const logs = runBinary(encodeWat(readEnvelope(exports, r2.outPtr)));
+  check('factorial(10) = 3628800', JSON.stringify(logs) === JSON.stringify(['3628800']),
+    JSON.stringify(logs));
 }
 
 // 4. Error path.

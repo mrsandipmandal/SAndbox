@@ -1150,6 +1150,83 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "for_range_body_assign_break",
+        source: r#"
+fn main() {
+    for i in 0..9 {
+        i = i + 10
+        if i == 13 {
+            break
+        }
+        print(i)
+    }
+    print(99)
+}
+"#,
+        // The loop variable is a fresh binding each iteration (like a let in
+        // the body): `i = ...` assigns the per-iteration copy and never the
+        // induction slot, so break/continue cannot corrupt C's loop counter
+        // (the C backend used to wedge or step the `for` counter here).
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "for_range_body_assign_continue",
+        source: r#"
+fn main() {
+    for i in 0..10 {
+        i = i + 2
+        if i == 6 {
+            continue
+        }
+        print(i)
+    }
+}
+"#,
+        // Continue must also leave the hidden induction slot alone: every
+        // iteration re-seeds the visible binding from the counter.
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "for_range_shadow_let_break",
+        source: r#"
+fn main() {
+    let i = 100
+    for i in 0..5 {
+        let i = i * 10
+        if i == 20 {
+            break
+        }
+        print(i)
+    }
+    print(i)
+}
+"#,
+        // Shadowing `let i` inside the body is a NEW binding each iteration;
+        // the loop itself still walks 0..5, and the outer `i` keeps its value.
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "for_range_nested_shadow_break",
+        source: r#"
+fn main() {
+    for i in 0..3 {
+        for i in 0..4 {
+            i = i + 5
+            if i > 7 {
+                break
+            }
+            print(i)
+        }
+        print(100 + i)
+    }
+}
+"#,
+        // Nested loop reusing the variable name: the inner body's assignment
+        // must reach only the inner iteration's copy — both counters, and the
+        // outer copy, stay untouched.
+        backends: ALL_INT,
+    },
+    ParityCase {
         name: "str_methods",
         source: r#"
 fn main() {

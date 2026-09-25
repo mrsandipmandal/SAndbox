@@ -238,3 +238,26 @@ docs/explanations: **English**.
   handlers use `include_bytes!`) whenever src leaf modules change, then
   `node scripts/smoke-playground-compiler.mjs` (ABI smoke: block scoping,
   package injection, error path) and the encoder validator.
+- 2026-09-25: **Range-loop bodies can no longer corrupt the induction slot.**
+  A body assignment to the loop variable (`i = ...`) used to rewrite C's
+  `for (long i = ...; i < n; i++)` counter: the loop wedged (`i = 99`),
+  stepped wrong (`i = i + 2` printed 2 5 8 …), or break/continue landed on
+  the corrupted slot. Semantics settled on: **the loop variable is a fresh
+  binding each iteration** (like a `let` in the body) — a body assignment
+  hits the per-iteration copy, never the counter. Implementation is a b2
+  desugar (in `resolve_block_scoping`, all 4 pipelines): range loops get a
+  counter-fresh hidden slot (`<var>_it__sN`, so a user var named like the
+  old plain-`__it` shape can't collide — the interpreter's variable map is
+  flat) plus a leading `let i = <slot>` seed; a body `let i` still shadows
+  via the recursive pass. **Scope: range loops only.** Element iteration
+  (arrays, strings, string arrays, `.values()`) is intentionally NOT
+  desugared — every backend re-initializes the binding from the iterable at
+  the top of each iteration, so there is nothing to corrupt, and the
+  interpreter binds string-array elements outside its i64 map where a seed
+  would not survive. Parity: `for_range_body_assign_break`,
+  `for_range_body_assign_continue`, `for_range_shadow_let_break`,
+  `for_range_nested_shadow_break` (ALL_INT); integration:
+  `for_range_body_assign_cannot_corrupt_counter`. Known-unfixed adjacent
+  edge (pre-existing, all backends agree): a while-loop condition reading a
+  variable that the body only shadow-lets never sees updates — infinite by
+  the same Rust-style-shadowing semantics, not a backend divergence.

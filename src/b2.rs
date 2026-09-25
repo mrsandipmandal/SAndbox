@@ -562,20 +562,67 @@ fn scope_stmt(stmt: Stmt, scope: &mut HashMap<String, String>) -> Stmt {
             iterable,
             body,
         } => {
+            // RANGE loops get the induction-slot guard: the loop variable is
+            // the only loop-carried slot a body can corrupt (a body `i = ...`
+            // used to break C's `for (long i = ...; i < n; i++)` counter —
+            // wedging or stepping the loop). Lower to a hidden counter
+            // (counter-fresh, so a user variable literally named like the old
+            // `i__it` can't collide with it — the interpreter's variable map
+            // is flat and would let a collision clobber) plus a leading
+            // `let i = <slot>` seed, which every backend already scopes
+            // correctly. A body `let i` — which would capture the seed
+            // mid-loop — is renamed to a shadow by the recursive pass, and a
+            // body `i = ...` hits the per-iteration seed instead of the slot.
+            //
+            // ELEMENT iteration (arrays, strings, string arrays, .values())
+            // is left alone: every backend re-initializes the binding from
+            // the iterable at the top of each iteration, so a body assignment
+            // cannot corrupt iteration state there (and the interpreter binds
+            // string-array elements outside its i64 map, where a seed would
+            // not survive the round-trip).
             let iterable = scope_expr(iterable, scope);
-            let mut inner = scope.clone();
             // The loop variable shadows any outer binding of the same name.
-            let var_final = if inner.contains_key(&variable) {
+            let var_final = if scope.contains_key(&variable) {
                 fresh_shadow(&variable)
             } else {
                 variable.clone()
             };
-            inner.insert(variable, var_final.clone());
-            let body = scope_stmts(body, &mut inner);
-            Stmt::For {
-                variable: var_final,
-                iterable,
-                body,
+            let mut inner = scope.clone();
+            inner.insert(variable.clone(), var_final.clone());
+            match iterable {
+                Expr::Range {
+                    start,
+                    end,
+                    inclusive,
+                } => {
+                    let var_it = fresh_shadow(&format!("{variable}_it"));
+                    let body = scope_stmts(body, &mut inner);
+                    let mut v: Vec<Stmt> = Vec::with_capacity(body.len() + 1);
+                    v.push(Stmt::Let {
+                        name: var_final,
+                        ty: None,
+                        value: Expr::Ident(var_it.clone()),
+                        mutable: true,
+                    });
+                    v.extend(body);
+                    Stmt::For {
+                        variable: var_it,
+                        iterable: Expr::Range {
+                            start,
+                            end,
+                            inclusive,
+                        },
+                        body: v,
+                    }
+                }
+                other => {
+                    let body = scope_stmts(body, &mut inner);
+                    Stmt::For {
+                        variable: var_final,
+                        iterable: other,
+                        body,
+                    }
+                }
             }
         }
         Stmt::ExprStmt(e) => Stmt::ExprStmt(scope_expr(e, scope)),

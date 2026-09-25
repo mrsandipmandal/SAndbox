@@ -5994,3 +5994,55 @@ fn main() {
     assert_eq!(vals(&c_out), expect, "C backend block scoping");
     assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
 }
+
+/// A range-loop body that assigns the loop variable (`i = ...`) must never
+/// touch the hidden induction counter: `break`/`continue` used to corrupt
+/// C's `for` slot (wedged or stepped loops). The loop variable is a fresh
+/// binding per iteration, on the C backend and the interpreter alike.
+#[test]
+fn for_range_body_assign_cannot_corrupt_counter() {
+    let source = r#"
+fn main() {
+    for i in 0..9 {
+        i = i + 10
+        if i == 13 {
+            break
+        }
+        print(i)
+    }
+    for i in 0..10 {
+        i = i + 2
+        if i == 6 {
+            continue
+        }
+        print(i)
+    }
+    let i = 100
+    for i in 0..5 {
+        let i = i * 10
+        if i == 20 {
+            break
+        }
+        print(i)
+    }
+    print(i)
+}
+"#;
+    fn vals(s: &str) -> Vec<&str> {
+        s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim())
+            .collect()
+    }
+    // break copy: 10 11 12; continue copy: 2 3 4 5 7 8 9 10 11;
+    // shadow-let copy: 0 10; outer i survives: 100.
+    let expect = [
+        "10", "11", "12", "2", "3", "4", "5", "7", "8", "9", "10", "11", "0", "10", "100",
+    ];
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "C run failed: {}", c_out);
+    assert!(i_ok, "interpreter failed: {}", i_out);
+    assert_eq!(vals(&c_out), expect, "C backend loop-var assignment");
+    assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
+}

@@ -343,6 +343,10 @@ const C_ONLY: &[Backend] = &[Backend::C];
 const LLVM_ONLY: &[Backend] = &[Backend::Llvm];
 /// Integer programs across every backend, wasm included.
 const ALL_INT: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp, Backend::Wasm];
+/// C + interpreter + wasm: used for array cases the LLVM backend can't run
+/// (for-in over a local array and len()-derived indices — LLVM has no array
+/// length lowering, so these are pre-existing LLVM gaps, not divergences).
+const C_INTERP_WASM: &[Backend] = &[Backend::C, Backend::Interp, Backend::Wasm];
 // Known wasm-backend gaps (cases demoted to C_AND_INTERP; closing one means
 // implementing it in src/wasmgen.rs and widening the tag):
 //   - strings: no string codegen (print(str) emits invalid WAT) → method_*,
@@ -499,6 +503,65 @@ fn main() {
         // see the annotation. Re-assignment goes through the same implicit
         // narrow/wrap store as `let` (300 → 44 in u8), so hosts agree.
         backends: C_LLVM_INTERP,
+    },
+    ParityCase {
+        name: "wasm_arrays",
+        source: r#"
+fn main() {
+    let a = [10, 20, 30]
+    print(a[0])
+    print(a[2])
+}
+"#,
+        // Array support in the wasm backend: heap allocation (bump
+        // allocator + length header) and index reads on a local array.
+        // Scope: LOCAL arrays — array-typed parameters are a pre-existing
+        // gap on the host backends (C counts elements via sizeof-decay,
+        // LLVM has no array lowering, the interpreter binds param arrays
+        // to 0), len() is a pre-existing LLVM hole (returns 0) and breaks
+        // through an alias on the interpreter, so those live in the
+        // C_INTERP_WASM case below; wasm implements all of it correctly.
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "wasm_arrays_exprs",
+        source: r#"
+fn main() {
+    let a = [10, 20, 30]
+    let b = [2, 0, 1]
+    print(a[b[0]])
+    print(a[b[1]])
+    let i = 1
+    print(a[i + 1])
+    let c = a[1] + b[2]
+    print(c)
+}
+"#,
+        // Index expressions everywhere: nested indices, arithmetic
+        // indices, element values in arithmetic.
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "wasm_arrays_forin",
+        source: r#"
+fn main() {
+    let a = [10, 20, 30]
+    let s = 0
+    for x in a {
+        s = s + x
+    }
+    print(s)
+    for x in [4, 5, 6] {
+        print(x)
+    }
+    print(a[len(a) - 1])
+}
+"#,
+        // for-in over a local array and over a literal, plus len() and a
+        // len()-derived index. C_INTERP_WASM: the LLVM backend can't lower
+        // for-in over a local array or len(array_ident) at all (documented
+        // gaps); C, the interpreter and wasm agree.
+        backends: C_INTERP_WASM,
     },
     ParityCase {
         name: "method_string",

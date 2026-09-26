@@ -279,3 +279,40 @@ docs/explanations: **English**.
   lowering (documented unsupported classes). Parity:
   `b2_typed_indices`, `b2_declared_type_bindings` (C_LLVM_INTERP);
   integration: `b2_typed_indices_and_declared_bindings`.
+- 2026-09-26: **Wasm backend: heap-allocated arrays** (indexing, `len()`,
+  `for x in arr`) — the last of B3's allowlisted gaps closed. DESIGN: a
+  bump-allocator heap after the data segment — `$heap` global starts at
+  `(data_end + 7) & !7` (past string data); memory sized
+  `pages = (heap_start + 4096).div_ceil(65536).max(1)`. Five runtime helpers
+  from `emit_array_runtime` with **i64 boundaries** (array addresses are i64
+  in user locals; `i32.wrap_i64` happens inside the helpers so user code
+  never wraps): `$sbx_alloc`, `$sbx_arr_new` (allocs 8 + 8·count, stores the
+  length header, returns the address zero-extended to i64), `$sbx_len`,
+  `$sbx_get`, `$sbx_store`. Array repr = address of an 8-byte length header
+  + packed i64 elements. Every value-returning helper ends in an explicit
+  `(return ...)` — the JS encoder appends a fall-through `unreachable` pin to
+  result bodies, which would otherwise fire at runtime. LOWERING: wasmgen
+  tracks `array_vars` per fn (let/assign of an ArrayLiteral, `let b = a`
+  aliasing, array-typed params) and discovers hidden temps `$sbxtmpN` during
+  body gen, then splices their `(local ...)` declarations before the
+  instructions afterwards (`output.split_off(body_start)`) — WAT requires
+  locals declared first. Covers: literals (let/assign/anon-expr → temp
+  address), `a[i]` reads with arbitrary index exprs, `len(arr)` (Ident in
+  array_vars only), and `for x in arr` / `for x in [..]` (fresh idx temp,
+  `br_if $break` on `!(idx < len)`, binding re-seeded via `$sbx_get` each
+  iteration so a body reassign can't corrupt iteration). ENCODER:
+  playground.js gained i32 add/sub/mul + `i32.wrap_i64`, i64.load/store with
+  memarg immediates (align=3, offset=0), a Global section (id 6, between
+  Memory and Export), typed params/locals/results, `global.get/set` with
+  index immediates (global.set must fold its value child first — the first
+  version didn't and failed validation); `valtypeByte` accepts numeric bytes
+  (the type list stores raw bytes; it was double-mapping). Corpus:
+  `tests/wat-corpus/wasm_arrays.wat` — 26 of 47 parity WATs now
+  byte-identical to wat2wasm. PARITY: wasm matches C/interp everywhere they
+  work and **beats the host backends on known gaps** (LLVM `len(array)` = 0
+  and can't lower for-in over local arrays; interpreter binds array-typed
+  params to 0 and len-through-alias reads 0; C decays param arrays and
+  miscounts). New tier `C_INTERP_WASM` for `wasm_arrays_forin`;
+  `wasm_arrays`, `wasm_arrays_exprs` are ALL_INT. Playground: Arrays example
+  in the EXAMPLES list, footer notes arrays supported (strings/maps/structs
+  still aren't); `compiler.wasm` rebuilt and committed (include_bytes!).

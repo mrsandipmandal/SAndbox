@@ -1286,7 +1286,7 @@ fn main() {
     );
 
     // Make second request (proves it handles multiple)
-    let resp2 = http_get("127.0.0.1:8077", "/world");
+    let resp2 = http_get_retry("127.0.0.1:8077", "/world");
     assert!(
         resp2.contains("\"/world\""),
         "Second request failed: {}",
@@ -1294,7 +1294,7 @@ fn main() {
     );
 
     // Make third request
-    let resp3 = http_get("127.0.0.1:8077", "/");
+    let resp3 = http_get_retry("127.0.0.1:8077", "/");
     assert!(resp3.contains("\"/\""), "Third request failed: {}", resp3);
 
     let _ = child.kill();
@@ -6102,5 +6102,43 @@ fn main() {
     assert!(c_ok, "C run failed: {}", c_out);
     assert!(i_ok, "interpreter failed: {}", i_out);
     assert_eq!(vals(&c_out), expect, "C backend typed indices");
+    assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
+}
+
+#[test]
+fn array_basics_index_len_forin() {
+    // Array literals, index reads, len() and for-in over a local array and
+    // over a literal. The wasm backend now lowers all of this through a
+    // heap bump allocator; parity covers the four-backend agreement
+    // (wasm_arrays*), this is the fast C+interp regression guard.
+    let source = r#"
+fn main() {
+    let a = [10, 20, 30]
+    print(a[0])
+    print(a[2])
+    print(len(a))
+    let s = 0
+    for x in a {
+        s = s + x
+    }
+    print(s)
+    for x in [4, 5, 6] {
+        print(x)
+    }
+    print(a[len(a) - 1])
+}
+"#;
+    let expect = ["10", "30", "3", "60", "4", "5", "6", "30"];
+    fn vals(s: &str) -> Vec<&str> {
+        s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim())
+            .collect()
+    }
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "C run failed: {}", c_out);
+    assert!(i_ok, "interpreter failed: {}", i_out);
+    assert_eq!(vals(&c_out), expect, "C backend arrays");
     assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
 }

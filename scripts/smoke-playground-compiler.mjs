@@ -131,6 +131,30 @@ const errOk = r3.outPtr === 0 && readEnvelope(exports, r3.errAddr).includes("Und
 check('error path reports type error', errOk,
   r3.outPtr === 0 ? readEnvelope(exports, r3.errAddr) : 'unexpectedly succeeded');
 
+// 5. Heap arrays: literal construction, indexing, len() and for-in — the
+// full array runtime (bump allocator + helpers) through the page's own
+// encoder, load/store and all.
+const r4 = compile(exports, `fn sum(t: [i64]) -> i64 {
+    let s = 0
+    for x in t {
+        s = s + x
+    }
+    return s
+}
+fn main() {
+    let a = [10, 20, 30]
+    print(a[1])
+    print(len(a))
+    print(sum(a))
+    print(sum([4, 5, 6, 7]))
+}`);
+check('array program compiles', r4.outPtr !== 0, r4.outPtr === 0 ? readEnvelope(exports, r4.errAddr) : '');
+if (r4.outPtr !== 0) {
+  const logs = runBinary(encodeWat(readEnvelope(exports, r4.outPtr)));
+  check('arrays run 20,3,60,22', JSON.stringify(logs) === JSON.stringify(['20', '3', '60', '22']),
+    JSON.stringify(logs));
+}
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`);
   process.exit(1);

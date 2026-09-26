@@ -23,8 +23,9 @@
 //   import  := "(import \"console\" \"log\" (func $log (param i64)))"
 //   memory  := "(memory (export \"memory\") N)"
 //   data    := "(data (i32.const 0)" ("...")* ")"
-//   func    := "(func $name" (param $p i64)* ("(result i64)")?
-//              (local $l i64)* instr* ")" | "(unreachable)"
+//   func    := "(func $name" (param $p i64|i32)* ("(result i64|i32)")?
+//              (local $l i64|i32)* instr* ")" | "(unreachable)"
+//   global  := "(global $name (mut i32) (i32.const N))"   (heap allocator)
 //   export  := "(export \"main\" (func $main))"
 //   instr   := folded: "(op ...)" with leaf forms "(i64.const N)",
 //              "(local.get $x)", "(call $f a)", "(br $l)", "(if ...)",
@@ -33,10 +34,20 @@
 //             lt_s le_s gt_s ge_s eq ne eqz  (plus i32.const/i32.eqz,
 //             i64.extend_i32_u, f64.const, i64.trunc_f64_s,
 //             i64.reinterpret_f64)
+//   heap    : i32 arith, i32.wrap_i64, i64.load/store (memarg align=3),
+//             global.get/set — the array runtime's opcodes
 
 const OPCODES = {
   'i32.eqz': [0x45],
   'i32.const': [0x41],
+  'i32.add': [0x6a],
+  'i32.sub': [0x6b],
+  'i32.mul': [0x6c],
+  'i32.wrap_i64': [0xa7],
+  'i64.load': [0x29],
+  'i64.store': [0x37],
+  'global.get': [0x23],
+  'global.set': [0x24],
   'i64.eqz': [0x50],
   'i64.add': [0x7c],
   'i64.sub': [0x7d],
@@ -75,6 +86,13 @@ const OPCODES = {
 };
 
 const VALTYPE_I64 = 0x7e;
+const VALTYPE_I32 = 0x7f;
+
+function valtypeByte(t) {
+  // Accepts the string form ('i32'/'i64', from parsed WAT) or the numeric
+  // byte already stored in the type list.
+  return t === 'i32' || t === VALTYPE_I32 ? VALTYPE_I32 : VALTYPE_I64;
+}
 
 class WatError extends Error {
   constructor(message, line) {
@@ -87,6 +105,7 @@ function encodeWat(watText) {
   const out = new ByteWriter();
   const ctx = {
     funcs: new Map(), // name -> index (imports first)
+    globals: new Map(), // name -> index
     labels: [],       // active label stack, innermost last
     line: 0,
   };
@@ -109,14 +128,17 @@ function encodeWat(watText) {
     return typeKeys.get(key);
   }
 
-  const funcMetas = []; // { typeIndex, locals: [i64 extra], body: [] }
+  const funcMetas = []; // { typeIndex, locals: [{count,type}], body: [] }
   const exportsSec = []; // { name, funcIndex }
   const dataSegments = [];
+  const globalSec = []; // { type, mutable, init }
   let memoryMin = 1;
 
   // Pass 1: register function names (imports first, then defined fns in
-  // source order) so `call $f` resolves to the right index.
+  // source order) and global names so `call $f` / `global.get $g` resolve
+  // to the right index.
   let nextFuncIndex = 0;
+  let nextGlobalIndex = 0;
   let hasLogImport = false;
   let logTypeIndex = -1;
   for (const node of ast.children) {
@@ -129,6 +151,9 @@ function encodeWat(watText) {
       logTypeIndex = typeIndex(['i64'], []);
     } else if (node.head === 'func') {
       ctx.funcs.set(node.name, nextFuncIndex++);
+    } else if (node.head === 'global') {
+      const nameTok = node.children.find((c) => c.t === 'atom' && c.value.startsWith('$'));
+      if (nameTok) ctx.globals.set(nameTok.value, nextGlobalIndex++);
     }
   }
 
@@ -149,13 +174,22 @@ function encodeWat(watText) {
       }
       case 'func': {
         const params = [];
-        for (const p of node.params) params.push(VALTYPE_I64);
-        const results = node.hasResult ? ['i64'] : [];
+        for (const p of node.params) params.push(valtypeByte(p.type));
+        const results = node.hasResult ? [node.resultType] : [];
         const ti = typeIndex(params, results);
-        // Locals beyond params are all i64.
+        // Locals beyond params keep their declared value types (the heap
+        // runtime uses i32 temps; user locals are i64).
         const localGroups = [];
-        const extra = node.locals.filter((l) => !node.params.includes(l.name));
-        if (extra.length > 0) localGroups.push({ count: extra.length, type: VALTYPE_I64 });
+        const extra = node.locals.filter((l) => !node.params.some((p) => p.name === l.name));
+        for (const l of extra) {
+          const vt = l.type === 'i32' ? VALTYPE_I32 : VALTYPE_I64;
+          const last = localGroups[localGroups.length - 1];
+          if (last && last.type === vt) {
+            last.count++;
+          } else {
+            localGroups.push({ count: 1, type: vt });
+          }
+        }
         const body = new ByteWriter();
         const fellThrough = encodeFuncBody(node, body, ctx);
         // Mirror wasmgen's "pin the end with (unreachable)" rule: a result
@@ -175,6 +209,20 @@ function encodeWat(watText) {
       }
       case 'import':
         break; // handled in pass 1
+      case 'global': {
+        // (global $name (mut TYPE) (TYPE.const N))
+        const nameTok = node.children.find((c) => c.t === 'atom' && c.value.startsWith('$'));
+        const mutNode = node.children.find((c) => c.t === '(' && c.head === 'mut');
+        const typeTok = mutNode ? mutNode.children.find((c) => c.t === 'atom') : null;
+        const initNode = node.children.find((c) => c.t === '(' && /\.const$/.test(c.head || ''));
+        const initTok = initNode ? initNode.children.find((c) => c.t === 'atom') : null;
+        globalSec.push({
+          type: typeTok ? typeTok.value : 'i32',
+          mutable: !!mutNode,
+          init: initTok ? Number(initTok.value) : 0,
+        });
+        break;
+      }
       default:
         throw new WatError(`unsupported top-level (${node.head})`, node.line);
     }
@@ -191,9 +239,9 @@ function encodeWat(watText) {
     for (const t of typeList) {
       s.pushBytes([0x60]);
       s.pushUleb(t.params.length);
-      for (const p of t.params) s.pushBytes([p === 'i64' ? VALTYPE_I64 : 0x7e]);
+      for (const p of t.params) s.pushBytes([valtypeByte(p)]);
       s.pushUleb(t.results.length);
-      for (const r of t.results) s.pushBytes([r === 'i64' ? VALTYPE_I64 : 0x7e]);
+      for (const r of t.results) s.pushBytes([valtypeByte(r)]);
     }
     sections.push([1, s]);
   }
@@ -221,6 +269,19 @@ function encodeWat(watText) {
     s.pushBytes([0x00]); // limits: min only
     s.pushUleb(memoryMin);
     sections.push([5, s]);
+  }
+  // Global section (6)
+  if (globalSec.length > 0) {
+    const s = new ByteWriter();
+    s.pushUleb(globalSec.length);
+    for (const g of globalSec) {
+      s.pushBytes([g.type === 'i32' ? VALTYPE_I32 : VALTYPE_I64]);
+      s.pushBytes([g.mutable ? 0x01 : 0x00]);
+      s.pushOp('i32.const');
+      s.pushSleb(BigInt(g.init));
+      s.pushOp('end');
+    }
+    sections.push([6, s]);
   }
   // Export section (7). wasmgen writes the memory export INLINE on the
   // memory node, which encodes as an ordinary export entry; wat2wasm
@@ -428,20 +489,29 @@ function parseWatModule(watText, ctx) {
         node.params = [];
         node.locals = [];
         node.hasResult = false;
+        node.resultType = null; // 'i64' | 'i32'
         node.hasExplicitUnreachable = false;
         node.instrs = []; // instruction nodes/tokens in body order
         for (const c of node.children) {
           if (c.t !== '(') continue;
           if (c.head === 'param') {
-            for (const p of c.children.filter((x) => x.t === 'atom' && x.value.startsWith('$'))) {
-              node.params.push(p.value);
+            // (param $name TYPE) — one name per declaration in wasmgen's
+            // output; the heap runtime uses i32 params.
+            const atoms = c.children.filter((x) => x.t === 'atom');
+            for (let k = 0; k < atoms.length; k += 2) {
+              node.params.push({ name: atoms[k].value, type: atoms[k + 1] ? atoms[k + 1].value : 'i64' });
             }
           } else if (c.head === 'local') {
-            for (const l of c.children.filter((x) => x.t === 'atom' && x.value.startsWith('$'))) {
-              node.locals.push({ name: l.value });
+            // (local $name TYPE) — one name per declaration in wasmgen's
+            // output; the last atom is the value type.
+            const atoms = c.children.filter((x) => x.t === 'atom');
+            for (let k = 0; k < atoms.length; k += 2) {
+              node.locals.push({ name: atoms[k].value, type: atoms[k + 1] ? atoms[k + 1].value : 'i64' });
             }
           } else if (c.head === 'result') {
             node.hasResult = true;
+            const rt = c.children.find((x) => x.t === 'atom');
+            node.resultType = rt ? rt.value : 'i64';
           } else {
             node.instrs.push(c);
           }
@@ -460,6 +530,11 @@ function parseWatModule(watText, ctx) {
         node.funcRef = inner ? inner.children.find((c) => c.t === 'atom').value : null;
         break;
       }
+      case 'global': {
+        // (global $heap (mut i32) (i32.const N)) — name registered in
+        // encodeWat's pass 1; type/init extracted in pass 2 there.
+        break;
+      }
       default:
         break;
     }
@@ -471,7 +546,7 @@ function parseWatModule(watText, ctx) {
 function encodeFuncBody(funcNode, out, ctx) {
   // Map local names to indices for THIS function only.
   const localIndex = new Map();
-  funcNode.params.forEach((p, i) => localIndex.set(p, i));
+  funcNode.params.forEach((p, i) => localIndex.set(p.name, i));
   funcNode.locals.forEach((l, i) => localIndex.set(l.name, funcNode.params.length + i));
 
   // wabt dead-code-eliminates everything after an unconditional terminator
@@ -519,6 +594,32 @@ function encodeFuncBody(funcNode, out, ctx) {
           if (idx === undefined) throw new WatError(`unknown local ${name}`, line);
           out.pushOp('local.get');
           out.pushUleb(idx);
+          return;
+        }
+        case 'global.get':
+        case 'global.set': {
+          // (global.get $heap) reads; (global.set $heap <expr>) folds the
+          // new value as a child that executes before the instruction.
+          const name = node.children.find((c) => c.t === 'atom').value;
+          const idx = ctx.globals.get(name);
+          if (idx === undefined) throw new WatError(`unknown global ${name}`, line);
+          for (const c of node.children) {
+            if (c.t === '(') encodeInstr(c);
+          }
+          out.pushOp(node.head);
+          out.pushUleb(idx);
+          return;
+        }
+        case 'i64.load':
+        case 'i64.store': {
+          // Natural 8-byte alignment (memarg align=3); store's folded
+          // operands execute in source order (address then value).
+          for (const c of node.children) {
+            if (c.t === '(') encodeInstr(c);
+          }
+          out.pushOp(node.head);
+          out.pushUleb(3); // align
+          out.pushUleb(0); // offset
           return;
         }
         case 'call': {
@@ -787,6 +888,7 @@ const EXAMPLES = {
   'Hello, Sandbox': `fn main() {\n    print(42)\n    print(6 * 7)\n}`,
   'Block scoping': `fn main() {\n    let y = 5\n    if true {\n        let y = 7\n        print(y)\n    }\n    print(y)\n}`,
   'Loop + function': `fn squared(n: i64) -> i64 {\n    return n * n\n}\n\nfn main() {\n    let total = 0\n    for i in 0..5 {\n        total = total + squared(i)\n    }\n    print(total)\n    print(squared(12))\n}`,
+  'Arrays': `fn main() {\n    let a = [10, 20, 30]\n    print(a[0])\n    print(len(a))\n    let s = 0\n    for x in a {\n        s = s + x\n    }\n    print(s)\n    for x in [4, 5, 6] {\n        print(x)\n    }\n}`,
   'Registry package': `use sandbox_math_ext::factorial\n\nfn main() {\n    print(factorial(10))\n}`,
 };
 

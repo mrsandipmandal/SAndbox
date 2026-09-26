@@ -597,6 +597,54 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "narrow_compare_basics",
+        source: r#"
+fn main() {
+    let a: u64 = -1 as u64
+    if a > 5 { print(1) } else { print(0) }
+    if a == -1 { print(1) } else { print(0) }
+    if a < 1 { print(1) } else { print(0) }
+    if a > 9223372036854775807 { print(1) } else { print(0) }
+    let b: usize = 0 - 1
+    if b >= 0 { print(1) } else { print(0) }
+    if b == -1 { print(1) } else { print(0) }
+    if b != 0 { print(1) } else { print(0) }
+    let c: u8 = 200
+    let d: u8 = 100
+    if c > d { print(1) } else { print(0) }
+    if -1 as u8 == 255 { print(1) } else { print(0) }
+    if -1 as i8 == -1 { print(1) } else { print(0) }
+    if -1 as i8 < 0 { print(1) } else { print(0) }
+    let e: i32 = -5
+    if e < 3 { print(1) } else { print(0) }
+    if e as u32 == 4294967291 { print(1) } else { print(0) }
+    if e as u32 > 0 { print(1) } else { print(0) }
+    let f: u16 = 65535
+    if f > 32768 { print(1) } else { print(0) }
+    let g: i8 = -1
+    if g > -2 { print(1) } else { print(0) }
+    if a > b { print(1) } else { print(0) }
+    let h = 0
+    for i in 0..3 {
+        if i <= 1 {
+            h = h + 10
+        }
+    }
+    print(h)
+}
+"#,
+        // B2 audit: comparisons run signed on i64 bit patterns in every
+        // backend, including typed u64/usize variables holding values above
+        // i64::MAX. The C backend used to let its typed unsigned variables
+        // make `>`/`>=`/`==` compare unsigned (C's native operator), so
+        // u64(-1) > 5 was true in C and false everywhere else; the codegen
+        // now forces a (long) compare when either operand is unsigned long
+        // long. Sub-64-bit unsigned types promote to int in C and were
+        // already signed; LLVM/interp/wasm compare i64 signed by design.
+        // Expected: 0 1 0 1  0 1 1  1 1  1 1  1 1 1  1 1 0  20
+        backends: ALL_INT,
+    },
+    ParityCase {
         name: "method_string",
         source: r#"
 fn main() {

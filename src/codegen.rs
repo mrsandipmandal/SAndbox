@@ -2855,6 +2855,23 @@ impl CodeGen {
                     return format!("((long)((unsigned long long)({}) << ({})))", l, r);
                 }
 
+                // B2 audit: comparisons must be signed i64 everywhere (values
+                // are i64 at rest; only typed C *stores* wrap). A typed
+                // u64/usize variable would make C's native operator compare
+                // unsigned — diverging from LLVM/interpreter/wasm on high bit
+                // patterns (0xFFFFFFFFFFFFFFFF > 5, usize(-1) >= 0) — so when
+                // either operand is unsigned long long, force a signed long
+                // compare (gcc's unsigned->signed conversion is the i64 bit
+                // pattern). Strings and money are handled above.
+                if matches!(
+                    op,
+                    BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+                ) && (self.infer_c_type(left) == "unsigned long long"
+                    || self.infer_c_type(right) == "unsigned long long")
+                {
+                    return format!("((long)({}) {} (long)({}))", l, op_str, r);
+                }
+
                 format!("({} {} {})", l, op_str, r)
             }
             Expr::UnaryOp { op, expr } => {

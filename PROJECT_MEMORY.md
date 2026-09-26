@@ -370,3 +370,24 @@ docs/explanations: **English**.
   (reassigns may only shrink, shift bases positive) it runs 200/200 clean
   in ~106 s with 0 skips. Deliberately NOT wired into ci-local/ci.yml yet —
   ~30 s for a 50-case slice would fit the parity job if wanted.
+- 2026-09-26: **Comparison/equality audit for narrow integer types**
+  (B2 follow-up, found by a 17-position probe across all four backends).
+  Semantics settled: **comparisons run signed on i64 bit patterns in every
+  backend** — even for typed u64/usize variables holding values above
+  i64::MAX — because values are i64 at rest and only typed *stores* wrap.
+  The one deviant was C: its typed `unsigned long long` variables made
+  native `>` `>=` `<` `==` compare unsigned, so `u64(-1) > 5` was true in
+  C and false in LLVM/interp/wasm. Fix (codegen.rs, same shape as the B1
+  `<<` signedness fix): when either operand of a comparison infers as
+  `unsigned long long`, emit `((long)(l) op (long)(r))` — gcc's
+  unsigned→signed conversion is the identity on the i64 bit pattern.
+  Sub-64-bit unsigned types promote to C int (signed) and needed no fix;
+  for-range conditions are already `long` vs `long`. **Pre-existing,
+  out of scope:** `(bool) as i64` is rejected by the typechecker while the
+  interpreter's laxer semantics accept bool prints — it diverged in the
+  first probe but is an `as`-cast gap, not a comparison gap (parity cases
+  route comparisons through if/else prints, which also exercises
+  condition-position lowering). Parity: `narrow_compare_basics`
+  (ALL_INT — u64/usize high-bit patterns, u8/i8/u16/i32 rows, mixed
+  narrow-vs-narrow, condition-position compares in if and for; 58
+  programs, 155 executions).

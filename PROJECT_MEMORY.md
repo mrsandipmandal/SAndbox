@@ -409,3 +409,40 @@ docs/explanations: **English**.
   let, condition position, array index): all four backends byte-identical.
   Parity: `bool_cast_basics` (ALL_INT); integration:
   `bool_cast_to_int_all_backends` (59 programs, 155+ executions).
+- 2026-09-26: **Narrow-type fuzzing catches three C-backend arithmetic
+  bugs** (fuzzer's first day of real work). `scripts/fuzz_parity.py` grew
+  a third program kind: typed-let `u8..u64/usize` programs with wrap-on-
+  store/reassign, `as` casts between every width, and comparisons on
+  typed vars (signed i64 on the bit pattern, incl. high u64/usize),
+  printed via the bool→int cast or if/else conditions. Program kinds
+  rotate uniformly (arrays/integer/narrow; `--arrays-every` is gone).
+  Generator safety is class-based so nothing can overflow i64 while
+  evaluating (the interpreter panics where compiled backends wrap):
+  small (u8..u16/i8..i16) adds/subtracts freely — four width-wrapped
+  2^16 leaves at depth 2 stay < 2^19 — but multiplies only literal-only
+  subtrees (≤ 200^4 < 2^31); mid (u32/i32) only adds/subtracts; big
+  (u64/usize/i64, any bit pattern incl. i64::MAX-adjacent boundary
+  literals) is never arithmetically combined. Across 150-case seeds
+  3/7/11 the fuzzer flagged 4 disagreements that collapsed into three
+  C codegen bugs, all fixed in codegen.rs:
+  (1) **comparisons poisoned by any unsigned operand** — C's arithmetic
+  conversions make `-10 <= u32_var` (or a comparison whose subtree merely
+  touches unsigned, like `93 ^ usize_var`) compare unsigned; the fix
+  generalizes the audit's compare fix with an `expr_touches_unsigned`
+  scan that recurses through subexpressions (comparison/logical/! nodes
+  yield 0/1 int and don't propagate unsignedness upward);
+  (2) **`>>` shifted unsigned-typed operands logically** (usize(-128) >>
+  45 = 524287 vs -1) — B1's arithmetic-shift semantics now enforced by
+  casting the operand to long (mirrors the B1 `<<` fix);
+  (3) **sub-64-bit operands computed in C's promoted 32-bit int**
+  ((u16)65466²·3 silently wrapped past INT32_MAX) — sandbox semantics
+  are i64 arithmetic on rest values, so Add/Sub/Mul force (long)
+  operands when either side touches a sub-64 type (`expr_touches_sub64`).
+  The generator itself had a hole the run exposed (small×small products
+  could reach 2^32 — past C's promoted int *and* my assumed bound);
+  fixed with the literal-only-multiplication rule above.
+  Parity: `narrow_arith_promotion` (ALL_INT — u16² past int32,
+  (v-6)·v on unsigned vars, arithmetic >> on negative-rest
+  u64/usize/u32/i8, u16 addition past int16; 60 programs, 159+
+  executions). `fuzz_failures/` is gitignored. After the fixes, seeds
+  3/7/11/23 run 150 cases each with 0 disagreements and 0–2 skips.

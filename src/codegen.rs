@@ -2576,6 +2576,92 @@ impl CodeGen {
         }
     }
 
+    /// True if evaluating `expr` touches an unsigned-typed value anywhere:
+    /// a variable declared u8..u64/usize, a cast to one, or a subexpression
+    /// mixing such values in. gcc's arithmetic conversions make any C
+    /// operation over such a value compute in an unsigned type even when
+    /// the subexpression's own inferred type looks signed, so comparisons
+    /// must force signed operands whenever this returns true (values are
+    /// i64 bit patterns at rest; the sandbox operator is a signed i64 one).
+    fn expr_touches_unsigned(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name) => {
+                matches!(
+                    self.var_types.get(name.as_str()).map(|s| s.as_str()),
+                    Some("uint8_t" | "uint16_t" | "uint32_t" | "unsigned long long")
+                )
+            }
+            Expr::Cast { ty, .. } => matches!(
+                self.c_type(ty).as_str(),
+                "uint8_t" | "uint16_t" | "uint32_t" | "unsigned long long"
+            ),
+            Expr::BinaryOp { op, left, right } => {
+                if matches!(
+                    op,
+                    BinOp::Eq
+                        | BinOp::Neq
+                        | BinOp::Lt
+                        | BinOp::Gt
+                        | BinOp::Le
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or
+                ) {
+                    // A comparison/logical op yields 0/1 int in C regardless
+                    // of operand signedness — it does not propagate
+                    // unsignedness upward (but its operands still recurse:
+                    // their own C types decide their evaluation).
+                    false
+                } else {
+                    self.expr_touches_unsigned(left) || self.expr_touches_unsigned(right)
+                }
+            }
+            Expr::UnaryOp { op: UnOp::Not, .. } => false,
+            Expr::UnaryOp { expr, .. } => self.expr_touches_unsigned(expr),
+            _ => false,
+        }
+    }
+
+    /// True if evaluating `expr` touches a sub-64-bit typed value anywhere
+    /// (a u8..u32/i8..i32 variable or cast). C promotes such operands to
+    /// `int` and computes in 32 bits, while every backend's sandbox
+    /// semantics are i64 arithmetic on the rest values — so Add/Sub/Mul
+    /// over sub-64 operands must force (long) operands or results past
+    /// INT32_MAX silently wrap in C (e.g. (u16)65466 * 65466).
+    fn expr_touches_sub64(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name) => matches!(
+                self.var_types.get(name.as_str()).map(|s| s.as_str()),
+                Some("int8_t" | "uint8_t" | "int16_t" | "uint16_t" | "int32_t" | "uint32_t")
+            ),
+            Expr::Cast { ty, .. } => matches!(
+                self.c_type(ty).as_str(),
+                "int8_t" | "uint8_t" | "int16_t" | "uint16_t" | "int32_t" | "uint32_t"
+            ),
+            Expr::BinaryOp { op, left, right } => {
+                if matches!(
+                    op,
+                    BinOp::Eq
+                        | BinOp::Neq
+                        | BinOp::Lt
+                        | BinOp::Gt
+                        | BinOp::Le
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or
+                ) {
+                    // Comparisons/logicals yield 0/1 int — no widening effect.
+                    false
+                } else {
+                    self.expr_touches_sub64(left) || self.expr_touches_sub64(right)
+                }
+            }
+            Expr::UnaryOp { op: UnOp::Not, .. } => false,
+            Expr::UnaryOp { expr, .. } => self.expr_touches_sub64(expr),
+            _ => false,
+        }
+    }
+
     fn infer_c_type(&self, expr: &Expr) -> String {
         match expr {
             Expr::Int(_) => "long".into(),
@@ -2856,18 +2942,39 @@ impl CodeGen {
                 }
 
                 // B2 audit: comparisons must be signed i64 everywhere (values
-                // are i64 at rest; only typed C *stores* wrap). A typed
-                // u64/usize variable would make C's native operator compare
-                // unsigned — diverging from LLVM/interpreter/wasm on high bit
-                // patterns (0xFFFFFFFFFFFFFFFF > 5, usize(-1) >= 0) — so when
-                // either operand is unsigned long long, force a signed long
-                // compare (gcc's unsigned->signed conversion is the i64 bit
-                // pattern). Strings and money are handled above.
+                // are i64 at rest; only typed C *stores* wrap). C's usual
+                // arithmetic conversions make a comparison unsigned whenever
+                // an operand touches an unsigned value — a typed u64/usize
+                // variable, a uint32_t one, or even a subexpression like
+                // `93 ^ usize_var` whose inferred type looks signed — which
+                // diverges from LLVM/interpreter/wasm on high bit patterns
+                // (0xFFFFFFFFFFFFFFFF > 5, usize(-1) >= 0). Force a signed
+                // long compare (gcc's unsigned->signed conversion is the i64
+                // bit pattern) whenever either side touches unsigned.
+                // Strings and money are handled above.
                 if matches!(
                     op,
                     BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
-                ) && (self.infer_c_type(left) == "unsigned long long"
-                    || self.infer_c_type(right) == "unsigned long long")
+                ) && (self.expr_touches_unsigned(left) || self.expr_touches_unsigned(right))
+                {
+                    return format!("((long)({}) {} (long)({}))", l, op_str, r);
+                }
+
+                // B2 audit: `>>` is arithmetic (ashr) on the i64 bit pattern
+                // in every backend (B1), but gcc shifts unsigned-typed
+                // operands logically — usize(-128) >> 45 gave 524287 instead
+                // of -1. Cast the operand to long so the shift is always
+                // arithmetic; for signed operands this is the identity.
+                if op == &BinOp::Shr {
+                    return format!("((long)({}) >> ({}))", l, r);
+                }
+
+                // B2 audit: sandbox arithmetic is i64 on the rest values, but
+                // C promotes sub-64-bit typed operands to int and computes in
+                // 32 bits — (u16)65466 * 65466 * 3 silently wrapped. Force
+                // (long) operands whenever either side touches a sub-64 type.
+                if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                    && (self.expr_touches_sub64(left) || self.expr_touches_sub64(right))
                 {
                     return format!("((long)({}) {} (long)({}))", l, op_str, r);
                 }

@@ -677,6 +677,42 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "narrow_arith_promotion",
+        source: r#"
+fn main() {
+    let v4: u16 = 65466
+    print(v4 * v4 * 3)
+    let v0: u16 = -8
+    print((v0 - 6) * v0)
+    let v8: i8 = -10
+    print((v8 - v8) + (7 * v8))
+    print((v4 * v4 > 100) as i64)
+    let a: u64 = -1 as u64
+    print(a >> 45)
+    let b: usize = 0 - 1
+    print(b >> 63)
+    let c: u32 = -1 as u32
+    print(c >> 16)
+    let d: i8 = -128
+    print(d >> 3)
+    let e: u16 = 40000
+    print(e + e)
+}
+"#,
+        // Two C-backend bugs found by scripts/fuzz_parity.py (seeds 3/7/11):
+        // (1) C promotes sub-64-bit typed operands to int and computed
+        // arithmetic in 32 bits, silently wrapping past INT32_MAX — sandbox
+        // semantics are i64 arithmetic on the rest values, so codegen now
+        // forces (long) operands when either side touches a sub-64 type;
+        // (2) gcc shifted unsigned-typed operands logically, but `>>` is
+        // arithmetic (ashr) on the i64 bit pattern in every backend (B1) —
+        // the operand is now cast to long. Rows: u16 squaring past int32,
+        // (v-6)*v on an unsigned var, i8 leaves, a comparison over promoted
+        // arithmetic, arithmetic >> on negative-rest u64/usize/u32/i8, and
+        // u16 addition past int16.
+        backends: ALL_INT,
+    },
+    ParityCase {
         name: "method_string",
         source: r#"
 fn main() {

@@ -7,19 +7,35 @@ on every backend the same way tests/parity.rs does, and reports any backend
 disagreement with a saved reproduction file.
 
 Construct vocabulary is deliberately conservative — it only emits programs
-the four backends are expected to agree on:
-  - i64 arithmetic (+ - *), bitwise (& | ^ << >>), unary -, parens
-  - let chains (values may reference earlier lets), range for loops with
-    break/continue and if guards, print(expr)
-  - array literals, len(), in-bounds indexing, len-derived indices,
-    for-in over arrays and array literals, shrinking array reassignment
+the four backends are expected to agree on, rotating three program kinds:
+  - integer programs: i64 arithmetic (+ - *), bitwise (& | ^ << >>),
+    unary -, parens; let chains; range for loops with break/continue and
+    if guards; print(expr)
+  - array programs: literals, len(), in-bounds indexing, len-derived
+    indices, for-in over array literals, shrinking reassignment
+  - narrow programs (B2 audit areas): typed lets `let v: u8..u64/usize`,
+    wrap-on-store and wrap-on-reassign, `as` casts between every width,
+    comparisons on typed variables (signed i64 on the bit pattern,
+    including u64/usize holding high patterns), printed via the bool->int
+    cast or used as if/else conditions
 
 Known-divergent constructs (aliases like `let b = a`, bool prints, growing
-reassignment, strings, maps, match) are never generated, so any reported
-disagreement is a real backend bug, not a known gap.
+reassignment, for-in over array variables, strings, maps, match) are never
+generated, so any reported disagreement is a real backend bug, not a known
+gap. Narrow programs follow class-based arithmetic rules so no generated
+expression can overflow i64 while evaluating (the interpreter panics on
+overflow where the compiled backends wrap):
+  small (u8/i8/u16/i16, |value| ≤ 2^16 after the width wrap): + - freely
+        (worst chain of four leaves < 2^19); * only between literal-only
+        subexpressions (a depth-2 literal tree stays under 2^31) — a
+        small×small product could reach 2^32, and C would compute it in a
+        promoted 32-bit int rather than at i64
+  mid   (u32/i32, values in ±2^31): only + - (a product could reach 2^93)
+  big   (u64/usize/i64, any i64 bit pattern): no arithmetic — the vars are
+        compared, cast, bit-folded and printed, never added or multiplied
 
 Usage:
-    python3 scripts/fuzz_parity.py [--count 200] [--seed N] [--arrays-every K]
+    python3 scripts/fuzz_parity.py [--count 200] [--seed N]
                                    [--backends c,llvm,interp,wasm]
 
 Exit status: 0 if no disagreement was found, 1 otherwise.
@@ -189,6 +205,164 @@ def gen_int_program(rng: random.Random) -> str:
     return "\n".join(lines)
 
 
+# ── Narrow-type program generation (B2 audit areas) ───────────────────────────
+
+# (type name, arithmetic class). Classes bound expression safety; see the
+# module docstring. Typed stores wrap to the declared width in every backend,
+# so a var's class is preserved across reassignment.
+NARROW_TYPES = [
+    ("u8", "small"),
+    ("i8", "small"),
+    ("u16", "small"),
+    ("i16", "small"),
+    ("u32", "mid"),
+    ("i32", "mid"),
+    ("u64", "big"),
+    ("usize", "big"),
+    ("i64", "big"),
+]
+
+# Literals chosen to straddle wrap boundaries and i64 extremes (no 2^63 —
+# the positive literal does not fit i64 and only negation reaches MIN).
+BOUNDARY_LITS = [
+    "255",
+    "256",
+    "-128",
+    "127",
+    "32768",
+    "-32769",
+    "4294967291",
+    "9223372036854775807",
+    "-9223372036854775807",
+]
+
+CMPS = ["==", "!=", "<", ">", "<=", ">="]
+
+
+def gen_arith_small(
+    rng: random.Random, small_names: list[str], depth: int = 0
+) -> tuple[str, bool]:
+    """A (expr, literal_only) pair over small-class operands that cannot
+    overflow i64 — or even C's promoted 32-bit int arithmetic. + and - run
+    freely over small variables (four 2^16 leaves at depth 2 stay < 2^19);
+    * is only kept when both children are literal-only, bounding any
+    literal tree (four leaves, |leaf| ≤ 200) below 2^31."""
+    if depth >= 2 or rng.random() < 0.4:
+        if small_names and rng.random() < 0.6:
+            return rng.choice(small_names), False
+        return str(rng.randint(-200, 200)), True
+    op = rng.choice(["+", "-", "*"])
+    lhs, l_lit = gen_arith_small(rng, small_names, depth + 1)
+    rhs, r_lit = gen_arith_small(rng, small_names, depth + 1)
+    # Literal-only subtrees: leaves are |lit| ≤ 200 and the tree is at most
+    # depth 2, so any product stays ≤ 200^4 < 2^31 — C's promoted-int
+    # arithmetic and i64 arithmetic agree bit for bit.
+    if l_lit and r_lit:
+        return f"({lhs} {op} {rhs})", True
+    # Variable-bearing subtrees: only + and -. A typed variable is always
+    # width-wrapped on store (|v| ≤ 2^16 for small widths), so a depth-2
+    # chain of four leaves stays < 2^19 and cannot overflow C's promoted
+    # 32-bit int either — the backends agree exactly.
+    safe_op = op if op in ("+", "-") else rng.choice(["+", "-"])
+    return f"({lhs} {safe_op} {rhs})", False
+
+
+def gen_bit_expr(rng: random.Random, all_names: list[str], depth: int = 0) -> str:
+    """A bitwise/shift expression over any-typed operands. Bitwise ops and
+    shifts cannot overflow (shift amounts are literals in 0..62; the C
+    backend's `<<` goes through its defined unsigned hop)."""
+    if depth >= 1 or rng.random() < 0.45:
+        if all_names and rng.random() < 0.55:
+            return rng.choice(all_names)
+        return str(rng.randint(-100, 100))
+    r = rng.random()
+    if r < 0.6:
+        op = rng.choice(["&", "|", "^"])
+        lhs = gen_bit_expr(rng, all_names, depth + 1)
+        rhs = gen_bit_expr(rng, all_names, depth + 1)
+        return f"({lhs} {op} {rhs})"
+    if r < 0.8:
+        return f"({gen_bit_expr(rng, all_names, depth + 1)} << {rng.randint(0, 62)})"
+    if r < 0.9:
+        return f"({gen_bit_expr(rng, all_names, depth + 1)} >> {rng.randint(0, 62)})"
+    return f"(~{gen_bit_expr(rng, all_names, depth + 1)})"
+
+
+def gen_operand(rng: random.Random, all_names: list[str], small_names: list[str]) -> str:
+    """Any evaluation-safe integer expression: a variable of any class, a
+    plain or boundary literal, small arithmetic, or a bit fold. Results may
+    carry any i64 bit pattern — they may be compared, cast, bit-folded,
+    stored (wrapping) or printed, but never fed to + - *."""
+    r = rng.random()
+    if r < 0.35 and all_names:
+        return rng.choice(all_names)
+    if r < 0.55:
+        return str(rng.randint(-300, 300))
+    if r < 0.70:
+        return rng.choice(BOUNDARY_LITS)
+    if r < 0.85 and small_names:
+        return gen_arith_small(rng, small_names)[0]
+    return gen_bit_expr(rng, all_names)
+
+
+def gen_narrow_program(rng: random.Random) -> str:
+    """Typed-let program exercising the B2 audit areas: wrap-on-store,
+    wrap-on-reassign, casts between widths, and comparisons on typed vars
+    (including u64/usize holding high bit patterns). Comparisons reach the
+    output through the bool->int cast or if/else conditions — never as a
+    bare printed bool (LLVM has no bool-print codegen)."""
+    lines = ["fn main() {"]
+    all_names: list[str] = []
+    small_names: list[str] = []
+    for j in range(rng.randint(3, 5)):
+        ty, cls = rng.choice(NARROW_TYPES)
+        name = f"v{j}"
+        if rng.random() < 0.25 and small_names:
+            init = gen_arith_small(rng, small_names)[0]
+        elif rng.random() < 0.5:
+            init = str(rng.randint(-300, 300))
+        else:
+            init = rng.choice(BOUNDARY_LITS)
+        lines.append(f"    let {name}: {ty} = {init}")
+        all_names.append(name)
+        if cls == "small":
+            small_names.append(name)
+
+    have_acc = False
+    for _ in range(rng.randint(3, 6)):
+        r = rng.random()
+        if r < 0.22:
+            lines.append(f"    print({gen_operand(rng, all_names, small_names)})")
+        elif r < 0.42:
+            lhs = gen_operand(rng, all_names, small_names)
+            rhs = gen_operand(rng, all_names, small_names)
+            lines.append(f"    print(({lhs} {rng.choice(CMPS)} {rhs}) as i64)")
+        elif r < 0.58:
+            lhs = gen_operand(rng, all_names, small_names)
+            rhs = gen_operand(rng, all_names, small_names)
+            lines.append(f"    if {lhs} {rng.choice(CMPS)} {rhs} {{ print(7) }} else {{ print(13) }}")
+        elif r < 0.72:
+            # Reassignment wraps to the declared width again — defined on
+            # every backend for any operand.
+            name = rng.choice(all_names)
+            lines.append(f"    {name} = {gen_operand(rng, all_names, small_names)}")
+        elif r < 0.86:
+            operand = rng.choice(all_names + [str(rng.randint(-300, 300))])
+            ty, _ = rng.choice(NARROW_TYPES)
+            lines.append(f"    print(({operand} as {ty}))")
+        else:
+            if not have_acc:
+                lines.append("    let acc = 0")
+                have_acc = True
+            step = rng.choice(small_names) if small_names else "1"
+            lines.append("    for i in 0..3 {")
+            lines.append(f"        acc = acc + {step}")
+            lines.append("    }")
+            lines.append("    print(acc)")
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def gen_array_program(rng: random.Random) -> str:
     """Array program with statically-tracked in-bounds indices.
 
@@ -286,12 +460,6 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=200, help="programs to test")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed (repro)")
     parser.add_argument(
-        "--arrays-every",
-        type=int,
-        default=3,
-        help="every Kth program is an array program (others are integer programs)",
-    )
-    parser.add_argument(
         "--backends",
         type=lambda s: s.split(","),
         default=list(ALL_BACKENDS),
@@ -325,10 +493,14 @@ def main() -> int:
     ok = skipped = failures = 0
     fail_dir = REPO_ROOT / "fuzz_failures"
     for i in range(args.count):
-        if i % args.arrays_every == 0:
+        # Rotate program kinds uniformly: arrays, plain integer, narrow.
+        kind = i % 3
+        if kind == 0:
             source = gen_array_program(rng)
-        else:
+        elif kind == 1:
             source = gen_int_program(rng)
+        else:
+            source = gen_narrow_program(rng)
         if not args.no_mutate and rng.random() < 0.5:
             source = mutate(source, rng)
 

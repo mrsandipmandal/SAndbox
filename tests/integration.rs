@@ -1258,11 +1258,27 @@ fn main() {
         .spawn()
         .unwrap();
 
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
+    // Wait for the server to come up: the sandbox run must compile the
+    // program (including the gcc link) before it starts listening, and a
+    // fixed 500 ms sleep panics the first connect on a cold cache. Poll the
+    // port instead.
+    let mut ready = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect_timeout(
+            &"127.0.0.1:8077".parse().unwrap(),
+            Duration::from_millis(200),
+        )
+        .is_ok()
+        {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(ready, "server never started listening on 127.0.0.1:8077");
 
     // Make first request
-    let resp1 = http_get("127.0.0.1:8077", "/hello");
+    let resp1 = http_get_retry("127.0.0.1:8077", "/hello");
     assert!(
         resp1.contains("\"/hello\""),
         "First request failed: {}",

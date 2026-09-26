@@ -645,6 +645,38 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "bool_cast_basics",
+        source: r#"
+fn main() {
+    print((1 < 2) as i64)
+    print((true) as i64)
+    print((2 == 3) as u8)
+    print((false) as u64)
+    let flag = 5 != 5
+    print(flag as i64)
+    print((flag as i64) + 10)
+    let ok: i64 = (7 < 8) as i64
+    print(ok)
+    print((!flag) as i64)
+    print((1 < 2 && 3 < 4) as u8)
+    if (1 < 2) as i64 == 1 {
+        print(99)
+    }
+    let w = [10, 20, 30]
+    print(w[(2 > 1) as i64 + 1])
+}
+"#,
+        // bool -> int casts: booleans are 1/0 at rest in every backend (the
+        // interpreter's Bool arm, C's int-typed comparisons, LLVM's zexted i1
+        // — the Cast arm zero-extends comparison registers before the B2
+        // wrap — and wasm's extended i32), so `expr as T` re-types the
+        // expression without changing the value. Covers comparison sources,
+        // bool literals, ! and && sources, narrow/unsigned targets,
+        // arithmetic on the cast, a declared-type let, condition position
+        // and an array index.
+        backends: ALL_INT,
+    },
+    ParityCase {
         name: "method_string",
         source: r#"
 fn main() {

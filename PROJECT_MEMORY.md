@@ -391,3 +391,21 @@ docs/explanations: **English**.
   (ALL_INT — u64/usize high-bit patterns, u8/i8/u16/i32 rows, mixed
   narrow-vs-narrow, condition-position compares in if and for; 58
   programs, 155 executions).
+- 2026-09-26: **`as` casts from bool to integer types allowed** (closing
+  the adjacent gap the comparison audit exposed: `(bool) as i64` was
+  rejected by the typechecker — the compiled backends' stricter gate —
+  while the interpreter's laxer semantics accepted it). Semantics: bools
+  are 1/0 at rest in every backend (the interpreter's Bool arm, C's
+  int-typed comparison results feeding the existing B2 cast wraps, LLVM's
+  zexted i1, wasm's `i64.extend_i32_u`-ed comparisons), so the cast only
+  re-types the expression: `print((a == b) as i64)` works everywhere.
+  Changes: typechecker accepts `Type::Bool → int_dst` (bool→float stays
+  rejected to keep the surface minimal), and llvmgen's Cast arm zero-
+  extends an `i1` comparison register to i64 before the B2 wrap (Bool
+  *literals* are excluded — they already emit 0/1 i64 text). C and wasm
+  needed no codegen change. Probed 11 constructs (comparison sources, bool
+  literals, `!`/`&&` sources — note `&&`-cast works on C which has the
+  B1 patch — narrow targets u8/u64, arithmetic on the cast, declared-type
+  let, condition position, array index): all four backends byte-identical.
+  Parity: `bool_cast_basics` (ALL_INT); integration:
+  `bool_cast_to_int_all_backends` (59 programs, 155+ executions).

@@ -1722,6 +1722,18 @@ impl LlvmGen {
                 // = sext from the truncated width; float→u64 goes via i64
                 // fptosi to match the C backend's i64-at-rest semantics.
                 let inner = self.gen_expr(expr);
+                // bool->int casts: a comparison source is an i1 register here;
+                // zero-extend it to the i64-at-rest representation before any
+                // wrap (Bool *literals* already emit 0/1 as i64 text, so they
+                // are excluded).
+                let inner =
+                    if self.infer_llvm_type(expr) == "i1" && !matches!(&**expr, Expr::Bool(_)) {
+                        let z = self.fresh_var();
+                        writeln!(self.output, "  {} = zext i1 {} to i64", z, inner).unwrap();
+                        z
+                    } else {
+                        inner
+                    };
                 if matches!(ty, Type::F64) {
                     let t = self.fresh_var();
                     writeln!(

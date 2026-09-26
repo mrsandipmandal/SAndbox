@@ -6142,3 +6142,33 @@ fn main() {
     assert_eq!(vals(&c_out), expect, "C backend arrays");
     assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
 }
+
+#[test]
+fn bool_cast_to_int_all_backends() {
+    // bool -> int `as` casts: booleans are 1/0 at rest, so the cast only
+    // re-types the expression. Regression guard for the typechecker gate
+    // ("Invalid cast from 'bool' to 'i64'") and the LLVM i1 zext path.
+    let source = r#"
+fn main() {
+    print((1 < 2) as i64)
+    print((true) as i64)
+    print((2 == 3) as u8)
+    let flag = 5 != 5
+    print((flag as i64) + 10)
+    print((!flag) as i64)
+}
+"#;
+    let expect = ["1", "1", "0", "10", "1"];
+    fn vals(s: &str) -> Vec<&str> {
+        s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim())
+            .collect()
+    }
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    assert!(c_ok, "C run failed: {}", c_out);
+    assert!(i_ok, "interpreter failed: {}", i_out);
+    assert_eq!(vals(&c_out), expect, "C backend bool casts");
+    assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
+}

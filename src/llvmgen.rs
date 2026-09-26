@@ -55,11 +55,26 @@ pub struct LlvmGen {
     /// Loop variables whose alloca is re-stored at the top of every body
     /// iteration (array-literal loops) — safe to alias redeclarations onto.
     loop_locals: std::collections::HashSet<String>,
+    /// Static lengths of array variables initialized from an array literal
+    /// (mirrors codegen's array_lengths): `let a = [1, 2, 3]` records a → 3
+    /// so len(a) is a constant — a raw i64* has no header to read. Writes
+    /// kill the entry (re-literalizing re-establishes it), and conditional
+    /// joins/loop exits intersect the surviving states, so an entry always
+    /// means the value is provably unchanged since its initializer: len()
+    /// is either correct or falls back to 0 — never wrong.
+    array_lens: HashMap<String, usize>,
 }
 
 /// Check if an LLVM type string represents a named struct (e.g., "%Point")
 fn is_struct_type(ty: &str) -> bool {
     ty.starts_with('%') && ty.len() > 1 && ty[1..].chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// Intersect two array-length fact maps: keep only entries present with the
+/// same value in both (used at conditional joins and loop exits, where a
+/// fact survives only if every path agrees it is unchanged).
+fn intersect_maps(a: HashMap<String, usize>, b: &HashMap<String, usize>) -> HashMap<String, usize> {
+    a.into_iter().filter(|(k, v)| b.get(k) == Some(v)).collect()
 }
 
 impl LlvmGen {
@@ -90,6 +105,7 @@ impl LlvmGen {
             left_entry: false,
             induction_vars: std::collections::HashSet::new(),
             loop_locals: std::collections::HashSet::new(),
+            array_lens: HashMap::new(),
         }
     }
 
@@ -496,6 +512,7 @@ impl LlvmGen {
         self.entry_allocas.clear();
         self.induction_vars.clear();
         self.loop_locals.clear();
+        self.array_lens.clear();
         self.left_entry = false;
         self.block_terminated = false;
         // If the signature isn't pre-registered (e.g. for lambdas), compute it from params.
@@ -695,6 +712,33 @@ impl LlvmGen {
                         .unwrap();
                         self.variables.insert(name.clone(), (alloca, llvm_ty));
                     }
+                    // Static array-length tracking (mirrors
+                    // codegen::array_lengths): a literal-initialized array
+                    // gets a constant len(); an alias of a tracked i64*
+                    // inherits its length; any other initializer drops the
+                    // entry so len() falls back to 0 rather than lying.
+                    // Conditional joins and loop exits intersect the
+                    // surviving states (see the If/While arms), so an entry
+                    // always means the value is provably unchanged since its
+                    // initializer. Runs after the initializer, so
+                    // `a = [.., len(a)]` sees the old length — matching C's
+                    // sizeof behavior.
+                    match value {
+                        Expr::ArrayLiteral(elems) => {
+                            self.array_lens.insert(name.clone(), elems.len());
+                        }
+                        Expr::Ident(src)
+                            if src != name
+                                && self.variables.get(src).is_some_and(|(_, t)| t == "i64*")
+                                && self.array_lens.get(src.as_str()).is_some_and(|l| *l != 0) =>
+                        {
+                            let len = self.array_lens[src.as_str()];
+                            self.array_lens.insert(name.clone(), len);
+                        }
+                        _ => {
+                            self.array_lens.remove(name);
+                        }
+                    }
                     val
                 }
             }
@@ -704,6 +748,16 @@ impl LlvmGen {
                     let alloca = alloca.clone();
                     let ty = ty.clone();
                     writeln!(self.output, "  store {} {}, {}* {}", ty, val, ty, alloca).unwrap();
+                } // Same discipline as the Let arm: re-literalizing an array
+                  // re-establishes its (new) length — the element copy writes
+                  // the whole prefix — while any other write drops the entry.
+                match value {
+                    Expr::ArrayLiteral(elems) => {
+                        self.array_lens.insert(name.clone(), elems.len());
+                    }
+                    _ => {
+                        self.array_lens.remove(name);
+                    }
                 }
                 val
             }
@@ -713,6 +767,11 @@ impl LlvmGen {
                 else_,
             } => {
                 let cond_val = self.gen_expr(condition);
+                // Snapshot for the branch-join intersection below; the
+                // condition's own generation cannot write array variables
+                // except through a match-arm assign, which is already
+                // reflected in the state being snapshotted.
+                let pre_lens = self.array_lens.clone();
                 let then_label = self.fresh_label("if.then");
                 let else_label = self.fresh_label("if.else");
                 let end_label = self.fresh_label("if.end");
@@ -737,6 +796,9 @@ impl LlvmGen {
 
                 writeln!(self.output, "{}:", else_label).unwrap();
                 self.block_terminated = false;
+                // Fact state at the end of the then-branch; the else-branch
+                // starts from the pre-branch state.
+                let then_lens = std::mem::replace(&mut self.array_lens, pre_lens);
                 if let Some(else_body) = else_ {
                     for s in else_body {
                         self.gen_stmt(s);
@@ -749,6 +811,11 @@ impl LlvmGen {
 
                 // Always emit the end label — the then-branch may reference it
                 // even if the else-branch was fully terminated.
+                // A fact survives the join only if both branches leave it
+                // intact; branch-local facts cannot survive (and branch-local
+                // names are rejected by the typechecker outside their block).
+                let else_lens = std::mem::take(&mut self.array_lens);
+                self.array_lens = intersect_maps(then_lens, &else_lens);
                 writeln!(self.output, "{}:", end_label).unwrap();
                 self.block_terminated = false;
                 "void".to_string()
@@ -761,6 +828,10 @@ impl LlvmGen {
                 // Push loop context for break/continue (continue -> cond to re-check)
                 self.loop_stack
                     .push((end_label.clone(), cond_label.clone()));
+
+                // Snapshot for the loop-exit intersection below: a fact
+                // survives the loop only if the body never touched it.
+                let pre_lens = self.array_lens.clone();
 
                 writeln!(self.output, "  br label %{}", cond_label).unwrap();
                 self.block_terminated = true;
@@ -784,6 +855,13 @@ impl LlvmGen {
                     self.block_terminated = true;
                 }
 
+                // A fact survives the loop only if the body left it
+                // unchanged: intersect the pre-loop state with the state
+                // after body generation. A body write kills; a body-local
+                // literal let adds nothing here because it is not in the
+                // pre-loop state.
+                let post_lens = std::mem::take(&mut self.array_lens);
+                self.array_lens = intersect_maps(pre_lens, &post_lens);
                 self.loop_stack.pop();
                 writeln!(self.output, "{}:", end_label).unwrap();
                 self.block_terminated = false;
@@ -888,6 +966,7 @@ impl LlvmGen {
                 // For `if let x = value { ... }`: bind x, then branch on truthiness.
                 // For Some/None patterns, compare tag (1 = Some, 0 = None).
                 let val = self.gen_expr(value);
+                let pre_lens = self.array_lens.clone();
                 let val_ty = self.infer_llvm_type(value);
 
                 // Handle binding patterns: bind the variable to the value
@@ -899,6 +978,9 @@ impl LlvmGen {
                         writeln!(self.output, "  store {} {}, {}* {}", ty, val, ty, alloca)
                             .unwrap();
                         self.variables.insert(name.clone(), (alloca, ty));
+                        // The pattern rebinds the name; any stale length fact
+                        // for it is no longer about an array.
+                        self.array_lens.remove(name);
                     }
                     Pattern::SomePattern { binding: Some(b) } => {
                         let alloca = self.fresh_var();
@@ -906,6 +988,7 @@ impl LlvmGen {
                         writeln!(self.output, "  store i64 {}, i64* {}", val, alloca).unwrap();
                         self.variables
                             .insert(b.clone(), (alloca, "i64".to_string()));
+                        self.array_lens.remove(b);
                     }
                     _ => {}
                 }
@@ -953,6 +1036,7 @@ impl LlvmGen {
 
                 writeln!(self.output, "{}:", else_label).unwrap();
                 self.block_terminated = false;
+                let then_lens = std::mem::replace(&mut self.array_lens, pre_lens);
                 if let Some(else_body) = else_ {
                     for s in else_body {
                         self.gen_stmt(s);
@@ -963,6 +1047,10 @@ impl LlvmGen {
                     self.block_terminated = true;
                 }
 
+                // A fact survives the join only if both branches leave it
+                // intact (see the If arm).
+                let else_lens = std::mem::take(&mut self.array_lens);
+                self.array_lens = intersect_maps(then_lens, &else_lens);
                 writeln!(self.output, "{}:", end_label).unwrap();
                 self.block_terminated = false;
                 "void".to_string()
@@ -1000,6 +1088,9 @@ impl LlvmGen {
                     // Push loop context for break/continue (continue -> incr_label)
                     self.loop_stack
                         .push((end_label.clone(), incr_label.clone()));
+
+                    // Snapshot for the loop-exit intersection below.
+                    let pre_lens = self.array_lens.clone();
 
                     // Branch to condition
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
@@ -1056,6 +1147,10 @@ impl LlvmGen {
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
                     self.block_terminated = true;
 
+                    // A fact survives the loop only if the body left it
+                    // unchanged (see the While arm).
+                    let post_lens = std::mem::take(&mut self.array_lens);
+                    self.array_lens = intersect_maps(pre_lens, &post_lens);
                     // Pop loop context
                     self.loop_stack.pop();
 
@@ -1080,6 +1175,9 @@ impl LlvmGen {
                     writeln!(self.output, "  {} = alloca i8*", var_alloca).unwrap();
                     self.variables
                         .insert(loop_var, (var_alloca.clone(), "i8*".to_string()));
+
+                    // Snapshot for the loop-exit intersection below.
+                    let pre_lens = self.array_lens.clone();
 
                     self.loop_stack
                         .push((end_label.clone(), incr_label.clone()));
@@ -1152,6 +1250,10 @@ impl LlvmGen {
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
                     self.block_terminated = true;
 
+                    // A fact survives the loop only if the body left it
+                    // unchanged (see the While arm).
+                    let post_lens = std::mem::take(&mut self.array_lens);
+                    self.array_lens = intersect_maps(pre_lens, &post_lens);
                     self.loop_stack.pop();
 
                     writeln!(self.output, "{}:", end_label).unwrap();
@@ -1174,6 +1276,9 @@ impl LlvmGen {
                     writeln!(self.output, "  {} = alloca i64", var_alloca).unwrap();
                     self.variables
                         .insert(loop_var, (var_alloca.clone(), "i64".to_string()));
+
+                    // Snapshot for the loop-exit intersection below.
+                    let pre_lens = self.array_lens.clone();
 
                     self.loop_stack
                         .push((end_label.clone(), incr_label.clone()));
@@ -1246,6 +1351,10 @@ impl LlvmGen {
                     writeln!(self.output, "  br label %{}", cond_label).unwrap();
                     self.block_terminated = true;
 
+                    // A fact survives the loop only if the body left it
+                    // unchanged (see the While arm).
+                    let post_lens = std::mem::take(&mut self.array_lens);
+                    self.array_lens = intersect_maps(pre_lens, &post_lens);
                     self.loop_stack.pop();
 
                     writeln!(self.output, "{}:", end_label).unwrap();
@@ -1286,6 +1395,9 @@ impl LlvmGen {
                         // Push loop context
                         self.loop_stack
                             .push((end_label.clone(), incr_label.clone()));
+
+                        // Snapshot for the loop-exit intersection below.
+                        let pre_lens = self.array_lens.clone();
 
                         // Branch to condition
                         writeln!(self.output, "  br label %{}", cond_label).unwrap();
@@ -1360,6 +1472,10 @@ impl LlvmGen {
                         writeln!(self.output, "  br label %{}", cond_label).unwrap();
                         self.block_terminated = true;
 
+                        // A fact survives the loop only if the body left it
+                        // unchanged (see the While arm).
+                        let post_lens = std::mem::take(&mut self.array_lens);
+                        self.array_lens = intersect_maps(pre_lens, &post_lens);
                         // Pop loop context
                         self.loop_stack.pop();
 
@@ -1391,6 +1507,9 @@ impl LlvmGen {
                         // Push loop context
                         self.loop_stack
                             .push((end_label.clone(), incr_label.clone()));
+
+                        // Snapshot for the loop-exit intersection below.
+                        let pre_lens = self.array_lens.clone();
 
                         // Branch to condition
                         writeln!(self.output, "  br label %{}", cond_label).unwrap();
@@ -1462,6 +1581,10 @@ impl LlvmGen {
                         writeln!(self.output, "  br label %{}", cond_label).unwrap();
                         self.block_terminated = true;
 
+                        // A fact survives the loop only if the body left it
+                        // unchanged (see the While arm).
+                        let post_lens = std::mem::take(&mut self.array_lens);
+                        self.array_lens = intersect_maps(pre_lens, &post_lens);
                         // Pop loop context
                         self.loop_stack.pop();
 
@@ -1486,6 +1609,9 @@ impl LlvmGen {
                         writeln!(self.output, "  {} = alloca i8*", var_alloca).unwrap();
                         self.variables
                             .insert(loop_var.clone(), (var_alloca.clone(), "i8*".to_string()));
+
+                        // Snapshot for the loop-exit intersection below.
+                        let pre_lens = self.array_lens.clone();
 
                         self.loop_stack
                             .push((end_label.clone(), incr_label.clone()));
@@ -1560,12 +1686,22 @@ impl LlvmGen {
                         writeln!(self.output, "  br label %{}", cond_label).unwrap();
                         self.block_terminated = true;
 
+                        // A fact survives the loop only if the body left it
+                        // unchanged (see the While arm).
+                        let post_lens = std::mem::take(&mut self.array_lens);
+                        self.array_lens = intersect_maps(pre_lens, &post_lens);
                         self.loop_stack.pop();
 
                         writeln!(self.output, "{}:", end_label).unwrap();
                         self.block_terminated = false;
                         "void".to_string()
                     } else {
+                        // Unsupported iterable (e.g. a plain i64* array
+                        // variable): the body is emitted once, inline, in the
+                        // caller's context — a documented pre-existing gap.
+                        // Length facts need no special casing here: any write
+                        // in the body updates the map exactly where the write
+                        // is generated, like straight-line code.
                         for s in body {
                             self.gen_stmt(s);
                         }
@@ -1992,6 +2128,16 @@ impl LlvmGen {
                             writeln!(self.output, "  {} = add i64 0, {}", result, elems.len())
                                 .unwrap();
                             return result;
+                        }
+                        // Array variables initialized from a literal carry a
+                        // static length (array_lens); without it this raw
+                        // i64* has no header, so len() used to return 0.
+                        if let Expr::Ident(n) = arg {
+                            if let Some(len) = self.array_lens.get(n.as_str()).cloned() {
+                                let result = self.fresh_var();
+                                writeln!(self.output, "  {} = add i64 0, {}", result, len).unwrap();
+                                return result;
+                            }
                         }
                     }
                     // Default: return 0

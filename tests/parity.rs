@@ -344,15 +344,16 @@ const LLVM_ONLY: &[Backend] = &[Backend::Llvm];
 /// Integer programs across every backend, wasm included.
 const ALL_INT: &[Backend] = &[Backend::C, Backend::Llvm, Backend::Interp, Backend::Wasm];
 /// C + interpreter + wasm: used for array cases the LLVM backend can't run
-/// (for-in over a local array and len()-derived indices — LLVM has no array
-/// length lowering, so these are pre-existing LLVM gaps, not divergences).
+/// (for-in over a local *array variable* falls through to a single inline
+/// body pass — pre-existing LLVM gap, not a divergence).
 const C_INTERP_WASM: &[Backend] = &[Backend::C, Backend::Interp, Backend::Wasm];
 // Known wasm-backend gaps (cases demoted to C_AND_INTERP; closing one means
 // implementing it in src/wasmgen.rs and widening the tag):
 //   - strings: no string codegen (print(str) emits invalid WAT) → method_*,
 //     str_methods, fstring, json_string_*, a4_* , http_* cases
-//   - arrays/maps/structs: no heap data types → for_over_array*,
-//     map_basics, map_filter_reduce, struct_field_access, shadow_mfr_chain
+//   - for-in over a local array *variable*: LLVM's fallback runs the body
+//     once inline (for_over_array*); literal iterables and len() of literal-
+//     initialized arrays work (array_len_basics runs on all four backends)
 //   - match arms: `match` compiles but never executes its arm →
 //     match_int_literal, match_guard, enum_match, enum_payload
 //   - bool literals print 1/0 instead of true/false → bool_logic
@@ -558,10 +559,42 @@ fn main() {
 }
 "#,
         // for-in over a local array and over a literal, plus len() and a
-        // len()-derived index. C_INTERP_WASM: the LLVM backend can't lower
-        // for-in over a local array or len(array_ident) at all (documented
-        // gaps); C, the interpreter and wasm agree.
+        // len()-derived index. C_INTERP_WASM: the LLVM backend's for-in over
+        // a local array *variable* runs the body once inline (pre-existing
+        // gap — len(array_ident) itself was fixed to use the literal length,
+        // see array_len_basics); C, the interpreter and wasm agree.
         backends: C_INTERP_WASM,
+    },
+    ParityCase {
+        name: "array_len_basics",
+        source: r#"
+fn main() {
+    let a = [10, 20, 30]
+    print(len(a))
+    print(a[0])
+    print(a[1 + 1])
+    let s = 0
+    for x in [4, 5, 6] {
+        s = s + x
+    }
+    print(s)
+    print(a[len(a) - 1])
+    let w = [8, 9]
+    w = [1]
+    print(len(w))
+    print(w[0])
+}
+"#,
+        // len() of a literal-initialized array: C uses sizeof at the
+        // declaration, LLVM now emits the literal length (array_lens map —
+        // previously a bare i64* had no header, so len(ident) returned 0),
+        // the interpreter reads its vector, wasm its runtime header.
+        // Deliberately straight-line: len() reads inside/after branches and
+        // loops are conservatively 0 on LLVM (its facts are dropped at
+        // control-flow joins), aliasing (`let b = a`) diverges on C
+        // (sizeof-decay → 1) and the interpreter (→ 0), and growing literal
+        // reassignment overflows C's fixed-size buffer — all pre-existing.
+        backends: ALL_INT,
     },
     ParityCase {
         name: "method_string",

@@ -316,3 +316,34 @@ docs/explanations: **English**.
   `wasm_arrays`, `wasm_arrays_exprs` are ALL_INT. Playground: Arrays example
   in the EXAMPLES list, footer notes arrays supported (strings/maps/structs
   still aren't); `compiler.wasm` rebuilt and committed (include_bytes!).
+- 2026-09-26: **LLVM `len(array_ident)` returns the literal length instead
+  of 0** (the documented B2-completion gap). llvmgen keeps an
+  `array_lens: HashMap<String, usize>` static-fact map mirroring C's
+  `array_lengths`: `let a = [..]` registers a's length, `let b = a`
+  (an alias of a tracked i64*) inherits it, and any other initializer
+  drops the entry. Soundness discipline: writes kill facts *everywhere*
+  (Assign/non-literal Let inside loops and branches, IfLet pattern
+  bindings); at If/IfLet joins and every loop exit the fact state is
+  **intersected** with the entry state (a fact survives only if all paths
+  agree it is unchanged), so a surviving entry is provably a constant —
+  len() is either right or falls back to 0, never wrong. The dead-end
+  first version gated registration on the sticky `left_entry` latch
+  (arrays declared after a loop got no fact) and blanket-cleared at loop
+  boundaries (facts died across benign literal for-ins, leaving
+  `a[len(a)-1]` reading garbage); kill-on-write + intersect fixes both.
+  Soundness quirk kept in check: the for-in-over-unsupported-iterable
+  fall-through emits its body once inline in the caller's context, and
+  facts now flow through kill-on-write — a body literal-let can establish
+  a fact after that one-pass loop, sound only because body lets get fresh
+  allocas and the "loop" never re-executes. Verified against C with a
+  23-print probe across every construct; LLVM matches C except where C is
+  itself wrong: aliases (C sizeof-decays a `long*` to 1; LLVM emits the
+  true length) and `a[len(a)-1]` after a benign loop (C's earlier fact
+  survives its non-intersected tracking). Known boundaries (documented in
+  the parity case): branch/loop-body len reads are 0 on LLVM where C still
+  answers; growing a literal reassign overflows C's fixed-size buffer
+  (LLVM is fine); for-in over a local array *variable* still runs the body
+  once inline (C_INTERP_WASM stays, comment corrected). Parity:
+  `array_len_basics` (ALL_INT — all four backends; 57 programs, 135
+  executions). playground-compiler bundles no llvmgen copy, so the browser
+  artifact is unaffected.

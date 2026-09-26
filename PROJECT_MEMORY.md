@@ -446,3 +446,34 @@ docs/explanations: **English**.
   u64/usize/u32/i8, u16 addition past int16; 60 programs, 159+
   executions). `fuzz_failures/` is gitignored. After the fixes, seeds
   3/7/11/23 run 150 cases each with 0 disagreements and 0–2 skips.
+- 2026-09-26: **Division/modulo + overflow audit for narrow integer
+  types** (completes the B2 audit trilogy: comparisons → arithmetic →
+  div/mod & wrap). Two probes across all four backends found and fixed:
+  (1) **C divided by the operands' common type** — an unsigned-typed
+  variable poisoned `/` and `%` exactly like it poisoned comparisons:
+  `u64(-1) / 2` computed 2^63, `u64(-1) % 3` = 0, `usize(-1) / 7` =
+  2^61 (all should be 0 / -1 / 0 under signed i64-on-the-bit-pattern
+  semantics). Same fix shape: `(long)` both operands when
+  `expr_touches_unsigned`. Bonus: the force also keeps
+  `i32::MIN / -1` from raising SIGFPE in C — note the *designed*
+  semantic there is the compiled backends' wrap (LLVM sdiv, wasm
+  i64.div_s), which aborts with a hardware trap on all three; the
+  interpreter mirrors Rust's panic. Guarded divisors are the portable
+  subset and what parity/fuzzing cover. Signed division truncates
+  toward zero everywhere (-7/2 = -3, -7%2 = -1 — C and Rust agree).
+  (2) **The interpreter panicked on i64 overflow** (Rust's checked
+  arithmetic: `attempt to add with overflow`; also mul/sub and neg of
+  i64::MIN) while C longs, LLVM (add/mul/sub nsw-free) and wasm wrap
+  two's-complement. Semantics settled: **i64 arithmetic wraps in every
+  backend**; the interpreter now uses `wrapping_add/sub/mul` and
+  `wrapping_neg`. Sub-64 rest values still add at i64 (u8 250+10 = 260,
+  not a u8 wrap) — consistent with i64-at-rest. gcc emits
+  `-Woverflow` warnings for constant-folded i64 overflow in C (also at
+  compile time in Rust for literal constants) — warnings only, values
+  agree. Fuzzer: guarded division/modulo rows added to integer and
+  narrow programs (nonzero literal divisors 1..=9; the mutator now
+  skips ` / ` and ` % ` lines too — a mutated divisor could be 0 →
+  SIGFPE). 5 seeds × 120 cases clean. Parity:
+  `div_mod_overflow_basics` (ALL_INT — unsigned-poisoned div/mod,
+  signed truncation, i64 add/mul/sub wrap, neg-of-MIN, u8 250+10;
+  61 programs, 174 executions).

@@ -2979,6 +2979,19 @@ impl CodeGen {
                     return format!("((long)({}) {} (long)({}))", l, op_str, r);
                 }
 
+                // B2 audit: `/` and `%` are signed i64 operations in every
+                // backend (truncation toward zero), but C divides in the
+                // operands' common type — an unsigned-typed variable makes
+                // u64(-1) / 2 compute 2^63 instead of 0. The same (long)
+                // force also keeps i32::MIN / -1 from raising SIGFPE in C
+                // (and matches the compiled backends' wrap). Strings and
+                // money are handled above.
+                if matches!(op, BinOp::Div | BinOp::Mod)
+                    && (self.expr_touches_unsigned(left) || self.expr_touches_unsigned(right))
+                {
+                    return format!("((long)({}) {} (long)({}))", l, op_str, r);
+                }
+
                 format!("({} {} {})", l, op_str, r)
             }
             Expr::UnaryOp { op, expr } => {

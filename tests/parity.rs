@@ -713,6 +713,47 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "div_mod_overflow_basics",
+        source: r#"
+fn main() {
+    let a: u64 = -1 as u64
+    print(a / 2)
+    print(a % 3)
+    let b: usize = 0 - 1
+    print(b / 7)
+    let c: u32 = -1 as u32
+    print(c / 5)
+    print(c % 5)
+    let d: i64 = -7
+    print(d / 2)
+    print(d % 2)
+    print((-1 as u64) / (0 - 3))
+    let e: u16 = 40000
+    print(e / 3)
+    let m: i64 = 9223372036854775807
+    print(m + 1)
+    print(m * 2)
+    let n: i64 = -9223372036854775807
+    print(n - 2)
+    let mn = 0 - 9223372036854775807 - 1
+    print(-mn)
+    let u: u8 = 250
+    print(u + 10)
+}
+"#,
+        // B2 audit (division/overflow): `/` and `%` are signed i64 ops on
+        // the bit pattern — C used to divide in the operands' common type,
+        // so u64(-1) / 2 computed 2^63 (an unsigned-typed variable poisoned
+        // the division like it poisoned comparisons); codegen now forces
+        // (long) operands. Signed division truncates toward zero (-7/2 =
+        // -3, -7%2 = -1) — pinned for all backends. i64 arithmetic wraps
+        // two's-complement everywhere: the interpreter used to panic with
+        // Rust's checked arithmetic (add/mul/sub and neg of i64::MIN) and
+        // now mirrors the compiled backends' wrapping ops. Sub-64 rest
+        // values still add at i64 (u8 250 + 10 = 260, not a wrap to u8).
+        backends: ALL_INT,
+    },
+    ParityCase {
         name: "method_string",
         source: r#"
 fn main() {

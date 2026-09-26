@@ -2085,10 +2085,14 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         state.arr_vars.insert(key, combined);
                         return Ok(0);
                     }
-                    Ok(l + r)
+                    // B2 audit: i64 arithmetic wraps two's-complement in
+                    // every backend (C longs, LLVM add/mul/sub nsw-free,
+                    // wasm i64 ops) — mirror that here instead of panicking
+                    // on overflow (Rust's default checked arithmetic).
+                    Ok(l.wrapping_add(r))
                 }
-                ast::BinOp::Sub => Ok(l - r),
-                ast::BinOp::Mul => Ok(l * r),
+                ast::BinOp::Sub => Ok(l.wrapping_sub(r)),
+                ast::BinOp::Mul => Ok(l.wrapping_mul(r)),
                 ast::BinOp::Div => Ok(if r != 0 { l / r } else { 0 }),
                 ast::BinOp::Mod => Ok(if r != 0 { l % r } else { 0 }),
                 ast::BinOp::Eq => {
@@ -2159,7 +2163,7 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
         ast::Expr::UnaryOp { op, expr } => {
             let val = eval_expr(expr, state)?;
             match op {
-                ast::UnOp::Neg => Ok(-val),
+                ast::UnOp::Neg => Ok(val.wrapping_neg()), // i64::MIN wraps, like every compiled backend
                 ast::UnOp::Not => Ok(if val == 0 { 1 } else { 0 }),
                 // B1: bitwise complement
                 ast::UnOp::BitNot => Ok(!val),

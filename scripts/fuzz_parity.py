@@ -200,6 +200,13 @@ def gen_int_program(rng: random.Random) -> str:
         lines.append("    print(acc)")
 
     for _ in range(rng.randint(2, 4)):
+        if rng.random() < 0.15:
+            # Guarded division/modulo: a nonzero literal divisor cannot
+            # raise SIGFPE or trigger the interpreter's divide-by-zero
+            # fallback, and the mutator never rewrites these lines.
+            numer = gen_int_expr(rng, names)
+            lines.append(f"    print(({numer} / {rng.randint(1, 9)}))")
+            continue
         lines.append(f"    print({gen_int_expr(rng, names)})")
     lines.append("}")
     return "\n".join(lines)
@@ -346,6 +353,13 @@ def gen_narrow_program(rng: random.Random) -> str:
             # every backend for any operand.
             name = rng.choice(all_names)
             lines.append(f"    {name} = {gen_operand(rng, all_names, small_names)}")
+        elif r < 0.79:
+            # Guarded division/modulo on any-typed operands (signed i64
+            # semantics everywhere since the audit; a literal 1..=9 divisor
+            # cannot divide by zero or hit the i64::MIN / -1 abort).
+            numer = gen_operand(rng, all_names, small_names)
+            lines.append(f"    print(({numer} / {rng.randint(1, 9)}))")
+            lines.append(f"    print(({numer} % {rng.randint(1, 9)}))")
         elif r < 0.86:
             operand = rng.choice(all_names + [str(rng.randint(-300, 300))])
             ty, _ = rng.choice(NARROW_TYPES)
@@ -437,9 +451,10 @@ def gen_array_program(rng: random.Random) -> str:
 NUM_RE = re.compile(r"(?<![A-Za-z0-9_])-?\d+")
 
 # Lines whose first integer literal must NOT be swapped: subscripts (index
-# validity is statically tracked by the generator) and shift amounts
-# (a negative shift is UB in C and a panic in the interpreter).
-MUTATION_SKIP = ("[", "<<", ">>")
+# validity is statically tracked by the generator), shift amounts (a
+# negative shift is UB in C), and division/modulo lines (swapping the
+# divisor could produce a literal 0 → SIGFPE).
+MUTATION_SKIP = ("[", "<<", ">>", " / ", " % ")
 
 
 def mutate(source: str, rng: random.Random) -> str:

@@ -347,3 +347,26 @@ docs/explanations: **English**.
   `array_len_basics` (ALL_INT — all four backends; 57 programs, 135
   executions). playground-compiler bundles no llvmgen copy, so the browser
   artifact is unaffected.
+- 2026-09-26: **`scripts/fuzz_parity.py` — permanent differential fuzz
+  harness** for the four backends (an outgrowth of the manual /tmp diff
+  harness used for the array work). Generates small random programs from a
+  deliberately conservative vocabulary — i64 arithmetic/bitwise exprs, let
+  chains, range loops with break/continue/guards, array literals with
+  statically-tracked in-bounds indices, len(), len-derived indices, for-in
+  over array *literals*, shrinking array reassignment — then optionally
+  swaps integer literals (never inside subscripts/shift amounts, and the
+  lookbehind keeps it from renaming variables), and executes each program
+  on all four backends exactly the way tests/parity.rs does (same
+  progress-line filter, same invocation shapes, 10 s timeouts, wat2wasm +
+  scripts/runwasm.mjs for wasm). C is the reference: cases C can't run are
+  skipped, single-backend support failures are reported but not
+  disagreements. Known-divergent constructs are never generated (aliases,
+  for-in over array *variables* — the LLVM one-pass gap, growing
+  reassignment — the C overflow, bool prints, strings, match), so any
+  reported disagreement is a real bug, saved under fuzz_failures/ with its
+  seed. Repro: `python3 scripts/fuzz_parity.py --seed N --count K`; seeds
+  make failures reproducible. Validated: the first run caught the C
+  growing-reassign overflow through a then-generator bug; after tightening
+  (reassigns may only shrink, shift bases positive) it runs 200/200 clean
+  in ~106 s with 0 skips. Deliberately NOT wired into ci-local/ci.yml yet —
+  ~30 s for a 50-case slice would fit the parity job if wanted.

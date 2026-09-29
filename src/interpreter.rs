@@ -2093,8 +2093,13 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                 }
                 ast::BinOp::Sub => Ok(l.wrapping_sub(r)),
                 ast::BinOp::Mul => Ok(l.wrapping_mul(r)),
-                ast::BinOp::Div => Ok(if r != 0 { l / r } else { 0 }),
-                ast::BinOp::Mod => Ok(if r != 0 { l % r } else { 0 }),
+                // B2 (total division): x/0 → 0 (pre-existing interpreter
+                // behavior, now pinned everywhere) and i64::MIN / -1 wraps
+                // to i64::MIN instead of panicking (Rust's `/` and `%` panic
+                // on that edge; compiled backends go through sbx_gdiv/grem,
+                // which wrap).
+                ast::BinOp::Div => Ok(if r != 0 { l.wrapping_div(r) } else { 0 }),
+                ast::BinOp::Mod => Ok(if r != 0 { l.wrapping_rem(r) } else { 0 }),
                 ast::BinOp::Eq => {
                     if let (Some(ls), Some(rs)) = (&left_str, &right_str) {
                         Ok(if ls == rs { 1 } else { 0 })

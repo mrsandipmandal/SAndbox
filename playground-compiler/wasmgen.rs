@@ -509,6 +509,110 @@ impl WasmGen {
         self.write_indent();
         writeln!(self.output, ")").unwrap();
         writeln!(self.output).unwrap();
+
+        // B2 (total division): $sbx_gdiv(a, b) — x/0 → 0 and
+        // i64::MIN / -1 → i64::MIN (via 0 - a, which wraps like every i64
+        // sub). Both edges trap in raw i64.div_s, and `select` cannot guard
+        // them (it evaluates BOTH operands eagerly), so this needs a real
+        // if/else.
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(func $sbx_gdiv (param $a i64) (param $b i64) (result i64)"
+        )
+        .unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(if (result i64) (i64.ne (local.get $b) (i64.const 0))"
+        )
+        .unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(self.output, "(then").unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(if (result i64) (i64.ne (local.get $b) (i64.const -1))"
+        )
+        .unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(then (i64.div_s (local.get $a) (local.get $b)))"
+        )
+        .unwrap();
+        self.write_indent();
+        writeln!(self.output, "(else (i64.sub (i64.const 0) (local.get $a)))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        self.write_indent();
+        writeln!(self.output, "(else (i64.const 0))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        writeln!(self.output).unwrap();
+
+        // B2 (total division): $sbx_grem(a, b) — x%0 → 0 and
+        // i64::MIN % -1 → 0 (rem_s traps on BOTH edges; same if/else
+        // requirement as $sbx_gdiv above).
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(func $sbx_grem (param $a i64) (param $b i64) (result i64)"
+        )
+        .unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(if (result i64) (i64.ne (local.get $b) (i64.const 0))"
+        )
+        .unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(self.output, "(then").unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(if (result i64) (i64.ne (local.get $b) (i64.const -1))"
+        )
+        .unwrap();
+        self.indent += 1;
+        self.write_indent();
+        writeln!(
+            self.output,
+            "(then (i64.rem_s (local.get $a) (local.get $b)))"
+        )
+        .unwrap();
+        self.write_indent();
+        writeln!(self.output, "(else (i64.const 0))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        self.write_indent();
+        writeln!(self.output, "(else (i64.const 0))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, ")").unwrap();
+        writeln!(self.output).unwrap();
     }
 
     fn gen_wasm_fn(&mut self, name: &str, params: &[Param], ret: &Option<Type>, body: &[Stmt]) {
@@ -1066,6 +1170,25 @@ impl WasmGen {
                 self.gen_wasm_expr(value);
             }
             Expr::BinaryOp { op, left, right } => {
+                // B2 (total division): integer / and % route through the
+                // total-division helpers (x/0 → 0, i64::MIN / -1 wraps,
+                // i64::MIN % -1 → 0) instead of trapping operators.
+                if matches!(op, BinOp::Div | BinOp::Mod) {
+                    let helper = if *op == BinOp::Div {
+                        "$sbx_gdiv"
+                    } else {
+                        "$sbx_grem"
+                    };
+                    self.write_indent();
+                    writeln!(self.output, "(call {}", helper).unwrap();
+                    self.indent += 1;
+                    self.gen_wasm_expr(left);
+                    self.gen_wasm_expr(right);
+                    self.indent -= 1;
+                    self.write_indent();
+                    writeln!(self.output, ")").unwrap();
+                    return;
+                }
                 let op_name = self.wasm_op(op).to_string();
                 self.write_indent();
                 writeln!(self.output, "(i64.{}", op_name).unwrap();

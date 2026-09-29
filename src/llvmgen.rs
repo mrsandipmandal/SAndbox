@@ -241,6 +241,9 @@ impl LlvmGen {
         writeln!(self.output, "declare i64 @__sbx_future_is_ready(i64)").unwrap();
         writeln!(self.output, "declare void @__sbx_sleep(i64)").unwrap();
         writeln!(self.output, "declare i64 @__sbx_time_ms()").unwrap();
+        // B2 (total division): shared with the C backend
+        writeln!(self.output, "declare i64 @sbx_gdiv(i64, i64)").unwrap();
+        writeln!(self.output, "declare i64 @sbx_grem(i64, i64)").unwrap();
         writeln!(self.output, "declare i64 @__sbx_result_unwrap(i64)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_file_read(i8*)").unwrap();
         writeln!(self.output, "declare void @__sbx_file_write(i8*, i8*)").unwrap();
@@ -1844,8 +1847,16 @@ impl LlvmGen {
                         result
                     }
                     BinOp::Div => {
+                        // B2 (total division): x/0 → 0 and i64::MIN / -1 →
+                        // i64::MIN via the shared C runtime helper — raw sdiv
+                        // is UB on both edges (SIGFPE in practice).
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = sdiv {} {}, {}", result, lt, l, r).unwrap();
+                        writeln!(
+                            self.output,
+                            "  {} = call i64 @sbx_gdiv(i64 {}, i64 {})",
+                            result, l, r
+                        )
+                        .unwrap();
                         result
                     }
                     BinOp::Eq => {
@@ -2013,8 +2024,16 @@ impl LlvmGen {
                         result
                     }
                     BinOp::Mod => {
+                        // B2 (total division): x%0 → 0 and i64::MIN % -1 → 0
+                        // via the shared C runtime helper (raw srem traps on
+                        // both edges).
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = srem {} {}, {}", result, lt, l, r).unwrap();
+                        writeln!(
+                            self.output,
+                            "  {} = call i64 @sbx_grem(i64 {}, i64 {})",
+                            result, l, r
+                        )
+                        .unwrap();
                         result
                     }
                     // B1: bitwise — plain integer ops on the operand type.

@@ -713,6 +713,41 @@ fn main() {
         backends: ALL_INT,
     },
     ParityCase {
+        name: "narrow_bitwise_width",
+        source: r#"
+fn main() {
+    let a: u32 = -3
+    let b: i32 = -2
+    print(-6 ^ a)
+    print(-7 ^ a)
+    print(-6 & a)
+    print(-6 | a)
+    print(-6 ^ b)
+    print((-6 ^ a) / -75)
+    print((-7 ^ a) % -75)
+    if (-6 ^ a) < 0 { print(7) } else { print(13) }
+    let m: u16 = -3
+    print(-6 & m)
+    print(m ^ -1)
+    let k: u8 = 240
+    print(-6 & k)
+    print(k ^ -1)
+    let big: usize = 0 - 1
+    print(-6 & big)
+}
+"#,
+        // B2 audit (bitwise at narrow width, found by scripts/fuzz_parity.py
+        // seed 42): bitwise ops are i64 ops on the rest values in the
+        // interpreter/LLVM/wasm, but C computed them at the operands' narrow
+        // common width — (-6) ^ (u32)-3 (rest 4294967293) produced 7 instead
+        // of -4294967289. BitAnd/BitOr/BitXor now get the same (long) force
+        // as Add/Sub/Mul. Rows: xor/and/or of negative literals with
+        // u32/i32/u16/u8/usize vars feeding division, modulo and
+        // comparisons; usize is 64-bit already so `&` with -6 is a no-op
+        // there.
+        backends: ALL_INT,
+    },
+    ParityCase {
         name: "div_mod_overflow_basics",
         source: r#"
 fn main() {
@@ -751,6 +786,56 @@ fn main() {
         // Rust's checked arithmetic (add/mul/sub and neg of i64::MIN) and
         // now mirrors the compiled backends' wrapping ops. Sub-64 rest
         // values still add at i64 (u8 250 + 10 = 260, not a wrap to u8).
+        backends: ALL_INT,
+    },
+    ParityCase {
+        name: "total_division_basics",
+        source: r#"
+fn main() {
+    let zero = 1 - 1
+    let neg1 = 0 - 1
+    let mn = 0 - 9223372036854775807 - 1
+    print(mn / zero)
+    print(mn % zero)
+    print(mn / neg1)
+    print(mn % neg1)
+    print(mn / 1)
+    print(mn / -1)
+    let mx = 9223372036854775807
+    print(mx / neg1)
+    print(mx % neg1)
+    print(7 / 2)
+    print(7 % 2)
+    print(-7 / 2)
+    print(-7 % 2)
+    print(7 % -2)
+    print(100 / -7)
+    print(100 % -7)
+    print(0 / 5)
+    print(0 % 5)
+    print(7 / 0)
+    print(7 % 0)
+    let u: u64 = -1 as u64
+    print(u / zero)
+    print(u % zero)
+    let v: usize = 0 - 1
+    print(v / neg1)
+    print(v % neg1)
+    let w: u32 = -1 as u32
+    print(w / zero)
+}
+"#,
+        // B2 (total division): `/` and `%` are TOTAL — x/0 → 0, x%0 → 0,
+        // i64::MIN / -1 wraps to i64::MIN, i64::MIN % -1 → 0 — identical in
+        // all four backends. C used to SIGFPE (runtime) or fold `mn / 0`
+        // into an immediate trap, the interpreter panicked on MIN / -1, and
+        // wasm's raw rem_s traps even on the -1 divisor. Every integer
+        // division now routes through the sbx_gdiv/sbx_grem runtime helpers
+        // (wasm: $sbx_gdiv/$sbx_grem if/else — select is eager and both
+        // rem_s edges trap). Divisors are non-literal expressions so gcc
+        // cannot fold them; literal `mn / -1` and the 0-divisor rows are
+        // still pinned. Truncation toward zero and unsigned-typed operands
+        // are re-pinned beside the edges.
         backends: ALL_INT,
     },
     ParityCase {

@@ -2662,6 +2662,35 @@ impl CodeGen {
         }
     }
 
+    /// B2 (total division): does this expression evaluate to an IEEE double
+    /// in the C backend (so its `/` is real float division)? Float-typed
+    /// variables/casts and float literals qualify. Money literals do NOT —
+    /// they are plain i64 cents/pips at rest (and never a double).
+    fn expr_is_floatish(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Float(_) => true,
+            Expr::Ident(name) => {
+                self.var_types.get(name.as_str()).map(|s| s.as_str()) == Some("double")
+            }
+            Expr::Cast { ty, .. } => self.c_type(ty) == "double",
+            Expr::UnitLiteral { value, .. } => self.expr_is_floatish(value),
+            Expr::UnaryOp { expr, .. } => self.expr_is_floatish(expr),
+            _ => false,
+        }
+    }
+
+    /// B2 (total division): is this a bare decimal literal or a decimal
+    /// literal wrapped only in unit/negation? The C and LLVM backends emit
+    /// those as __int128 / i128 constants scaled ×10^18 (their `/` must stay
+    /// wide division), even though infer_c_type reports "long".
+    fn expr_is_plain_decimal(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::DecimalLiteral(_) => true,
+            Expr::UnitLiteral { value, .. } => self.expr_is_plain_decimal(value),
+            _ => false,
+        }
+    }
+
     fn infer_c_type(&self, expr: &Expr) -> String {
         match expr {
             Expr::Int(_) => "long".into(),
@@ -2973,23 +3002,47 @@ impl CodeGen {
                 // C promotes sub-64-bit typed operands to int and computes in
                 // 32 bits — (u16)65466 * 65466 * 3 silently wrapped. Force
                 // (long) operands whenever either side touches a sub-64 type.
-                if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
-                    && (self.expr_touches_sub64(left) || self.expr_touches_sub64(right))
+                // Bitwise ops are in the same boat (found by the fuzzer):
+                // int32_t ^ unsigned int re-widens at 32 bits, so
+                // (-6) ^ (u32)-3 produced 7 instead of -4294967289 — an i64
+                // XOR on the rest values. BitAnd/BitOr/BitXor get the same
+                // force; << and >> are handled above.
+                if matches!(
+                    op,
+                    BinOp::Add
+                        | BinOp::Sub
+                        | BinOp::Mul
+                        | BinOp::BitAnd
+                        | BinOp::BitOr
+                        | BinOp::BitXor
+                ) && (self.expr_touches_sub64(left) || self.expr_touches_sub64(right))
                 {
                     return format!("((long)({}) {} (long)({}))", l, op_str, r);
                 }
 
-                // B2 audit: `/` and `%` are signed i64 operations in every
-                // backend (truncation toward zero), but C divides in the
-                // operands' common type — an unsigned-typed variable makes
-                // u64(-1) / 2 compute 2^63 instead of 0. The same (long)
-                // force also keeps i32::MIN / -1 from raising SIGFPE in C
-                // (and matches the compiled backends' wrap). Strings and
-                // money are handled above.
+                // B2 (total division): `/` and `%` are signed i64 operations
+                // that are TOTAL in every backend: x/0 → 0, x%0 → 0,
+                // i64::MIN / -1 → i64::MIN, i64::MIN % -1 → 0. C's raw
+                // operators are UB on both edges (runtime SIGFPE; gcc also
+                // folds a constant `mn / 0` into an immediate trap), so every
+                // integer division routes through the sbx_gdiv/sbx_grem
+                // runtime helpers. Two escapes keep their raw operators:
+                // IEEE double operands (real float division) and bare decimal
+                // literals (whose constants are __int128 scaled ×10^18, not
+                // longs). The (long) casts force signed i64 on unsigned-typed
+                // operands as before — the helpers receive the bit pattern.
                 if matches!(op, BinOp::Div | BinOp::Mod)
-                    && (self.expr_touches_unsigned(left) || self.expr_touches_unsigned(right))
+                    && !self.expr_is_floatish(left)
+                    && !self.expr_is_floatish(right)
+                    && !self.expr_is_plain_decimal(left)
+                    && !self.expr_is_plain_decimal(right)
                 {
-                    return format!("((long)({}) {} (long)({}))", l, op_str, r);
+                    let helper = if op == &BinOp::Div {
+                        "sbx_gdiv"
+                    } else {
+                        "sbx_grem"
+                    };
+                    return format!("({}((long)({}), (long)({})))", helper, l, r);
                 }
 
                 format!("({} {} {})", l, op_str, r)
@@ -3787,18 +3840,19 @@ impl CodeGen {
                     BinOp::Sub => Some(l - r),
                     BinOp::Mul => Some(l * r),
                     BinOp::Div => {
-                        if r == 0 {
-                            None
+                        // B2 (total division): constant folds mirror the
+                        // sbx_gdiv runtime helper — no fold-time panic.
+                        Some(if r == 0 {
+                            0
+                        } else if r == -1 {
+                            l.wrapping_neg()
                         } else {
-                            Some(l / r)
-                        }
+                            l / r
+                        })
                     }
                     BinOp::Mod => {
-                        if r == 0 {
-                            None
-                        } else {
-                            Some(l % r)
-                        }
+                        // B2 (total division): mirrors sbx_grem.
+                        Some(if r == 0 { 0 } else { l % r })
                     }
                     _ => None,
                 }

@@ -85,18 +85,19 @@ impl TypeChecker {
                     BinOp::Sub => Some(l - r),
                     BinOp::Mul => Some(l * r),
                     BinOp::Div => {
-                        if r == 0 {
-                            None
+                        // B2 (total division): constant folds mirror the
+                        // sbx_gdiv runtime helper — x/0 → 0, MIN/-1 wraps.
+                        Some(if r == 0 {
+                            0
+                        } else if r == -1 {
+                            l.wrapping_neg()
                         } else {
-                            Some(l / r)
-                        }
+                            l / r
+                        })
                     }
                     BinOp::Mod => {
-                        if r == 0 {
-                            None
-                        } else {
-                            Some(l % r)
-                        }
+                        // B2 (total division): mirrors sbx_grem.
+                        Some(if r == 0 { 0 } else { l % r })
                     }
                     _ => None,
                 }

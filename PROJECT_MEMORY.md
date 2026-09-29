@@ -477,3 +477,46 @@ docs/explanations: **English**.
   `div_mod_overflow_basics` (ALL_INT — unsigned-poisoned div/mod,
   signed truncation, i64 add/mul/sub wrap, neg-of-MIN, u8 250+10;
   61 programs, 174 executions).
+- 2026-09-29: **Total division** (completes B2: `/` and `%` are now
+  TOTAL in all four backends) + a fuzzer-found **bitwise-at-narrow-width
+  bug**. Semantics settled: `x / 0 → 0`, `x % 0 → 0` (the interpreter's
+  long-standing behavior, now pinned everywhere), `i64::MIN / -1 →
+  i64::MIN` (wrap, like every other i64 op), `i64::MIN % -1 → 0`.
+  Implementation: shared static helpers `sbx_gdiv`/`sbx_grem` in the C
+  preamble (stdlib.rs c_preamble — both the C backend and the LLVM
+  runtime .c get them; LLVM declares them like the other shared
+  helpers); the C BinaryOp arm routes every integer / and % through
+  them with (long)-forced operands, escaping only for IEEE double
+  operands (`expr_is_floatish`) and bare decimal literals
+  (`expr_is_plain_decimal` — those constants are __int128/i128 scaled
+  ×10^18 despite infer_c_type saying "long"; money literals are plain
+  i64 and DO route through the guard). The interpreter uses
+  wrapping_div/wrapping_rem; both const-folders (typechecker
+  eval_const_expr + codegen's static copy) mirror the helper semantics,
+  killing the `-Wdiv-by-zero` warnings and the gcc fold-to-trap.
+  Wasm emits `$sbx_gdiv`/`$sbx_grem` as folded-WAT if/else — three
+  hard-won details: **wasm `select` evaluates BOTH operands**, so it
+  cannot guard a trapping op; **i64.rem_s traps on i64::MIN % -1**
+  (div_s wraps there, rem_s does not — each helper needs its own -1
+  case, div via `0 - a` which wraps); and an indent underflow (usize
+  wrap in write_indent) **hangs codegen forever** — caught because even
+  `print(42)` stopped compiling. The parity/integration wasm rows need
+  wabt+node on PATH (skipped cleanly when absent).
+  The fuzzer immediately earned its keep: seed 42 flagged 2
+  disagreements — C computed **BitAnd/BitOr/BitXor at the operands'
+  narrow common width** (i32 ^ unsigned int re-widens at 32 bits), so
+  `(-6) ^ (u32)-3` (rest 4294967293) gave 7 instead of -4294967289;
+  the interpreter/LLVM/wasm do an i64 XOR on the rest value. The
+  audit's (long) force covered Add/Sub/Mul but not the bitwise ops —
+  they're in the matches! now (`narrow_bitwise_width` parity case).
+  Fuzzer upgraded: divisors are generated expressions (not literals
+  1..=9) and ` / `/` % ` left MUTATION_SKIP — division is total, so
+  mutated divisors (0, -1, anything) are just more parity rows.
+  Tests: `total_division_basics` (ALL_INT — all four edges via
+  non-literal divisors + literal 0 / -1 rows + truncation +
+  unsigned-typed operands) and the integration test
+  `total_division_all_backends` (C+interp+LLVM always, wasm when
+  tooling present). 63 parity programs. After the fixes: 5 seeds × 120
+  cases, 0 disagreements. playground-compiler/ copies of
+  wasmgen/typechecker/stdlib re-synced (kept byte-identical by policy)
+  and registry/static/playground/compiler.wasm rebuilt+committed.

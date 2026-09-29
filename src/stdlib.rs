@@ -1142,6 +1142,26 @@ pub fn c_preamble() -> String {
 #include <sys/stat.h>
 #include <dirent.h>
 #include <signal.h>
+#include <limits.h>
+
+/* ── Total Division Runtime ── */
+
+/* B2: division is total — x/0 → 0, x%0 → 0, i64::MIN / -1 wraps to
+   i64::MIN (i64::MIN % -1 → 0) — mirroring the interpreter and the
+   wrapping arithmetic everywhere else. The compiler routes all signed
+   i64 / and % through these helpers; C's raw operators are UB on both
+   edges (runtime SIGFPE, silently wrong constant folds). */
+static long long sbx_gdiv(long long a, long long b) {
+    if (b == 0) return 0;
+    if (b == -1) return (a == LLONG_MIN) ? LLONG_MIN : -a;
+    return a / b;
+}
+
+static long long sbx_grem(long long a, long long b) {
+    if (b == 0) return 0;
+    if (b == -1) return 0;
+    return a % b;
+}
 
 /* ── Reference Counting Runtime ── */
 

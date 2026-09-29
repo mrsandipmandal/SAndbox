@@ -6172,3 +6172,97 @@ fn main() {
     assert_eq!(vals(&c_out), expect, "C backend bool casts");
     assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
 }
+
+#[test]
+fn total_division_all_backends() {
+    // B2 (total division): x/0 → 0, x%0 → 0, i64::MIN / -1 → i64::MIN,
+    // i64::MIN % -1 → 0 — identical in C, interpreter, LLVM and wasm.
+    // Before this: C SIGFPE'd (or gcc constant-folded `mn / 0` into an
+    // immediate trap), the interpreter panicked on MIN / -1, and wasm's raw
+    // rem_s traps even on the -1 divisor. Divisors come from variables so
+    // no backend can fold them; the literal-zero rows pin that path too.
+    let source = r#"
+fn main() {
+    let zero = 1 - 1
+    let neg1 = 0 - 1
+    let mn = 0 - 9223372036854775807 - 1
+    print(mn / zero)
+    print(mn % zero)
+    print(mn / neg1)
+    print(mn % neg1)
+    print(mn / 1)
+    print(7 / 2)
+    print(-7 % 2)
+    print(7 / 0)
+    print(7 % 0)
+}
+"#;
+    let expect = [
+        "0",
+        "0",
+        "-9223372036854775808",
+        "0",
+        "-9223372036854775808",
+        "3",
+        "-1",
+        "0",
+        "0",
+    ];
+    fn vals(s: &str) -> Vec<&str> {
+        s.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.trim())
+            .collect()
+    }
+    let (c_out, c_ok) = compile_and_run(source);
+    let (i_out, i_ok) = interpret_source(source);
+    let l_out = llvm_build_and_run(source);
+    assert!(c_ok, "C run failed: {}", c_out);
+    assert!(i_ok, "interpreter failed: {}", i_out);
+    assert_eq!(vals(&c_out), expect, "C backend total division");
+    assert_eq!(vals(&i_out), vals(&c_out), "interpreter diverged from C");
+    assert_eq!(vals(&l_out), expect, "LLVM backend total division");
+
+    // Wasm backend (only when wabt + node tooling is available, mirroring
+    // the parity harness's skip-if-missing behavior).
+    let wat2wasm_ok = Command::new("wat2wasm")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let node_ok = Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if wat2wasm_ok && node_ok {
+        let tmp = TempDir::new().unwrap();
+        let sbx = tmp.path().join("div.sbx");
+        fs::write(&sbx, source).unwrap();
+        let wat = tmp.path().join("div.wat");
+        let (gen_out, gen_ok) =
+            run_sandbox(&["wasm", sbx.to_str().unwrap(), "-o", wat.to_str().unwrap()]);
+        assert!(gen_ok, "wasm gen failed: {}", gen_out);
+        let wasm = tmp.path().join("div.wasm");
+        let asm = Command::new("wat2wasm")
+            .args([wat.to_str().unwrap(), "-o", wasm.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            asm.status.success(),
+            "wat2wasm failed: {}",
+            String::from_utf8_lossy(&asm.stderr)
+        );
+        let runner = Command::new("node")
+            .args(["scripts/runwasm.mjs", wasm.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            runner.status.success(),
+            "wasm run failed: {}",
+            String::from_utf8_lossy(&runner.stderr)
+        );
+        let w_out = String::from_utf8_lossy(&runner.stdout).to_string();
+        assert_eq!(vals(&w_out), expect, "wasm backend total division");
+    }
+}

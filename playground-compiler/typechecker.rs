@@ -85,18 +85,19 @@ impl TypeChecker {
                     BinOp::Sub => Some(l - r),
                     BinOp::Mul => Some(l * r),
                     BinOp::Div => {
-                        if r == 0 {
-                            None
+                        // B2 (total division): constant folds mirror the
+                        // sbx_gdiv runtime helper — x/0 → 0, MIN/-1 wraps.
+                        Some(if r == 0 {
+                            0
+                        } else if r == -1 {
+                            l.wrapping_neg()
                         } else {
-                            Some(l / r)
-                        }
+                            l / r
+                        })
                     }
                     BinOp::Mod => {
-                        if r == 0 {
-                            None
-                        } else {
-                            Some(l % r)
-                        }
+                        // B2 (total division): mirrors sbx_grem.
+                        Some(if r == 0 { 0 } else { l % r })
                     }
                     _ => None,
                 }
@@ -540,12 +541,20 @@ impl TypeChecker {
         match expr {
             Expr::Int(_) => Ok(Type::I64),
             Expr::Cast { expr, ty } => {
-                // B2: `expr as T`. Integer<->integer and int<->float casts are
-                // allowed; everything else is rejected.
+                // B2: `expr as T`. Integer<->integer, int<->float, and
+                // bool->integer casts are allowed; everything else is rejected.
                 let inner = self.check_expr(expr)?;
                 let int_src = matches!(inner, Type::I64 | Type::Int(_));
                 let int_dst = matches!(ty, Type::I64 | Type::Int(_));
                 if int_src && int_dst {
+                    return Ok(ty.clone());
+                }
+                // bool -> integer: booleans are 1/0 at rest in every backend
+                // (the interpreter's Bool arm, C's int-typed comparisons, LLVM's
+                // zexted i1, wasm's extended i32), so the cast re-types the
+                // expression without touching the value — print((a == b) as i64).
+                // bool -> float stays rejected to keep the surface minimal.
+                if matches!(inner, Type::Bool) && int_dst {
                     return Ok(ty.clone());
                 }
                 let f_src = matches!(inner, Type::F64);

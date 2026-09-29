@@ -97,6 +97,7 @@ run_gate "binary smoke"     bash scripts/ci-smoke.sh
 
 # ── Gate 3: parity ───────────────────────────────────────────────────────────
 run_gate "parity"           cargo test --quiet --test parity
+run_gate "wasm integration" cargo test --quiet --test integration total_division_all_backends
 
 # ── Gate 4: registry (separate crate) ────────────────────────────────────────
 if [ "$SKIP_REGISTRY" -eq 1 ]; then
@@ -114,6 +115,16 @@ else
     printf '%s\n' "${YELLOW}→ registry gates skipped (registry/ not present)${RESET}"
     printf '%s\n' ""
   fi
+fi
+
+# ── Gate 5: playground compiler (wasm artifact + host unit tests) ──────────
+run_gate "playground unit tests" cargo test --quiet --manifest-path playground-compiler/Cargo.toml
+run_gate "playground smoke"      node scripts/smoke-playground-compiler.mjs
+if ! command -v wat2wasm >/dev/null 2>&1; then
+  RESULTS+=("SKIP  encoder parity  (wat2wasm not found)")
+  printf '%s\n' "${YELLOW}→ encoder parity skipped (apt install wabt)${RESET}"
+else
+  run_gate "encoder parity"       node scripts/validate_encoder.mjs
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────

@@ -190,6 +190,16 @@ jobs:
           echo "If this looks like a transient CI flake, re-run the job."
           exit 1
 
+      # wabt is installed above, so the tooling-gated wasm rows of the
+      # integration tests actually run here — in the check job's plain
+      # `cargo test` they silently skip (no wat2wasm on PATH there).
+      # total_division_all_backends exercises the wasm CLI pipeline
+      # end-to-end: gen → wat2wasm → scripts/runwasm.mjs, pinning the
+      # $sbx_gdiv/$sbx_grem helpers with real wabt, not just the page
+      # encoder. Node is preinstalled on ubuntu-latest runners.
+      - name: Wasm integration tests (tooling-gated rows)
+        run: cargo test --test integration total_division_all_backends -- --nocapture
+
   # ── Registry Server ─────────────────────────────────────────────────────────
   registry:
     name: Check & Test (Registry)
@@ -286,6 +296,12 @@ jobs:
 
       - name: Clippy lints (wasm32 target)
         run: cargo clippy --manifest-path playground-compiler/Cargo.toml --all-targets --target wasm32-unknown-unknown -- -D warnings
+
+      # Host-target unit tests: the structural WAT nesting tests (if/then/else
+      # shape of the $sbx_gdiv/$sbx_grem helpers) live here and caught the
+      # mis-nested-else regression; clippy alone compiles but never runs them.
+      - name: Playground unit tests (structural WAT nesting)
+        run: cargo test --manifest-path playground-compiler/Cargo.toml
 
       - name: Rebuild artifact and smoke-test committed + rebuilt bytes
         run: |

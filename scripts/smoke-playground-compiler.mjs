@@ -155,6 +155,32 @@ if (r4.outPtr !== 0) {
     JSON.stringify(logs));
 }
 
+// 6. Total division (B2): x/0 → 0, i64::MIN / -1 wraps to i64::MIN,
+// i64::MIN % -1 → 0, truncation toward zero. $sbx_gdiv/$sbx_grem are
+// nested if/else in folded WAT — a mis-nested (else ...) inside the outer
+// (then ...) is still paren-balanced but rejected by encodeWat, so run the
+// edges end-to-end through the page's own encoder.
+const r5 = compile(exports, `fn main() {
+    let zero = 1 - 1
+    let neg1 = 0 - 1
+    let mn = 0 - 9223372036854775807 - 1
+    print(mn / zero)
+    print(mn % zero)
+    print(mn / neg1)
+    print(mn % neg1)
+    print(7 / 2)
+    print(-7 % 2)
+    print(7 / 0)
+    print(7 % 0)
+}`);
+check('division program compiles', r5.outPtr !== 0, r5.outPtr === 0 ? readEnvelope(exports, r5.errAddr) : '');
+if (r5.outPtr !== 0) {
+  const logs = runBinary(encodeWat(readEnvelope(exports, r5.outPtr)));
+  check('total division runs 0,0,MIN,0,3,-1,0,0',
+    JSON.stringify(logs) === JSON.stringify(['0', '0', '-9223372036854775808', '0', '3', '-1', '0', '0']),
+    JSON.stringify(logs));
+}
+
 if (failures > 0) {
   console.error(`\n${failures} smoke check(s) failed`);
   process.exit(1);

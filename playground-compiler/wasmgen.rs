@@ -514,101 +514,101 @@ impl WasmGen {
         // i64::MIN / -1 → i64::MIN (via 0 - a, which wraps like every i64
         // sub). Both edges trap in raw i64.div_s, and `select` cannot guard
         // them (it evaluates BOTH operands eagerly), so this needs a real
-        // if/else.
+        // if/else — written with a local temp and void ifs because the
+        // playground's JS WAT encoder does not support `(if (result t))`.
+        // The tail is an explicit `(return (local.get $r))`: result
+        // functions whose bodies fall through get a closing `(unreachable)`
+        // pin (see gen_wasm_fn / the page encoder's fall-through rule), so
+        // these helpers must end in a terminator like every other result
+        // function — a bare `(local.get $r)` would get the pin appended and
+        // trap at runtime.
         self.write_indent();
         writeln!(
             self.output,
             "(func $sbx_gdiv (param $a i64) (param $b i64) (result i64)"
         )
         .unwrap();
+        self.write_indent();
+        writeln!(self.output, "(local $r i64)").unwrap();
         self.indent += 1;
         self.write_indent();
-        writeln!(
-            self.output,
-            "(if (result i64) (i64.ne (local.get $b) (i64.const 0))"
-        )
-        .unwrap();
+        writeln!(self.output, "(if (i64.ne (local.get $b) (i64.const 0))").unwrap();
         self.indent += 1;
         self.write_indent();
         writeln!(self.output, "(then").unwrap();
         self.indent += 1;
         self.write_indent();
-        writeln!(
-            self.output,
-            "(if (result i64) (i64.ne (local.get $b) (i64.const -1))"
-        )
-        .unwrap();
+        writeln!(self.output, "(if (i64.ne (local.get $b) (i64.const -1))").unwrap();
         self.indent += 1;
         self.write_indent();
         writeln!(
             self.output,
-            "(then (i64.div_s (local.get $a) (local.get $b)))"
+            "(then (local.set $r (i64.div_s (local.get $a) (local.get $b))))"
         )
         .unwrap();
         self.write_indent();
-        writeln!(self.output, "(else (i64.sub (i64.const 0) (local.get $a)))").unwrap();
+        writeln!(
+            self.output,
+            "(else (local.set $r (i64.sub (i64.const 0) (local.get $a))))"
+        )
+        .unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, "))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, "(else (local.set $r (i64.const 0)))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, ")").unwrap();
-        self.indent -= 1;
         self.write_indent();
-        writeln!(self.output, ")").unwrap();
-        self.write_indent();
-        writeln!(self.output, "(else (i64.const 0))").unwrap();
-        self.indent -= 1;
-        self.write_indent();
-        writeln!(self.output, ")").unwrap();
+        writeln!(self.output, "(return (local.get $r))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, ")").unwrap();
         writeln!(self.output).unwrap();
 
         // B2 (total division): $sbx_grem(a, b) — x%0 → 0 and
-        // i64::MIN % -1 → 0 (rem_s traps on BOTH edges; same if/else
-        // requirement as $sbx_gdiv above).
+        // i64::MIN % -1 → 0. rem_s traps on BOTH edges (unlike div_s,
+        // which wraps on the -1 edge), so this helper needs its own -1
+        // special case; same local-temp shape as $sbx_gdiv above.
         self.write_indent();
         writeln!(
             self.output,
             "(func $sbx_grem (param $a i64) (param $b i64) (result i64)"
         )
         .unwrap();
+        self.write_indent();
+        writeln!(self.output, "(local $r i64)").unwrap();
         self.indent += 1;
         self.write_indent();
-        writeln!(
-            self.output,
-            "(if (result i64) (i64.ne (local.get $b) (i64.const 0))"
-        )
-        .unwrap();
+        writeln!(self.output, "(if (i64.ne (local.get $b) (i64.const 0))").unwrap();
         self.indent += 1;
         self.write_indent();
         writeln!(self.output, "(then").unwrap();
         self.indent += 1;
         self.write_indent();
-        writeln!(
-            self.output,
-            "(if (result i64) (i64.ne (local.get $b) (i64.const -1))"
-        )
-        .unwrap();
+        writeln!(self.output, "(if (i64.ne (local.get $b) (i64.const -1))").unwrap();
         self.indent += 1;
         self.write_indent();
         writeln!(
             self.output,
-            "(then (i64.rem_s (local.get $a) (local.get $b)))"
+            "(then (local.set $r (i64.rem_s (local.get $a) (local.get $b))))"
         )
         .unwrap();
         self.write_indent();
-        writeln!(self.output, "(else (i64.const 0))").unwrap();
+        writeln!(self.output, "(else (local.set $r (i64.const 0)))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, "))").unwrap();
+        self.indent -= 1;
+        self.write_indent();
+        writeln!(self.output, "(else (local.set $r (i64.const 0)))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, ")").unwrap();
-        self.indent -= 1;
         self.write_indent();
-        writeln!(self.output, ")").unwrap();
-        self.write_indent();
-        writeln!(self.output, "(else (i64.const 0))").unwrap();
-        self.indent -= 1;
-        self.write_indent();
-        writeln!(self.output, ")").unwrap();
+        writeln!(self.output, "(return (local.get $r))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, ")").unwrap();

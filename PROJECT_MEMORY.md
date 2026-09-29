@@ -520,3 +520,36 @@ docs/explanations: **English**.
   cases, 0 disagreements. playground-compiler/ copies of
   wasmgen/typechecker/stdlib re-synced (kept byte-identical by policy)
   and registry/static/playground/compiler.wasm rebuilt+committed.
+- 2026-09-29: **Playground division regression chain** (found by the
+  rebuilt artifact, three bugs deep — none of the committed tests
+  caught any of them). (1) The `))` nesting fix had landed in
+  src/wasmgen.rs but NOT the byte-identical twin
+  playground-compiler/wasmgen.rs: a stray `(else ...)` inside the
+  outer `(then` is still paren-balanced, so the old lib.rs test
+  (paren counting alone) passed it — byte-identical policy needs a
+  `diff` check after every edit, not just tests on one copy. (2) After
+  re-sync, division still trapped with `unreachable` at runtime: the
+  helpers ended in a bare `(local.get $r)` and the page encoder's
+  fall-through rule (encodeFuncBody in playground.js: a result
+  function that doesn't end in return/unreachable/br gets a closing
+  `(unreachable)` appended — it mirrors wasmgen's own pin at
+  gen_wasm_fn, src/wasmgen.rs "result function... pin the end with
+  (unreachable)") treated the value-carrying tail as fall-through.
+  **Contract: `$sbx_gdiv`/`$sbx_grem` (every result-valued runtime
+  helper) MUST end with an explicit `(return (local.get $r))`, never a
+  bare value tail** — the other helpers ($sbx_arr_new/$sbx_len/$sbx_get)
+  already did; wasmgen's pin applies to any result function whose body
+  falls off the end, in BOTH the CLI and playground pipelines. (3)
+  Guards against recurrence: structural WAT nesting test in
+  playground-compiler/lib.rs (a real folded-WAT s-expression parser
+  asserting 2 ifs, inner inside the outer's then, else placement,
+  exactly one div op, 3 local.sets on $r, 1 return tail — paren
+  counting CANNOT catch the stray-else-inside-then bug class;
+  mutation-checked) and a total-division smoke case in
+  scripts/smoke-playground-compiler.mjs (case 6: x/0, MIN/-1, MIN%−1,
+  truncation — compiled → encoded with the page's OWN encodeWat →
+  executed; encodeWat rejects mis-nested WAT, and the bogus-unreachable
+  trap now fails CI before it ships). Verified with real wabt
+  (dpkg-deb -x the repo's wabt .deb to /tmp — no sudo needed): wat2wasm
+  accepts + runs the helper WAT, encoder parity 26/26 byte-identical.
+  Smoke script now 11 checks; playground lib tests 6.

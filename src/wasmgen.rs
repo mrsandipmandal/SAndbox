@@ -516,6 +516,12 @@ impl WasmGen {
         // them (it evaluates BOTH operands eagerly), so this needs a real
         // if/else — written with a local temp and void ifs because the
         // playground's JS WAT encoder does not support `(if (result t))`.
+        // The tail is an explicit `(return (local.get $r))`: result
+        // functions whose bodies fall through get a closing `(unreachable)`
+        // pin (see gen_wasm_fn / the page encoder's fall-through rule), so
+        // these helpers must end in a terminator like every other result
+        // function — a bare `(local.get $r)` would get the pin appended and
+        // trap at runtime.
         self.write_indent();
         writeln!(
             self.output,
@@ -548,7 +554,7 @@ impl WasmGen {
         .unwrap();
         self.indent -= 1;
         self.write_indent();
-        writeln!(self.output, ")").unwrap();
+        writeln!(self.output, "))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, "(else (local.set $r (i64.const 0)))").unwrap();
@@ -556,7 +562,7 @@ impl WasmGen {
         self.write_indent();
         writeln!(self.output, ")").unwrap();
         self.write_indent();
-        writeln!(self.output, "(local.get $r)").unwrap();
+        writeln!(self.output, "(return (local.get $r))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, ")").unwrap();
@@ -594,7 +600,7 @@ impl WasmGen {
         writeln!(self.output, "(else (local.set $r (i64.const 0)))").unwrap();
         self.indent -= 1;
         self.write_indent();
-        writeln!(self.output, ")").unwrap();
+        writeln!(self.output, "))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, "(else (local.set $r (i64.const 0)))").unwrap();
@@ -602,7 +608,7 @@ impl WasmGen {
         self.write_indent();
         writeln!(self.output, ")").unwrap();
         self.write_indent();
-        writeln!(self.output, "(local.get $r)").unwrap();
+        writeln!(self.output, "(return (local.get $r))").unwrap();
         self.indent -= 1;
         self.write_indent();
         writeln!(self.output, ")").unwrap();

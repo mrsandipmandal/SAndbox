@@ -217,3 +217,214 @@ fn compile_inner(
 
     compile_to_wat(source, &packages)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Folded-WAT s-expression reader: enough structure (parens, quoted
+    // strings, `;` comments, bare atoms) to catch mis-nested forms that are
+    // still paren-balanced — the exact bug class that put a stray
+    // `(else ...)` inside $sbx_gdiv's outer `(then ...)` while every paren
+    // count stayed at zero.
+    #[derive(Debug)]
+    struct SExpr {
+        head: String,
+        atoms: Vec<String>,
+        children: Vec<SExpr>,
+    }
+
+    fn parse_sexprs(text: &str) -> Result<Vec<SExpr>, String> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut pos = 0usize;
+        let mut stack: Vec<SExpr> = Vec::new();
+        let mut roots: Vec<SExpr> = Vec::new();
+
+        while pos < chars.len() {
+            match chars[pos] {
+                ';' => {
+                    while pos < chars.len() && chars[pos] != '\n' {
+                        pos += 1;
+                    }
+                }
+                '"' => {
+                    pos += 1;
+                    while pos < chars.len() && chars[pos] != '"' {
+                        if chars[pos] == '\\' {
+                            pos += 1;
+                        }
+                        pos += 1;
+                    }
+                    pos += 1;
+                }
+                '(' => {
+                    let mut end = pos + 1;
+                    while end < chars.len()
+                        && !chars[end].is_whitespace()
+                        && chars[end] != '('
+                        && chars[end] != ')'
+                        && chars[end] != '"'
+                        && chars[end] != ';'
+                    {
+                        end += 1;
+                    }
+                    let head: String = chars[pos + 1..end].iter().collect();
+                    stack.push(SExpr {
+                        atoms: vec![head.clone()],
+                        head,
+                        children: Vec::new(),
+                    });
+                    // Skip past the head atom: the next loop iteration must
+                    // not re-read it as a bare atom.
+                    pos = end;
+                }
+                ')' => {
+                    let node = stack.pop().ok_or("unbalanced ')' in emitted WAT")?;
+                    match stack.last_mut() {
+                        Some(parent) => parent.children.push(node),
+                        None => roots.push(node),
+                    }
+                    pos += 1;
+                }
+                c if c.is_whitespace() => pos += 1,
+                _ => {
+                    // Bare atom (symbol/number): record it on the nearest
+                    // enclosing form so `$sbx_gdiv` and friends are visible.
+                    let mut end = pos;
+                    while end < chars.len()
+                        && !chars[end].is_whitespace()
+                        && chars[end] != '('
+                        && chars[end] != ')'
+                        && chars[end] != '"'
+                        && chars[end] != ';'
+                    {
+                        end += 1;
+                    }
+                    let atom: String = chars[pos..end].iter().collect();
+                    if let Some(parent) = stack.last_mut() {
+                        parent.atoms.push(atom);
+                    }
+                    pos = end;
+                }
+            }
+        }
+        if !stack.is_empty() {
+            return Err(format!("{} unclosed '(' in emitted WAT", stack.len()));
+        }
+        Ok(roots)
+    }
+
+    fn find_func<'a>(node: &'a SExpr, func_name: &str) -> Option<&'a SExpr> {
+        if node.head == "func" && node.atoms.get(1).map(String::as_str) == Some(func_name) {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find_func(c, func_name))
+    }
+
+    fn find_child<'a>(node: &'a SExpr, head: &str) -> Option<&'a SExpr> {
+        node.children.iter().find(|c| c.head == head)
+    }
+
+    fn count_descendants(node: &SExpr, head: &str) -> usize {
+        node.children
+            .iter()
+            .map(|c| count_descendants(c, head) + usize::from(c.head == head))
+            .sum()
+    }
+
+    fn count_local_ops(node: &SExpr, op: &str, local: &str) -> usize {
+        node.children
+            .iter()
+            .map(|c| {
+                count_local_ops(c, op, local)
+                    + usize::from(c.head == op && c.atoms.iter().any(|a| a == local))
+            })
+            .sum()
+    }
+
+    fn assert_total_division_helper(module_wat: &str, func_name: &str, div_op: &str) {
+        let roots = parse_sexprs(module_wat).expect("emitted WAT failed to parse");
+        let func = roots
+            .iter()
+            .find_map(|n| find_func(n, func_name))
+            .unwrap_or_else(|| panic!("{func_name} not found in emitted module"));
+
+        // Exactly two ifs: outer (b != 0) and inner (b != -1), with the
+        // inner nested INSIDE the outer's (then ...) — not after it.
+        assert_eq!(
+            count_descendants(func, "if"),
+            2,
+            "{func_name}: expected outer b!=0 + inner b!=-1 ifs"
+        );
+
+        let outer_if =
+            find_child(func, "if").unwrap_or_else(|| panic!("{func_name}: no top-level if"));
+        let outer_then = find_child(outer_if, "then")
+            .unwrap_or_else(|| panic!("{func_name}: outer if has no (then)"));
+        find_child(outer_if, "else").unwrap_or_else(|| {
+            panic!("{func_name}: outer if has no (else) — the else closed inside the (then)")
+        });
+
+        let inner_if = find_child(outer_then, "if").unwrap_or_else(|| {
+            panic!("{func_name}: inner b!=-1 if is not inside the outer (then)")
+        });
+        find_child(inner_if, "then")
+            .unwrap_or_else(|| panic!("{func_name}: inner if has no (then)"));
+        find_child(inner_if, "else")
+            .unwrap_or_else(|| panic!("{func_name}: inner if has no (else)"));
+
+        // THE regression: a stray (else ...) inside the outer (then ...)
+        // keeps every paren count balanced but mis-nests the tree — wabt
+        // and the page encoder reject it. Exactly one else may live under
+        // the outer then (the inner if's own), and two in the whole helper.
+        assert_eq!(
+            count_descendants(outer_then, "else"),
+            1,
+            "{func_name}: stray else inside the outer (then)"
+        );
+        assert_eq!(
+            count_descendants(func, "else"),
+            2,
+            "{func_name}: expected exactly inner + outer else"
+        );
+
+        // The result flows through the $r temp: three local.sets (div/rem
+        // arm, MIN/-1 arm, zero arm) and a single tail load.
+        assert_eq!(
+            count_local_ops(func, "local.set", "$r"),
+            3,
+            "{func_name}: expected 3 local.sets on $r"
+        );
+        assert_eq!(
+            count_local_ops(func, "local.get", "$r"),
+            1,
+            "{func_name}: expected a single tail (local.get $r)"
+        );
+        // The real division happens exactly once, guarded by the inner if.
+        assert_eq!(
+            count_descendants(func, div_op),
+            1,
+            "{func_name}: expected exactly one {div_op}"
+        );
+    }
+
+    #[test]
+    fn total_division_helpers_emit_valid_wat() {
+        // The runtime preamble (including both total-division helpers) is
+        // emitted for every program, so a trivial main exercises them too.
+        let wat = compile_to_wat("fn main() { print(1) }", &HashMap::new()).unwrap();
+        assert_total_division_helper(&wat, "$sbx_gdiv", "i64.div_s");
+        assert_total_division_helper(&wat, "$sbx_grem", "i64.rem_s");
+    }
+
+    #[test]
+    fn division_program_compiles_with_valid_helpers() {
+        let wat = compile_to_wat(
+            "fn main() {\n    let zero = 1 - 1\n    let mn = 0 - 9223372036854775807 - 1\n    print(mn / zero)\n    print(mn % zero)\n}",
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_total_division_helper(&wat, "$sbx_gdiv", "i64.div_s");
+        assert_total_division_helper(&wat, "$sbx_grem", "i64.rem_s");
+    }
+}

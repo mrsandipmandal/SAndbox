@@ -1,0 +1,352 @@
+fn factorial(n: i64) -> i64 {
+    if n <= 1 {
+        return 1
+    }
+    let mut result: i64 = 1
+    let mut i: i64 = 2
+    while i <= n {
+        result = result * i
+        i = i + 1
+    }
+    return result
+}
+
+fn fibonacci(n: i64) -> i64 {
+    if n <= 0 {
+        return 0
+    }
+    if n == 1 {
+        return 1
+    }
+    let mut a: i64 = 0
+    let mut b: i64 = 1
+    let mut i: i64 = 2
+    while i <= n {
+        let temp = a + b
+        a = b
+        b = temp
+        i = i + 1
+    }
+    return b
+}
+
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let temp = y
+        y = x % y
+        x = temp
+    }
+    return x
+}
+
+fn lcm(a: i64, b: i64) -> i64 {
+    return (a * b) / gcd(a, b)
+}
+
+fn is_prime(n: i64) -> bool {
+    if n <= 1 {
+        return false
+    }
+    if n <= 3 {
+        return true
+    }
+    if (n % 2) == 0 {
+        return false
+    }
+    if (n % 3) == 0 {
+        return false
+    }
+    let mut i: i64 = 5
+    while (i * i) <= n {
+        if (n % i) == 0 {
+            return false
+        }
+        if (n % (i + 2)) == 0 {
+            return false
+        }
+        i = i + 6
+    }
+    return true
+}
+
+fn nth_prime(n: i64) -> i64 {
+    let mut count: i64 = 0
+    let mut candidate: i64 = 1
+    while count < n {
+        candidate = candidate + 1
+        if is_prime(candidate) {
+            count = count + 1
+        }
+    }
+    return candidate
+}
+
+fn sum_of_digits(n: i64) -> i64 {
+    let mut num = n
+    let mut sum: i64 = 0
+    while num > 0 {
+        sum = sum + num % 10
+        num = num / 10
+    }
+    return sum
+}
+
+fn reverse_number(n: i64) -> i64 {
+    let mut num = n
+    let mut reversed: i64 = 0
+    while num > 0 {
+        reversed = reversed * 10 + num % 10
+        num = num / 10
+    }
+    return reversed
+}
+
+fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 {
+    let mut result: i64 = 1
+    let b = base % modulus
+    let e = exp
+    let m = modulus
+    let mut i: i64 = 0
+    while i < e {
+        result = (result * b) % m
+        i = i + 1
+    }
+    return result
+}
+
+fn clamp(value: i64, lo: i64, hi: i64) -> i64 {
+    if value < lo {
+        return lo
+    }
+    if value > hi {
+        return hi
+    }
+    return value
+}
+
+fn lerp(a: i64, b: i64, t: i64) -> i64 {
+    return a + (b - a) * t / 100
+}
+
+fn collatz_steps(n: i64) -> i64 {
+    let mut num = n
+    let mut steps: i64 = 0
+    while num != 1 {
+        if (num % 2) == 0 {
+            num = num / 2
+        } else {
+            num = 3 * num + 1
+        }
+        steps = steps + 1
+    }
+    return steps
+}
+
+// ── v1.0.2: prime chains, number theory, and combinatorics ──
+
+fn tribonacci(n: i64) -> i64 {
+    if n <= 0 {
+        return 0
+    }
+    if n == 1 {
+        return 0
+    }
+    if n == 2 {
+        return 1
+    }
+    let mut a: i64 = 0
+    let mut b: i64 = 1
+    let mut c: i64 = 1
+    let mut i: i64 = 3
+    while i <= n {
+        let temp = a + b + c
+        a = b
+        b = c
+        c = temp
+        i = i + 1
+    }
+    return c
+}
+
+fn catalan(n: i64) -> i64 {
+    if n <= 0 {
+        return 1
+    }
+    // C(n) = factorial(2n) / (factorial(n+1) * factorial(n))
+    let top = factorial(2 * n)
+    let bottom = factorial(n + 1) * factorial(n)
+    return top / bottom
+}
+
+fn digit_count(n: i64) -> i64 {
+    if n == 0 {
+        return 1
+    }
+    let mut num = n
+    if num < 0 {
+        num = 0 - num
+    }
+    let mut count: i64 = 0
+    while num > 0 {
+        count = count + 1
+        num = num / 10
+    }
+    return count
+}
+
+fn is_armstrong(n: i64) -> bool {
+    let digits = digit_count(n)
+    let mut num = n
+    let mut sum: i64 = 0
+    while num > 0 {
+        let d = num % 10
+        // d^digits using repeated multiplication
+        let mut power: i64 = 1
+        let mut j: i64 = 0
+        while j < digits {
+            power = power * d
+            j = j + 1
+        }
+        sum = sum + power
+        num = num / 10
+    }
+    return sum == n
+}
+
+fn is_perfect(n: i64) -> bool {
+    if n <= 1 {
+        return false
+    }
+    let mut sum: i64 = 0
+    let mut i: i64 = 1
+    while i < n {
+        if (n % i) == 0 {
+            sum = sum + i
+        }
+        i = i + 1
+    }
+    return sum == n
+}
+
+fn is_abundant(n: i64) -> bool {
+    if n <= 1 {
+        return false
+    }
+    let mut sum: i64 = 0
+    let mut i: i64 = 1
+    while i < n {
+        if (n % i) == 0 {
+            sum = sum + i
+        }
+        i = i + 1
+    }
+    return sum > n
+}
+
+fn is_deficient(n: i64) -> bool {
+    if n <= 1 {
+        return true
+    }
+    let mut sum: i64 = 0
+    let mut i: i64 = 1
+    while i < n {
+        if (n % i) == 0 {
+            sum = sum + i
+        }
+        i = i + 1
+    }
+    return sum < n
+}
+
+fn is_power_of_two(n: i64) -> bool {
+    if n <= 0 {
+        return false
+    }
+    let mut num = n
+    while num > 1 {
+        if (num % 2) != 0 {
+            return false
+        }
+        num = num / 2
+    }
+    return true
+}
+
+fn next_power_of_two(n: i64) -> i64 {
+    if n <= 0 {
+        return 1
+    }
+    let mut p: i64 = 1
+    while p < n {
+        p = p * 2
+    }
+    return p
+}
+
+fn prime_factor_count(n: i64) -> i64 {
+    if n <= 1 {
+        return 0
+    }
+    let mut num = n
+    let mut count: i64 = 0
+    let mut i: i64 = 2
+    while (i * i) <= num {
+        if (num % i) == 0 {
+            count = count + 1
+            while (num % i) == 0 {
+                num = num / i
+            }
+        }
+        i = i + 1
+    }
+    if num > 1 {
+        count = count + 1
+    }
+    return count
+}
+
+fn gcd_multiple(a: i64, b: i64, c: i64) -> i64 {
+    return gcd(gcd(a, b), c)
+}
+
+fn lcm_multiple(a: i64, b: i64, c: i64) -> i64 {
+    return lcm(lcm(a, b), c)
+}
+
+fn harmonic_mean(a: i64, b: i64) -> i64 {
+    if a == 0 {
+        return 0
+    }
+    if b == 0 {
+        return 0
+    }
+    return 2 * a * b / (a + b)
+}
+
+fn geometric_mean(a: i64, b: i64) -> i64 {
+    // Integer approximation
+    return (a * b) / (a + b - (a - b) * (a - b) / (a + b))
+}
+
+fn max(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn min(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn abs_val(n: i64) -> i64 {
+    if n < 0 {
+        return 0 - n
+    }
+    return n
+}

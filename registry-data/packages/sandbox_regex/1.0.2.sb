@@ -1,0 +1,265 @@
+fn find_all(s: string, pattern: string) -> i64 {
+    let mut count: i64 = 0
+    let mut pos: i64 = 0
+    let len = string::length(s)
+    let plen = string::length(pattern)
+    while pos <= (len - plen) {
+        let sub = string::substring(s, pos, plen)
+        if string::equals(sub, pattern) {
+            count = count + 1
+            pos = pos + plen
+        } else {
+            pos = pos + 1
+        }
+    }
+    return count
+}
+
+fn matches(s: string, pattern: string) -> bool {
+    return string::contains(s, pattern)
+}
+
+fn find(s: string, pattern: string) -> i64 {
+    return string::find(s, pattern)
+}
+
+fn starts_with_pattern(s: string, pattern: string) -> bool {
+    return string::starts_with(s, pattern)
+}
+
+fn ends_with_pattern(s: string, pattern: string) -> bool {
+    return string::ends_with(s, pattern)
+}
+
+fn replace_all(s: string, pattern: string, replacement: string) -> string {
+    return string::replace(s, pattern, replacement)
+}
+
+fn split_by(s: string, delimiter: string) -> string {
+    return string::split(s, delimiter)
+}
+
+fn count_char(s: string, target: i64) -> i64 {
+    let mut count: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c == target {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn word_count(s: string) -> i64 {
+    let trimmed = string::trim(s)
+    if string::is_empty(trimmed) {
+        return 0
+    }
+    let words = string::split(trimmed, " ")
+    let mut count: i64 = 1
+    let mut i: i64 = 0
+    let len = string::length(words)
+    while i < len {
+        let c = string::char_at(words, i)
+        if c == 32 {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn is_anagram(a: string, b: string) -> bool {
+    if string::length(a) != string::length(b) {
+        return false
+    }
+    let len = string::length(a)
+    let mut sum_a: i64 = 0
+    let mut sum_b: i64 = 0
+    let mut i: i64 = 0
+    while i < len {
+        sum_a = sum_a + string::char_at(a, i)
+        sum_b = sum_b + string::char_at(b, i)
+        i = i + 1
+    }
+    return sum_a == sum_b
+}
+
+// ── v1.0.2: trim variants, padding, centering, line operations ──
+
+fn trim_left(s: string) -> string {
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c != 32 {
+            return string::substring(s, i, len - i)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn trim_right(s: string) -> string {
+    let len = string::length(s)
+    let mut end = len
+    while end > 0 {
+        let c = string::char_at(s, end - 1)
+        if c != 32 {
+            return string::substring(s, 0, end)
+        }
+        end = end - 1
+    }
+    return ""
+}
+
+fn pad_left(s: string, width: i64) -> string {
+    let len = string::length(s)
+    if len >= width {
+        return s
+    }
+    let mut result = ""
+    let mut i: i64 = 0
+    let padding = width - len
+    while i < padding {
+        result = string::concat(result, " ")
+        i = i + 1
+    }
+    return string::concat(result, s)
+}
+
+fn pad_right(s: string, width: i64) -> string {
+    let len = string::length(s)
+    if len >= width {
+        return s
+    }
+    let mut result = s
+    let mut i: i64 = 0
+    let padding = width - len
+    while i < padding {
+        result = string::concat(result, " ")
+        i = i + 1
+    }
+    return result
+}
+
+fn center(s: string, width: i64) -> string {
+    let len = string::length(s)
+    if len >= width {
+        return s
+    }
+    let total_pad = width - len
+    let left_pad = total_pad / 2
+    let right_pad = total_pad - left_pad
+    let mut result = ""
+    let mut i: i64 = 0
+    while i < left_pad {
+        result = string::concat(result, " ")
+        i = i + 1
+    }
+    result = string::concat(result, s)
+    i = 0
+    while i < right_pad {
+        result = string::concat(result, " ")
+        i = i + 1
+    }
+    return result
+}
+
+fn count_lines(s: string) -> i64 {
+    let len = string::length(s)
+    if len == 0 {
+        return 0
+    }
+    let mut count: i64 = 0
+    let mut i: i64 = 0
+    while i < len {
+        let c = string::char_at(s, i)
+        if c == 10 {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count + 1
+}
+
+fn is_blank(s: string) -> bool {
+    let trimmed = string::trim(s)
+    return string::is_empty(trimmed)
+}
+
+fn truncate(s: string, max_len: i64) -> string {
+    let len = string::length(s)
+    if len <= max_len {
+        return s
+    }
+    if max_len <= 3 {
+        return string::substring(s, 0, max_len)
+    }
+    return string::concat(string::substring(s, 0, max_len - 3), "...")
+}
+
+fn char_at_safe(s: string, idx: i64) -> i64 {
+    let len = string::length(s)
+    if idx < 0 {
+        return -1
+    }
+    if idx >= len {
+        return -1
+    }
+    return string::char_at(s, idx)
+}
+
+fn substring_safe(s: string, start: i64, len: i64) -> string {
+    let slen = string::length(s)
+    if start < 0 {
+        return ""
+    }
+    if start >= slen {
+        return ""
+    }
+    let mut actual_len = len
+    if (start + actual_len) > slen {
+        actual_len = slen - start
+    }
+    if actual_len < 0 {
+        return ""
+    }
+    return string::substring(s, start, actual_len)
+}
+
+fn contains_only(s: string, target: i64) -> bool {
+    let len = string::length(s)
+    if len == 0 {
+        return true
+    }
+    let mut i: i64 = 0
+    while i < len {
+        let c = string::char_at(s, i)
+        if c != target {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn char_to_upper(c: i64) -> i64 {
+    if c >= 97 {
+        if c <= 122 {
+            return c - 32
+        }
+    }
+    return c
+}
+
+fn to_uppercase(s: string) -> string {
+    return string::to_upper(s)
+}
+
+fn to_lowercase(s: string) -> string {
+    return string::to_lower(s)
+}

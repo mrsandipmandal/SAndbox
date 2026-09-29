@@ -1,0 +1,111 @@
+fn find_all(s: string, pattern: string) -> i64 {
+    let mut count: i64 = 0
+    let mut pos: i64 = 0
+    let len = string::length(s)
+    let plen = string::length(pattern)
+    while pos <= (len - plen) {
+        let sub = string::substring(s, pos, plen)
+        if string::equals(sub, pattern) {
+            count = count + 1
+            pos = pos + plen
+        } else {
+            pos = pos + 1
+        }
+    }
+    return count
+}
+
+fn matches(s: string, pattern: string) -> bool {
+    return string::contains(s, pattern)
+}
+
+fn find(s: string, pattern: string) -> i64 {
+    return string::find(s, pattern)
+}
+
+fn starts_with_pattern(s: string, pattern: string) -> bool {
+    return string::starts_with(s, pattern)
+}
+
+fn ends_with_pattern(s: string, pattern: string) -> bool {
+    return string::ends_with(s, pattern)
+}
+
+fn replace_all(s: string, pattern: string, replacement: string) -> string {
+    return string::replace(s, pattern, replacement)
+}
+
+fn split_by(s: string, delimiter: string) -> string {
+    return string::split(s, delimiter)
+}
+
+fn count_char(s: string, target: i64) -> i64 {
+    let mut count: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c == target {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn word_count(s: string) -> i64 {
+    let trimmed = string::trim(s)
+    if string::is_empty(trimmed) {
+        return 0
+    }
+    let words = string::split(trimmed, " ")
+    let mut count: i64 = 1
+    let mut i: i64 = 0
+    let len = string::length(words)
+    while i < len {
+        let c = string::char_at(words, i)
+        if c == 32 {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn longest_common_prefix(a: string, b: string) -> string {
+    let mut i: i64 = 0
+    let len_a = string::length(a)
+    let mut min_len = len_a
+    let len_b = string::length(b)
+    if len_b < min_len {
+        min_len = len_b
+    }
+    let mut mismatch: i64 = 0
+    while i < min_len {
+        let ca = string::char_at(a, i)
+        let cb = string::char_at(b, i)
+        if ca != cb {
+            mismatch = 1
+        }
+        if mismatch == 0 {
+            i = i + 1
+        }
+    }
+    return string::substring(a, 0, i)
+}
+
+fn is_anagram(a: string, b: string) -> bool {
+    if string::length(a) != string::length(b) {
+        return false
+    }
+    let len = string::length(a)
+    let mut sum_a: i64 = 0
+    let mut sum_b: i64 = 0
+    let mut i: i64 = 0
+    while i < len {
+        sum_a = sum_a + string::char_at(a, i)
+        sum_b = sum_b + string::char_at(b, i)
+        i = i + 1
+    }
+    return sum_a == sum_b
+}

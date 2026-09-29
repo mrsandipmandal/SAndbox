@@ -1,0 +1,83 @@
+fn timestamp() -> i64 {
+    return time::ms()
+}
+
+fn timestamp_seconds() -> i64 {
+    let ms = time::ms()
+    return ms / 1000
+}
+
+fn elapsed_ms(start: i64) -> i64 {
+    return time::ms() - start
+}
+
+fn elapsed_seconds(start: i64) -> i64 {
+    let ms = elapsed_ms(start)
+    return ms / 1000
+}
+
+fn is_leap_year(year: i64) -> bool {
+    if (year % 400) == 0 {
+        return true
+    }
+    if (year % 100) == 0 {
+        return false
+    }
+    if (year % 4) == 0 {
+        return true
+    }
+    return false
+}
+
+fn days_in_month(month: i64, year: i64) -> i64 {
+    if month == 2 {
+        if is_leap_year(year) {
+            return 29
+        }
+        return 28
+    }
+    if month == 4 {
+        return 30
+    }
+    if month == 6 {
+        return 30
+    }
+    if month == 9 {
+        return 30
+    }
+    if month == 11 {
+        return 30
+    }
+    return 31
+}
+
+fn days_in_year(year: i64) -> i64 {
+    if is_leap_year(year) {
+        return 366
+    }
+    return 365
+}
+
+fn timer_start() -> i64 {
+    return time::ms()
+}
+
+fn timer_elapsed(start: i64) -> i64 {
+    return time::ms() - start
+}
+
+fn sleep_ms(ms: i64) {
+    sleep(ms)
+}
+
+fn benchmark_start() -> i64 {
+    return time::ms()
+}
+
+fn benchmark_end(start: i64) -> i64 {
+    return time::ms() - start
+}
+
+fn months_between(y1: i64, m1: i64, y2: i64, m2: i64) -> i64 {
+    return (y2 - y1) * 12 + (m2 - m1)
+}

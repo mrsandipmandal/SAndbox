@@ -1,0 +1,13 @@
+[2m2026-09-02T08:09:51.583619Z[0m [32m INFO[0m Database initialized at registry-data/registry.db
+[2m2026-09-02T08:09:51.584301Z[0m [32m INFO[0m Sandbox Registry starting on 0.0.0.0:3000
+[2m2026-09-02T08:09:51.584389Z[0m [32m INFO[0m Rate limit: 60 requests per 60s
+[2m2026-09-02T08:09:51.584490Z[0m [32m INFO[0m Max upload size: 50 MB
+[2m2026-09-02T08:09:51.584591Z[0m [32m INFO[0m Dashboard: http://0.0.0.0:3000
+[2m2026-09-02T08:09:51.584630Z[0m [32m INFO[0m API: http://0.0.0.0:3000/api/v1/
+[2m2026-09-02T09:29:38.616067Z[0m [31mERROR[0m response failed [3mclassification[0m[2m=[0mStatus code: 500 Internal Server Error [3mlatency[0m[2m=[0m42 ms
+y starting on 0.0.0.0:3000
+[2m2026-09-02T08:10:36.963678Z[0m [32m INFO[0m Rate limit: 60 requests per 60s
+[2m2026-09-02T08:10:36.963715Z[0m [32m INFO[0m Max upload size: 50 MB
+[2m2026-09-02T08:10:36.963822Z[0m [32m INFO[0m Dashboard: http://0.0.0.0:3000
+[2m2026-09-02T08:10:36.963856Z[0m [32m INFO[0m API: http://0.0.0.0:3000/api/v1/
+Error: Address already in use (os error 98)

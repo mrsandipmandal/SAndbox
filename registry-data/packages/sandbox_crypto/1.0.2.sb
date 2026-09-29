@@ -1,0 +1,226 @@
+fn hash_code(s: string) -> i64 {
+    let h: i64 = 5381
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        h = ((h * 33) + c) % 2147483647
+        i = i + 1
+    }
+    return h
+}
+
+fn fingerprint(s: string) -> i64 {
+    let mut h: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        h = (h * 31 + c) % 4294967296
+        i = i + 1
+    }
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+fn is_palindrome(s: string) -> bool {
+    let len = string::length(s)
+    let mut i: i64 = 0
+    let half = len / 2
+    while i < half {
+        let left = string::char_at(s, i)
+        let right = string::char_at(s, len - 1 - i)
+        if left != right {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn verify_checksum(data: string, expected: i64) -> bool {
+    return hash_code(data) == expected
+}
+
+fn rotate_string(s: string, n: i64) -> string {
+    let len = string::length(s)
+    if len == 0 {
+        return s
+    }
+    let shift = n % len
+    let first = string::substring(s, 0, len - shift)
+    let second = string::substring(s, len - shift, shift)
+    return string::concat(second, first)
+}
+
+fn char_count(s: string, target: i64) -> i64 {
+    let mut count: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c == target {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn validate_integrity(data: string, expected_hash: i64) -> bool {
+    return hash_code(data) == expected_hash
+}
+
+// ── v1.0.2: distance, analysis, and encoding functions ──
+
+fn hamming_distance(a: string, b: string) -> i64 {
+    let len_a = string::length(a)
+    let len_b = string::length(b)
+    let mut min_len = len_a
+    if len_b < min_len {
+        min_len = len_b
+    }
+    let mut diff: i64 = 0
+    let mut i: i64 = 0
+    while i < min_len {
+        let ca = string::char_at(a, i)
+        let cb = string::char_at(b, i)
+        if ca != cb {
+            diff = diff + 1
+        }
+        i = i + 1
+    }
+    diff = diff + len_a - min_len
+    diff = diff + len_b - min_len
+    return diff
+}
+
+fn vowel_count(s: string) -> i64 {
+    let mut count: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c == 97 { count = count + 1 }
+        if c == 101 { count = count + 1 }
+        if c == 105 { count = count + 1 }
+        if c == 111 { count = count + 1 }
+        if c == 117 { count = count + 1 }
+        if c == 65 { count = count + 1 }
+        if c == 69 { count = count + 1 }
+        if c == 73 { count = count + 1 }
+        if c == 79 { count = count + 1 }
+        if c == 85 { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+fn consonant_count(s: string) -> i64 {
+    let len = string::length(s)
+    let vowels = vowel_count(s)
+    let spaces = char_count(s, 32)
+    return len - vowels - spaces
+}
+
+fn digit_sum(s: string) -> i64 {
+    let mut sum: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c >= 48 {
+            if c <= 57 {
+                sum = sum + c - 48
+            }
+        }
+        i = i + 1
+    }
+    return sum
+}
+
+fn is_vowel_char(c: i64) -> bool {
+    if c == 97 { return true }
+    if c == 101 { return true }
+    if c == 105 { return true }
+    if c == 111 { return true }
+    if c == 117 { return true }
+    if c == 65 { return true }
+    if c == 69 { return true }
+    if c == 73 { return true }
+    if c == 79 { return true }
+    if c == 85 { return true }
+    return false
+}
+
+fn numeric_value(s: string) -> i64 {
+    let mut result: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c >= 48 {
+            if c <= 57 {
+                result = result * 10 + c - 48
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn letter_frequency(s: string, target: i64) -> i64 {
+    let total = string::length(s)
+    if total == 0 {
+        return 0
+    }
+    let count = char_count(s, target)
+    return count * 100 / total
+}
+
+fn starts_with_vowel(s: string) -> bool {
+    if string::is_empty(s) {
+        return false
+    }
+    let c = string::char_at(s, 0)
+    return is_vowel_char(c)
+}
+
+fn ends_with_consonant(s: string) -> bool {
+    let len = string::length(s)
+    if len == 0 {
+        return false
+    }
+    let c = string::char_at(s, len - 1)
+    if c == 32 {
+        return false
+    }
+    if is_vowel_char(c) {
+        return false
+    }
+    return true
+}
+
+fn longest_common_prefix(a: string, b: string) -> string {
+    let mut i: i64 = 0
+    let len_a = string::length(a)
+    let mut min_len = len_a
+    let len_b = string::length(b)
+    if len_b < min_len {
+        min_len = len_b
+    }
+    let mut mismatch: i64 = 0
+    while i < min_len {
+        let ca = string::char_at(a, i)
+        let cb = string::char_at(b, i)
+        if ca != cb {
+            mismatch = 1
+        }
+        if mismatch == 0 {
+            i = i + 1
+        }
+    }
+    return string::substring(a, 0, i)
+}

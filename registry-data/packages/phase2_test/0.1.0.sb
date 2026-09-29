@@ -1,0 +1,74 @@
+fn hash_code(s: string) -> i64 {
+    let h: i64 = 5381
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        h = ((h * 33) + c) % 2147483647
+        i = i + 1
+    }
+    return h
+}
+
+fn fingerprint(s: string) -> i64 {
+    let mut h: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        h = (h * 31 + c) % 4294967296
+        i = i + 1
+    }
+    if h < 0 {
+        h = 0 - h
+    }
+    return h
+}
+
+fn is_palindrome(s: string) -> bool {
+    let len = string::length(s)
+    let mut i: i64 = 0
+    let half = len / 2
+    while i < half {
+        let left = string::char_at(s, i)
+        let right = string::char_at(s, len - 1 - i)
+        if left != right {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn verify_checksum(data: string, expected: i64) -> bool {
+    return hash_code(data) == expected
+}
+
+fn rotate_string(s: string, n: i64) -> string {
+    let len = string::length(s)
+    if len == 0 {
+        return s
+    }
+    let shift = n % len
+    let first = string::substring(s, 0, len - shift)
+    let second = string::substring(s, len - shift, shift)
+    return string::concat(second, first)
+}
+
+fn char_count(s: string, target: i64) -> i64 {
+    let mut count: i64 = 0
+    let mut i: i64 = 0
+    let len = string::length(s)
+    while i < len {
+        let c = string::char_at(s, i)
+        if c == target {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn validate_integrity(data: string, expected_hash: i64) -> bool {
+    return hash_code(data) == expected_hash
+}

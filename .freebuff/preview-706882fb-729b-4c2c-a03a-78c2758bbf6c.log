@@ -1,0 +1,7 @@
+[2m2026-09-01T06:13:29.572337Z[0m [32m INFO[0m Database initialized at registry-data/registry.db
+[2m2026-09-01T06:13:29.573396Z[0m [32m INFO[0m Sandbox Registry starting on 0.0.0.0:3000
+[2m2026-09-01T06:13:29.573488Z[0m [32m INFO[0m Rate limit: 60 requests per 60s
+[2m2026-09-01T06:13:29.573567Z[0m [32m INFO[0m Max upload size: 50 MB
+[2m2026-09-01T06:13:29.573620Z[0m [32m INFO[0m Dashboard: http://0.0.0.0:3000
+[2m2026-09-01T06:13:29.573666Z[0m [32m INFO[0m API: http://0.0.0.0:3000/api/v1/
+Error: Address already in use (os error 98)

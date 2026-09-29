@@ -1,0 +1,6 @@
+[2m2026-09-16T12:32:49.413792Z[0m [32m INFO[0m Database initialized at registry-data/registry.db
+[2m2026-09-16T12:32:49.426287Z[0m [32m INFO[0m Sandbox Registry starting on 0.0.0.0:3000
+[2m2026-09-16T12:32:49.426416Z[0m [32m INFO[0m Rate limit: 60 requests per 60s
+[2m2026-09-16T12:32:49.426485Z[0m [32m INFO[0m Max upload size: 50 MB
+[2m2026-09-16T12:32:49.432112Z[0m [32m INFO[0m Dashboard: http://0.0.0.0:3000
+[2m2026-09-16T12:32:49.432271Z[0m [32m INFO[0m API: http://0.0.0.0:3000/api/v1/

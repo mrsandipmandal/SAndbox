@@ -1,0 +1,241 @@
+fn timestamp() -> i64 {
+    return time::ms()
+}
+
+fn timestamp_seconds() -> i64 {
+    let ms = time::ms()
+    return ms / 1000
+}
+
+fn elapsed_ms(start: i64) -> i64 {
+    return time::ms() - start
+}
+
+fn elapsed_seconds(start: i64) -> i64 {
+    let ms = elapsed_ms(start)
+    return ms / 1000
+}
+
+fn is_leap_year(year: i64) -> bool {
+    if year % 400 == 0 {
+        return true
+    }
+    if year % 100 == 0 {
+        return false
+    }
+    if year % 4 == 0 {
+        return true
+    }
+    return false
+}
+
+fn days_in_month(month: i64, year: i64) -> i64 {
+    if month == 2 {
+        if is_leap_year(year) {
+            return 29
+        }
+        return 28
+    }
+    if month == 4 { return 30 }
+    if month == 6 { return 30 }
+    if month == 9 { return 30 }
+    if month == 11 { return 30 }
+    return 31
+}
+
+fn days_in_year(year: i64) -> i64 {
+    if is_leap_year(year) {
+        return 366
+    }
+    return 365
+}
+
+fn timer_start() -> i64 {
+    return time::ms()
+}
+
+fn timer_elapsed(start: i64) -> i64 {
+    return time::ms() - start
+}
+
+fn sleep_ms(ms: i64) {
+    sleep(ms)
+}
+
+fn benchmark_start() -> i64 {
+    return time::ms()
+}
+
+fn benchmark_end(start: i64) -> i64 {
+    return time::ms() - start
+}
+
+fn months_between(y1: i64, m1: i64, y2: i64, m2: i64) -> i64 {
+    return (y2 - y1) * 12 + (m2 - m1)
+}
+
+// ── v1.0.2: calendar, scheduling, and date arithmetic ──
+
+fn day_of_week(y: i64, m: i64, d: i64) -> i64 {
+    // Zeller's congruence (modified): 0=Saturday, 1=Sunday, ..., 6=Friday
+    // We adjust so 0=Monday for conventional use
+    let mut mm = m
+    let mut yy = y
+    if mm <= 2 {
+        mm = mm + 12
+        yy = yy - 1
+    }
+    let k = yy % 100
+    let j = yy / 100
+    let f = d + (13 * (mm + 1)) / 5 + k + k / 4 + j / 4 - 2 * j
+    let day = (f % 7 + 7) % 7
+    // Convert: Zeller gives 0=Sat,1=Sun,...,6=Fri
+    // We want 0=Monday: Mon=1->0, Tue=2->1, ..., Sun=0->6, Sat=6->5
+    let adjusted = (day + 6) % 7
+    return adjusted
+}
+
+fn is_weekend(y: i64, m: i64, d: i64) -> bool {
+    let dow = day_of_week(y, m, d)
+    if dow == 5 {
+        return true
+    }
+    if dow == 6 {
+        return true
+    }
+    return false
+}
+
+fn is_weekday(y: i64, m: i64, d: i64) -> bool {
+    if is_weekend(y, m, d) {
+        return false
+    }
+    return true
+}
+
+fn quarter(y: i64, m: i64) -> i64 {
+    if m <= 3 {
+        return 1
+    }
+    if m <= 6 {
+        return 2
+    }
+    if m <= 9 {
+        return 3
+    }
+    return 4
+}
+
+fn day_of_year(y: i64, m: i64, d: i64) -> i64 {
+    let mut total: i64 = 0
+    let mut i: i64 = 1
+    while i < m {
+        total = total + days_in_month(i, y)
+        i = i + 1
+    }
+    return total + d
+}
+
+fn week_of_year(y: i64, m: i64, d: i64) -> i64 {
+    let doy = day_of_year(y, m, d)
+    let dow_jan1 = day_of_week(y, 1, 1)
+    return (doy + dow_jan1 - 1) / 7 + 1
+}
+
+fn days_between(y1: i64, m1: i64, d1: i64, y2: i64, m2: i64, d2: i64) -> i64 {
+    // Convert both dates to day numbers and subtract
+    let n1 = y1 * 365 + y1 / 4 - y1 / 100 + y1 / 400 + day_of_year(y1, m1, d1)
+    let n2 = y2 * 365 + y2 / 4 - y2 / 100 + y2 / 400 + day_of_year(y2, m2, d2)
+    let diff = n2 - n1
+    if diff < 0 {
+        return 0 - diff
+    }
+    return diff
+}
+
+fn next_month(m: i64) -> i64 {
+    if m == 12 {
+        return 1
+    }
+    return m + 1
+}
+
+fn prev_month(m: i64) -> i64 {
+    if m == 1 {
+        return 12
+    }
+    return m - 1
+}
+
+fn month_name(m: i64) -> i64 {
+    // Returns the length of the month name for display
+    if m == 1 { return 7 }  // January
+    if m == 2 { return 8 }  // February
+    if m == 3 { return 5 }  // March
+    if m == 4 { return 5 }  // April
+    if m == 5 { return 3 }  // May
+    if m == 6 { return 4 }  // June
+    if m == 7 { return 4 }  // July
+    if m == 8 { return 6 }  // August
+    if m == 9 { return 9 }  // September
+    if m == 10 { return 7 } // October
+    if m == 11 { return 8 } // November
+    if m == 12 { return 8 } // December
+    return 0
+}
+
+fn is_month_end(m: i64, d: i64, y: i64) -> bool {
+    let last_day = days_in_month(m, y)
+    return d == last_day
+}
+
+fn is_month_start(m: i64, d: i64) -> bool {
+    return d == 1
+}
+
+fn is_year_end(m: i64, d: i64) -> bool {
+    if m == 12 {
+        if d == 31 {
+            return true
+        }
+    }
+    return false
+}
+
+fn is_year_start(m: i64, d: i64) -> bool {
+    if m == 1 {
+        if d == 1 {
+            return true
+        }
+    }
+    return false
+}
+
+fn age_in_days(birth_y: i64, birth_m: i64, birth_d: i64, current_y: i64, current_m: i64, current_d: i64) -> i64 {
+    return days_between(birth_y, birth_m, birth_d, current_y, current_m, current_d)
+}
+
+fn add_months(y: i64, m: i64, d: i64, months: i64) -> i64 {
+    // Returns the new month number after adding months (wraps around years)
+    let total = m + months
+    let new_month = ((total - 1) % 12 + 12) % 12 + 1
+    return new_month
+}
+
+fn working_days_between(y1: i64, m1: i64, d1: i64, y2: i64, m2: i64, d2: i64) -> i64 {
+    let total = days_between(y1, m1, d1, y2, m2, d2)
+    let weeks = total / 7
+    let remaining = total % 7
+    let wd = weeks * 5
+    // Count weekdays in the remaining days
+    let mut extra: i64 = 0
+    let mut i: i64 = 0
+    while i < remaining {
+        let dow = day_of_week(y1, m1, d1 + i)
+        if dow < 5 {
+            extra = extra + 1
+        }
+        i = i + 1
+    }
+    return wd + extra
+}

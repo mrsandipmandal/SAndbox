@@ -97,7 +97,7 @@ run_gate "binary smoke"     bash scripts/ci-smoke.sh
 
 # ── Gate 3: parity ───────────────────────────────────────────────────────────
 run_gate "parity"           cargo test --quiet --test parity
-run_gate "wasm integration" cargo test --quiet --test integration total_division_all_backends
+run_gate "wasm integration" cargo test --quiet --test integration
 
 # ── Gate 4: registry (separate crate) ────────────────────────────────────────
 if [ "$SKIP_REGISTRY" -eq 1 ]; then

@@ -193,12 +193,14 @@ jobs:
       # wabt is installed above, so the tooling-gated wasm rows of the
       # integration tests actually run here — in the check job's plain
       # `cargo test` they silently skip (no wat2wasm on PATH there).
-      # total_division_all_backends exercises the wasm CLI pipeline
-      # end-to-end: gen → wat2wasm → scripts/runwasm.mjs, pinning the
-      # $sbx_gdiv/$sbx_grem helpers with real wabt, not just the page
-      # encoder. Node is preinstalled on ubuntu-latest runners.
-      - name: Wasm integration tests (tooling-gated rows)
-        run: cargo test --test integration total_division_all_backends -- --nocapture
+      # Run the WHOLE integration suite, not a name list: any future
+      # test that gates on wat2wasm/node (like total_division_all_backends,
+      # which pins the $sbx_gdiv/$sbx_grem helpers through the wasm CLI
+      # pipeline: gen → wat2wasm → scripts/runwasm.mjs) is pinned
+      # automatically, and a name filter would silently stop covering new
+      # gates. Node is preinstalled on ubuntu-latest runners.
+      - name: Integration tests with wasm toolchain (tooling-gated rows live)
+        run: cargo test --test integration -- --nocapture
 
   # ── Registry Server ─────────────────────────────────────────────────────────
   registry:

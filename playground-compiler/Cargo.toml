@@ -1,6 +1,6 @@
 [package]
 name = "sandbox-playground-compiler"
-version = "1.2.0"
+version = "0.0.5"
 edition = "2021"
 description = "Sandbox compiler compiled to WebAssembly for the in-browser playground"
 publish = false

@@ -23,7 +23,7 @@ use std::path::PathBuf;
 #[derive(ClapParser)]
 #[command(
     name = "sandbox",
-    version = "0.4.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "A memory-safe, financially-safe, general-purpose programming language"
 )]
 struct Cli {

@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+> Versioning note: releases before 0.0.5 used a different, abandoned
+> scheme (tags v0.2.0 … v1.1.0, Cargo versions up to 1.2.0, none of
+> which were all published). Starting with **0.0.5** the project
+> follows the GitHub Releases sequence v0.0.1 … v0.0.4. See
+> [RELEASE.md](RELEASE.md) for the versioning convention, including
+> the patch-999 carry rule (`X.Y.999 → X.(Y+1).0`).
+
+## [0.0.5] - 2026-09-30
+
+### Added
+
+- **Package registry server** (`registry/`): publish/fetch packages with
+  SQLite storage, download counts, rate limiting, an HTML dashboard and a
+  Docker image (ghcr.io, auto-built and smoke-checked on every master push,
+  with an SSH deploy job gated on the `production` environment).
+- **Browser playground** at `/playground`: compiles and runs Sandbox
+  entirely in-page (playground-compiler → wasm32 artifact, in-page WAT
+  encoder, packages fetched from the registry API).
+- **Total division** (completes B2): `/` and `%` are total and identical
+  across all four backends — `x/0 → 0`, `x%0 → 0`, `i64::MIN / -1` wraps,
+  `i64::MIN % -1 → 0` — via shared `sbx_gdiv`/`sbx_grem` runtime helpers
+  (C/LLVM), wrapping interpreter ops, and guarded wasm helpers.
+- **Release pipeline verification**: per-target built-binary checks
+  (existence, sane size, ELF/Mach-O/PE architecture match) and a
+  whole-release artifact-completeness gate before checksums are
+  generated, both reported in the job step summary.
+- `RELEASE.md` and `scripts/release.sh`: one-command release flow
+  (bump + changelog + commit + tag) with the documented 999-carry rule.
+
+### Fixed
+
+- Playground division helpers: a mis-nested `(else …)` inside the outer
+  `(then …)` (still paren-balanced) and a bare value tail that the page
+  encoder's fall-through rule turned into a runtime `unreachable` trap —
+  division programs now run in the browser end to end.
+- `sandbox --version` now reports the real crate version instead of a
+  stale hardcoded string.
+- release.yml: retired `macos-13` runner label (x86_64 macOS builds were
+  silently dead) replaced with `macos-15-intel`.
+
+### CI / tooling
+
+- New `workflow-lint` job: actionlint (pinned, checksum-verified) over
+  all workflows on every push/PR; mirrored as Gate 0 in ci-local.sh.
+- Parity job runs the whole integration suite with wabt + node on PATH,
+  so the tooling-gated wasm rows (wasm CLI pipeline: gen → wat2wasm →
+  run) execute in CI instead of silently skipping.
+- Playground job runs the structural WAT nesting unit tests; the smoke
+  script covers total division end-to-end through the page encoder.
+- Division-program WAT added to the encoder-parity corpus (wat2wasm
+  byte-identity for `$sbx_gdiv`/`$sbx_grem`).
+
 ## [1.2.0] - 2026-09-01
 
 ### Added

@@ -45,6 +45,11 @@ the language) and does not participate in the release flow.
 
 ## Release runbook
 
+> Bootstrap note: v0.0.5 itself was tagged directly (the version
+> unification already set every version location to 0.0.5, so running
+> the script would have produced 0.0.6). From **0.0.6 on, always use
+> `scripts/release.sh`**.
+
 ### One-command flow (preferred)
 
 ```bash

@@ -60,7 +60,7 @@ jobs:
           sudo apt-get install -y gcc
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           fi
 
       # Build release
@@ -197,7 +197,7 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           cd release
-          sha256sum *.tar.gz *.zip | sort > SHA256SUMS.txt
+          sha256sum ./*.tar.gz ./*.zip | sort > SHA256SUMS.txt
           # Self-check: catches any copy/mangling problem before publishing.
           sha256sum --check --quiet SHA256SUMS.txt
           echo "----- SHA256SUMS.txt -----"

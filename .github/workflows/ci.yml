@@ -398,7 +398,7 @@ jobs:
           IMAGE="ghcr.io/${{ github.repository_owner }}/sandbox-registry:${{ github.sha }}"
           ID="$(docker run -d -e REGISTRY_ADDR=127.0.0.1:3000 "$IMAGE")"
           trap 'docker rm -f "$ID" >/dev/null 2>&1 || true' EXIT
-          for i in 1 2 3 4 5 6 7 8 9 10; do
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
             if docker exec "$ID" curl -sf http://127.0.0.1:3000/health >/dev/null 2>&1; then
               echo "Image $IMAGE is healthy."
               exit 0
@@ -453,7 +453,7 @@ jobs:
             {
               echo "### Deploy skipped — production secrets not configured";
               echo;
-              echo 'Add `DEPLOY_SSH_HOST` and `DEPLOY_SSH_PRIVATE_KEY` to the';
+              echo 'Add DEPLOY_SSH_HOST and DEPLOY_SSH_PRIVATE_KEY to the';
               echo "[production environment](../settings/environments) to enable deploys.";
               echo "Host prerequisites are documented in the deploy job's header in ci.yml.";
             } >> "$GITHUB_STEP_SUMMARY"
@@ -470,10 +470,14 @@ jobs:
           # One-time host prerequisite (documented, not automated here):
           #   ssh <host> 'docker login ghcr.io -u <user> --password-stdin'
           # with a PAT that has read:packages, so the host can pull the image.
+          # Single-quoted remote commands are intentional: expansion must
+          # happen on the host, not in this script (shellcheck SC2016/SC2029).
+          # shellcheck disable=SC2016
           ssh "${SSH_OPTS[@]}" "$SSH_HOST" 'mkdir -p ~/registry'
           scp "${SSH_OPTS[@]}" registry/docker-compose.yml registry/docker-compose.prod.yml \
             "$SSH_HOST:registry/"
 
+          # shellcheck disable=SC2029
           ssh "${SSH_OPTS[@]}" "$SSH_HOST" "REGISTRY_IMAGE='$IMAGE' bash -se" <<'REMOTE'
             set -euo pipefail
             cd ~/registry
@@ -485,7 +489,7 @@ jobs:
           REMOTE
 
           echo "Container restarted; waiting for health..."
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if ssh "${SSH_OPTS[@]}" "$SSH_HOST" 'curl -sf http://127.0.0.1:3000/health >/dev/null'; then
               echo "Deploy verified healthy: $IMAGE"
               exit 0

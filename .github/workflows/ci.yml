@@ -80,6 +80,36 @@ jobs:
           echo "If this looks like a transient CI flake, re-run the job."
           exit 1
 
+  # ── Workflow Lint ─────────────────────────────────────────────────────────
+  # Fast static check of every workflow (syntax + expression types + runner
+  # labels + action refs) so YAML breakage fails in seconds instead of
+  # surfacing as a cryptic parse error in whichever job runs first. Pinned
+  # actionlint release, checksum-verified — the checksum guards the supply
+  # chain, not the network hop. Gates docker/deploy via `needs`, so their
+  # configuration is checked before anything consumes it.
+  workflow-lint:
+    name: Lint Workflows (actionlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint (pinned, checksum-verified)
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          curl -sSfL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz actionlint
+
+      - name: Lint all workflows
+        run: |
+          set -euo pipefail
+          ./actionlint -no-color
+          echo "actionlint: all workflows passed."
+
   # ── Binary smoke (fast end-to-end signal) ───────────────────────────────────
   # A small, cheap smoke test that exercises the compiled sandbox binary against
   # real source files across all three execution backends (C, LLVM, interpreter).
@@ -333,7 +363,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [check, parity, registry, smoke, playground]
+    needs: [workflow-lint, check, parity, registry, smoke, playground]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     permissions:
       contents: read
@@ -399,7 +429,7 @@ jobs:
   deploy:
     name: Deploy Registry
     runs-on: ubuntu-latest
-    needs: [check, registry, docker, smoke]
+    needs: [workflow-lint, check, registry, docker, smoke]
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
     environment: production
     steps:

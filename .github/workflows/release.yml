@@ -28,9 +28,11 @@ jobs:
             os: ubuntu-latest
             archive: tar.gz
           # macOS builds
+          # macos-13 was retired by GitHub; macos-15-intel is the newest
+          # Intel label, keeping the x86_64-apple-darwin build Intel-native.
           - target: x86_64-apple-darwin
             artifact: sandbox-x86_64-macos
-            os: macos-13
+            os: macos-15-intel
             archive: tar.gz
           - target: aarch64-apple-darwin
             artifact: sandbox-aarch64-macos

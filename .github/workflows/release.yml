@@ -67,6 +67,61 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
+      # Verify this matrix target actually produced a real binary of the
+      # expected architecture BEFORE anything is packaged or uploaded.
+      # Static checks only (cross targets cannot execute on the runner):
+      # existence, sane size, and — where file(1) exists — the detected
+      # arch must match the target, catching wrong-arch cross-compile
+      # output (the aarch64-linux cross-linker case). The result lands in
+      # the job's step summary, one section per matrix leg.
+      - name: Verify built binary
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) BIN="target/$TARGET/release/sandbox.exe" ;;
+            *)       BIN="target/$TARGET/release/sandbox" ;;
+          esac
+          if [ ! -f "$BIN" ]; then
+            echo "::error::binary not found: $BIN"
+            exit 1
+          fi
+          SIZE=$(wc -c < "$BIN" | tr -d ' ')
+          if [ "$SIZE" -le 100000 ]; then
+            echo "::error::$BIN is suspiciously small ($SIZE bytes)"
+            exit 1
+          fi
+
+          EXPECTED_ARCH=""
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu)  EXPECTED_ARCH="x86-64" ;;
+            aarch64-unknown-linux-gnu) EXPECTED_ARCH="aarch64" ;;
+            x86_64-apple-darwin)       EXPECTED_ARCH="x86_64" ;;
+            aarch64-apple-darwin)      EXPECTED_ARCH="arm64" ;;
+            x86_64-pc-windows-msvc)    EXPECTED_ARCH="x86-64" ;;
+          esac
+          DETECTED="n/a (file(1) unavailable on this runner)"
+          if command -v file >/dev/null 2>&1; then
+            DETECTED=$(file -b "$BIN")
+            if [ -n "$EXPECTED_ARCH" ] && ! grep -q "$EXPECTED_ARCH" <<<"$DETECTED"; then
+              echo "::error::$BIN is not $EXPECTED_ARCH — got: $DETECTED"
+              exit 1
+            fi
+          fi
+
+          {
+            echo "### ✅ Binary verified — $TARGET"
+            echo
+            echo "| check | result |"
+            echo "| --- | --- |"
+            echo "| binary | \`$BIN\` |"
+            echo "| size | $SIZE bytes |"
+            echo "| detected | \`$DETECTED\` |"
+            echo "| expected arch | ${EXPECTED_ARCH:-unspecified} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Package: tar.gz for Linux/macOS
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
@@ -101,6 +156,37 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      # The release must never go out partially built: every matrix leg
+      # must have contributed its archive. Runs BEFORE checksum generation
+      # so SHA256SUMS.txt can only ever describe a complete set. Keep the
+      # expected list in sync with the build matrix above.
+      - name: Verify all platform artifacts arrived
+        run: |
+          set -euo pipefail
+          EXPECTED="sandbox-x86_64-linux.tar.gz sandbox-aarch64-linux.tar.gz sandbox-x86_64-macos.tar.gz sandbox-aarch64-macos.tar.gz sandbox-x86_64-windows.zip"
+          MISSING=0
+          {
+            echo "### Release artifacts"
+            echo
+            echo "| file | bytes |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in $EXPECTED; do
+            HIT=$(find artifacts -type f -name "$f" | head -n1)
+            if [ -z "$HIT" ]; then
+              echo "::error::missing expected artifact: $f"
+              echo "| ❌ $f | missing |" >> "$GITHUB_STEP_SUMMARY"
+              MISSING=1
+            else
+              SIZE=$(wc -c < "$HIT" | tr -d ' ')
+              echo "| ✅ $f | $SIZE |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            echo "One or more platform artifacts are missing; refusing to publish."
+            exit 1
+          fi
 
       # Flatten artifacts/<name>/<file> into release/<file>, then generate a
       # SHA256SUMS.txt in the standard sha256sum(1) format so users can verify

@@ -86,6 +86,52 @@ if ! command -v wat2wasm >/dev/null 2>&1; then
   echo "note: wat2wasm not found — wasm parity cases will be skipped (apt install wabt)"
 fi
 
+# ── Gate 0: workflow lint (mirrors the CI workflow-lint job) ─────────────────
+# actionlint over .github/workflows/*.yml — catches syntax, expression-type
+# and runner-label breakage in seconds, before any expensive gate runs.
+# Uses actionlint already on PATH; otherwise fetches the SAME pinned,
+# checksum-verified release the CI job pins (cached in ~/.cache so later
+# runs are offline-capable). If neither is possible, SKIP loudly — CI
+# still enforces this gate on push.
+ACTIONLINT_BIN="$(command -v actionlint || true)"
+if [ -z "$ACTIONLINT_BIN" ]; then
+  AL_VERSION="1.7.12"
+  AL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/ci-local"
+  case "$(uname -sm)" in
+    "Linux x86_64")
+      AL_ASSET="actionlint_${AL_VERSION}_linux_amd64.tar.gz"
+      AL_SHA="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" ;;
+    "Linux aarch64"|"Linux arm64")
+      AL_ASSET="actionlint_${AL_VERSION}_linux_arm64.tar.gz"
+      AL_SHA="325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6" ;;
+    *)
+      AL_ASSET="" ;;
+  esac
+  if [ -z "$AL_ASSET" ]; then
+    RESULTS+=("SKIP  workflow lint  (no pinned actionlint for $(uname -sm))")
+    printf '%s\n' "${YELLOW}→ workflow lint skipped (no pinned build for $(uname -sm); install actionlint manually)${RESET}"
+    printf '%s\n' ""
+  elif [ -x "$AL_CACHE/actionlint" ]; then
+    ACTIONLINT_BIN="$AL_CACHE/actionlint"
+  else
+    mkdir -p "$AL_CACHE"
+    if curl -sSfL -o "$AL_CACHE/$AL_ASSET" \
+         "https://github.com/rhysd/actionlint/releases/download/v${AL_VERSION}/${AL_ASSET}" \
+       && echo "$AL_SHA  $AL_CACHE/$AL_ASSET" | sha256sum -c - >/dev/null 2>&1 \
+       && tar xzf "$AL_CACHE/$AL_ASSET" -C "$AL_CACHE" actionlint; then
+      ACTIONLINT_BIN="$AL_CACHE/actionlint"
+    else
+      rm -f "$AL_CACHE/$AL_ASSET" "$AL_CACHE/actionlint"
+      RESULTS+=("SKIP  workflow lint  (could not fetch actionlint — offline?)")
+      printf '%s\n' "${YELLOW}→ workflow lint skipped (download failed; CI still enforces this gate)${RESET}"
+      printf '%s\n' ""
+    fi
+  fi
+fi
+if [ -n "$ACTIONLINT_BIN" ]; then
+  run_gate "workflow lint" "$ACTIONLINT_BIN" -no-color
+fi
+
 # ── Gate 1: check (fmt + clippy + build + tests) ────────────────────────────
 run_gate "cargo fmt"        cargo fmt --all -- --check
 run_gate "cargo clippy"     cargo clippy --all-targets -- -D warnings

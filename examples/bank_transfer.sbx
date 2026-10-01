@@ -7,8 +7,8 @@ struct Account {
     balance: Money<INR>,
 }
 
-fn transfer(from: Account, to: Account, amount: Money<INR>) -> Result<string, string> {
-    if from.balance < amount {
+fn transfer(sender: Account, to: Account, amount: Money<INR>) -> Result<string, string> {
+    if sender.balance < amount {
         return Err("Insufficient balance")
     }
     return Ok("Transfer successful")

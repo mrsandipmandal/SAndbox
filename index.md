@@ -418,7 +418,8 @@ scripts/ci-local.sh   # The entire CI suite, runnable locally
 - [x] `Money<CUR>` with compile-time currency enforcement
 - [x] Ledger DSL with compile-time balance validation
 - [x] Unit system with dimensional analysis
-- [x] `Result<T, E>` + `?` operator, enums + `match`, modules, f-strings
+- [x] `Result<T, E>` + `?` operator, enums + `match` with string/float/
+      payload arms (C, LLVM, and interpreter backends), modules, f-strings
 - [x] `math` / `string` / `array` / `json` / `http` standard library
 - [x] Three backends (C, interpreter, LLVM) + WebAssembly target, with parity tests
 - [x] Package manager + self-hostable registry (ed25519 signing, vendoring)
@@ -429,12 +430,8 @@ scripts/ci-local.sh   # The entire CI suite, runnable locally
 
 Honest list — each of these reproduces at HEAD:
 
-- **Enum `match` arms must be integers today.** String/f64 arm codegen
-  produces invalid C (integer arms like the example above work).
 - **Index assignment (`arr[i] = x`) is not yet supported** — see
   `examples/sorting.sbx`.
-- **`from` is a reserved keyword** and can't be used as a parameter name
-  (`examples/bank_transfer.sbx` predates this).
 - **`print` on Money/Decimal shows the raw scaled integer** (50000 INR →
   `500000000`); formatted money output is on the roadmap.
 - **`Decimal` is experimental**: fractional decimal literals don't survive
@@ -443,7 +440,6 @@ Honest list — each of these reproduces at HEAD:
 ### 🔜 Next
 
 - Formatted money/decimal output (`57500.0000` instead of scaled integers)
-- Enum match arms for all arm types
 - Index assignment and full slice support
 - Stabilize `Decimal` across all four backends
 - Grow the standard library and registry package ecosystem

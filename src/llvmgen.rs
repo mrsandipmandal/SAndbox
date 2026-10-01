@@ -10,6 +10,9 @@ pub struct LlvmGen {
     var_counter: usize,
     fn_sigs: HashMap<String, (Vec<String>, String)>,
     enum_tags: HashMap<String, Vec<(String, i64)>>,
+    /// Variant payload types: enum name -> (variant name -> payload Type).
+    /// Lets match binders extract payloads with the right LLVM type.
+    enum_payload_tys: HashMap<String, HashMap<String, Type>>,
     struct_defs: HashMap<String, Vec<(String, String)>>,
     current_fn: String,
     variables: HashMap<String, (String, String)>,
@@ -85,6 +88,7 @@ impl LlvmGen {
             var_counter: 0,
             fn_sigs: HashMap::new(),
             enum_tags: HashMap::new(),
+            enum_payload_tys: HashMap::new(),
             struct_defs: HashMap::new(),
             current_fn: String::new(),
             variables: HashMap::new(),
@@ -119,6 +123,13 @@ impl LlvmGen {
                     .map(|(i, v)| (v.name.clone(), i as i64))
                     .collect();
                 self.enum_tags.insert(name.clone(), tags);
+                let mut ptys: HashMap<String, Type> = HashMap::new();
+                for v in variants {
+                    if let Some(p) = &v.payload {
+                        ptys.insert(v.name.clone(), p.clone());
+                    }
+                }
+                self.enum_payload_tys.insert(name.clone(), ptys);
             }
         }
 
@@ -217,6 +228,7 @@ impl LlvmGen {
         // Declare external functions
         writeln!(self.output, "; External declarations").unwrap();
         writeln!(self.output, "declare i64 @printf(i8*, ...)").unwrap();
+        writeln!(self.output, "declare i32 @fprintf(i8*, i8*, ...)").unwrap();
         writeln!(self.output, "declare i8* @malloc(i64)").unwrap();
         writeln!(self.output, "declare void @free(i8*)").unwrap();
         writeln!(self.output, "declare i32 @puts(i8*)").unwrap();
@@ -346,8 +358,17 @@ impl LlvmGen {
         writeln!(self.output, "declare i8* @__sbx_str_to_upper(i8*)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_str_to_lower(i8*)").unwrap();
         writeln!(self.output, "declare i8* @__sbx_str_replace(i8*, i8*, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @sbx_enum_new(i64, double)").unwrap();
+        writeln!(self.output, "declare i64 @sbx_enum_new_s(i64, i8*)").unwrap();
+        writeln!(self.output, "declare i64 @sbx_enum_tag(i64)").unwrap();
+        writeln!(self.output, "declare double @sbx_enum_payload_d(i64)").unwrap();
+        writeln!(self.output, "declare i8* @sbx_enum_payload_s(i64)").unwrap();
         writeln!(self.output, "declare void @__sbx_assert_eq(i64, i64)").unwrap();
         writeln!(self.output, "declare void @__sbx_exit(i32)").unwrap();
+        // Fail-fast paths (Err/panic) call libc exit and read glibc's stderr
+        // global directly; without these declares clang rejects the module.
+        writeln!(self.output, "declare void @exit(i32)").unwrap();
+        writeln!(self.output, "@stderr = external global i8*").unwrap();
         writeln!(self.output).unwrap();
 
         // Generate struct type definitions
@@ -886,9 +907,14 @@ impl LlvmGen {
             }
             Stmt::Return(Some(expr)) => {
                 let val = self.gen_expr(expr);
-                let ty = self.infer_llvm_type(expr);
-                writeln!(self.output, "  ret {} {}", ty, val).unwrap();
-                self.block_terminated = true;
+                // An Err/panic payload already terminated the block (exit +
+                // unreachable); a typed `ret` after it would still fail LLVM
+                // verification, so only return while the block is live.
+                if !self.block_terminated {
+                    let ty = self.infer_llvm_type(expr);
+                    writeln!(self.output, "  ret {} {}", ty, val).unwrap();
+                    self.block_terminated = true;
+                }
                 val
             }
             Stmt::Return(None) => {
@@ -1779,7 +1805,9 @@ impl LlvmGen {
                     inner
                 }
             }
-            Expr::Float(n) => format!("{}", n),
+            // Debug format keeps the decimal point ("5.0", not "5") —
+            // LLVM rejects an integer-looking constant in double position.
+            Expr::Float(n) => format!("{:?}", n),
             Expr::Bool(b) => {
                 if *b {
                     "1".to_string()
@@ -1829,6 +1857,27 @@ impl LlvmGen {
                             )
                             .unwrap();
                             result
+                        } else if lt == "double" {
+                            let lp = if self.infer_llvm_type(left) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {l} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                l
+                            };
+                            let rp = if self.infer_llvm_type(right) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {r} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                r
+                            };
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fadd double {}, {}", result, lp, rp)
+                                .unwrap();
+                            result
                         } else {
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = add {} {}, {}", result, lt, l, r)
@@ -1838,26 +1887,94 @@ impl LlvmGen {
                     }
                     BinOp::Sub => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = sub {} {}, {}", result, lt, l, r).unwrap();
+                        if lt == "double" {
+                            let lp = if self.infer_llvm_type(left) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {l} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                l
+                            };
+                            let rp = if self.infer_llvm_type(right) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {r} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                r
+                            };
+                            writeln!(self.output, "  {} = fsub double {}, {}", result, lp, rp)
+                                .unwrap();
+                        } else {
+                            writeln!(self.output, "  {} = sub {} {}, {}", result, lt, l, r)
+                                .unwrap();
+                        }
                         result
                     }
                     BinOp::Mul => {
                         let result = self.fresh_var();
-                        writeln!(self.output, "  {} = mul {} {}, {}", result, lt, l, r).unwrap();
+                        if lt == "double" {
+                            let lp = if self.infer_llvm_type(left) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {l} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                l
+                            };
+                            let rp = if self.infer_llvm_type(right) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {r} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                r
+                            };
+                            writeln!(self.output, "  {} = fmul double {}, {}", result, lp, rp)
+                                .unwrap();
+                        } else {
+                            writeln!(self.output, "  {} = mul {} {}, {}", result, lt, l, r)
+                                .unwrap();
+                        }
                         result
                     }
                     BinOp::Div => {
-                        // B2 (total division): x/0 → 0 and i64::MIN / -1 →
-                        // i64::MIN via the shared C runtime helper — raw sdiv
-                        // is UB on both edges (SIGFPE in practice).
-                        let result = self.fresh_var();
-                        writeln!(
-                            self.output,
-                            "  {} = call i64 @sbx_gdiv(i64 {}, i64 {})",
-                            result, l, r
-                        )
-                        .unwrap();
-                        result
+                        if lt == "double" {
+                            let lp = if self.infer_llvm_type(left) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {l} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                l
+                            };
+                            let rp = if self.infer_llvm_type(right) == "i64" {
+                                let conv = self.fresh_var();
+                                writeln!(self.output, "  {conv} = sitofp i64 {r} to double")
+                                    .unwrap();
+                                conv
+                            } else {
+                                r
+                            };
+                            // Float division is IEEE: x/0 → inf, no helper.
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fdiv double {}, {}", result, lp, rp)
+                                .unwrap();
+                            result
+                        } else {
+                            // B2 (total division): x/0 → 0 and i64::MIN / -1 →
+                            // i64::MIN via the shared C runtime helper — raw
+                            // sdiv is UB on both edges (SIGFPE in practice).
+                            let result = self.fresh_var();
+                            writeln!(
+                                self.output,
+                                "  {} = call i64 @sbx_gdiv(i64 {}, i64 {})",
+                                result, l, r
+                            )
+                            .unwrap();
+                            result
+                        }
                     }
                     BinOp::Eq => {
                         if lt == "i8*" || lt == "i8**" {
@@ -1871,6 +1988,11 @@ impl LlvmGen {
                             .unwrap();
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp eq i32 {}, 0", result, cmp).unwrap();
+                            result
+                        } else if lt == "double" {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fcmp oeq double {}, {}", result, l, r)
+                                .unwrap();
                             result
                         } else {
                             let result = self.fresh_var();
@@ -1892,6 +2014,11 @@ impl LlvmGen {
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp ne i32 {}, 0", result, cmp).unwrap();
                             result
+                        } else if lt == "double" {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fcmp one double {}, {}", result, l, r)
+                                .unwrap();
+                            result
                         } else {
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp ne {} {}, {}", result, lt, l, r)
@@ -1910,6 +2037,11 @@ impl LlvmGen {
                             .unwrap();
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp slt i32 {}, 0", result, cmp)
+                                .unwrap();
+                            result
+                        } else if lt == "double" {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fcmp olt double {}, {}", result, l, r)
                                 .unwrap();
                             result
                         } else {
@@ -1932,6 +2064,11 @@ impl LlvmGen {
                             writeln!(self.output, "  {} = icmp sgt i32 {}, 0", result, cmp)
                                 .unwrap();
                             result
+                        } else if lt == "double" {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fcmp ogt double {}, {}", result, l, r)
+                                .unwrap();
+                            result
                         } else {
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp sgt {} {}, {}", result, lt, l, r)
@@ -1952,6 +2089,11 @@ impl LlvmGen {
                             writeln!(self.output, "  {} = icmp sle i32 {}, 0", result, cmp)
                                 .unwrap();
                             result
+                        } else if lt == "double" {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fcmp ole double {}, {}", result, l, r)
+                                .unwrap();
+                            result
                         } else {
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp sle {} {}, {}", result, lt, l, r)
@@ -1970,6 +2112,11 @@ impl LlvmGen {
                             .unwrap();
                             let result = self.fresh_var();
                             writeln!(self.output, "  {} = icmp sge i32 {}, 0", result, cmp)
+                                .unwrap();
+                            result
+                        } else if lt == "double" {
+                            let result = self.fresh_var();
+                            writeln!(self.output, "  {} = fcmp oge double {}, {}", result, l, r)
                                 .unwrap();
                             result
                         } else {
@@ -2377,11 +2524,61 @@ impl LlvmGen {
                 }
             }
             Expr::EnumVariant {
-                enum_name, variant, ..
+                enum_name,
+                variant,
+                payload,
+                ..
             } => {
-                if let Some(tags) = self.enum_tags.get(enum_name) {
-                    if let Some((_, tag)) = tags.iter().find(|(v, _)| v == variant) {
-                        return format!("{}", tag);
+                // An enum instance is a pointer to a runtime sbx_enum box,
+                // riding the i64 slot model like string handles. Matches read
+                // the tag/payload back through the runtime accessors.
+                let tag_const = self
+                    .enum_tags
+                    .get(enum_name)
+                    .and_then(|tags| tags.iter().find(|(v, _)| v == variant).map(|(_, t)| *t));
+                if let Some(tag) = tag_const {
+                    {
+                        match payload {
+                            Some(pexpr) => {
+                                let pval = self.gen_expr(pexpr);
+                                let pty = self.infer_llvm_type(pexpr);
+                                let call = self.fresh_var();
+                                if pty == "i8*" {
+                                    writeln!(
+                                        self.output,
+                                        "  {call} = call i64 @sbx_enum_new_s(i64 {tag}, i8* {pval})"
+                                    )
+                                    .unwrap();
+                                } else {
+                                    let parg = if pty == "double" {
+                                        pval
+                                    } else {
+                                        let conv = self.fresh_var();
+                                        writeln!(
+                                            self.output,
+                                            "  {conv} = sitofp i64 {pval} to double"
+                                        )
+                                        .unwrap();
+                                        conv
+                                    };
+                                    writeln!(
+                                        self.output,
+                                        "  {call} = call i64 @sbx_enum_new(i64 {tag}, double {parg})"
+                                    )
+                                    .unwrap();
+                                }
+                                return call;
+                            }
+                            None => {
+                                let call = self.fresh_var();
+                                writeln!(
+                                    self.output,
+                                    "  {call} = call i64 @sbx_enum_new(i64 {tag}, double 0.0)"
+                                )
+                                .unwrap();
+                                return call;
+                            }
+                        }
                     }
                 }
                 "0".to_string()
@@ -2389,9 +2586,73 @@ impl LlvmGen {
             Expr::Match { scrutinee, arms } => {
                 let sc = self.gen_expr(scrutinee);
                 let end_label = self.fresh_label("match.end");
+                // The result slot types by arm results: string-producing
+                // matches hold i8* (the enclosing fn may return i8* — a plain
+                // i64 slot made `ret i64` mismatch `define i8*` and fail the
+                // module verifier). Everything else stays i64.
+                let is_enum_match = arms
+                    .iter()
+                    .any(|arm| matches!(&arm.pattern, Pattern::EnumVariant { .. }));
+                // The result slot types by the arms' result: strings hold
+                // i8* (the enclosing fn may return i8* — a plain i64 slot
+                // made `ret i64` mismatch `define i8*` and fail the module
+                // verifier), floats hold double, everything else i64.
+                let arm_res_ty = arms.iter().find_map(|arm| {
+                    arm.body.iter().rev().find_map(|s| {
+                        let e = match s {
+                            Stmt::ExprStmt(e) | Stmt::Return(Some(e)) => Some(e),
+                            _ => None,
+                        }?;
+                        match e {
+                            Expr::Str(_) => Some("i8*"),
+                            Expr::Float(_) => Some("double"),
+                            Expr::Ident(n) => {
+                                match self.variables.get(n).map(|(_, t)| t.as_str()) {
+                                    Some("i8*") | Some("double") => {
+                                        self.variables.get(n).map(|(_, t)| t.as_str())
+                                    }
+                                    _ => None,
+                                }
+                            }
+                            _ => {
+                                let t = self.infer_llvm_type(e);
+                                if t == "double" {
+                                    Some("double")
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                    })
+                });
+                let mty = match arm_res_ty {
+                    Some("i8*") => "i8*",
+                    Some("double") => "double",
+                    _ => "i64",
+                };
+                let zero_init = match mty {
+                    "i8*" => "null",
+                    "double" => "0.0",
+                    _ => "0",
+                };
                 let result = self.fresh_var();
-                writeln!(self.output, "  {} = alloca i64", result).unwrap();
-                writeln!(self.output, "  store i64 0, i64* {}", result).unwrap();
+                writeln!(self.output, "  {} = alloca {}", result, mty).unwrap();
+                writeln!(
+                    self.output,
+                    "  store {} {}, {}* {}",
+                    mty, zero_init, mty, result
+                )
+                .unwrap();
+                // For enum matches the scrutinee is a box pointer: load the
+                // tag once, here before the arm chain branches, so every arm
+                // compares the same i64.
+                let tag_reg = if is_enum_match {
+                    let t = self.fresh_var();
+                    writeln!(self.output, "  {} = call i64 @sbx_enum_tag(i64 {})", t, sc).unwrap();
+                    t
+                } else {
+                    sc.clone()
+                };
 
                 let num_arms = arms.len();
                 let skip_labels: Vec<String> =
@@ -2415,8 +2676,12 @@ impl LlvmGen {
                             });
                             if let Some(tag) = tag_val {
                                 let cmp = self.fresh_var();
-                                writeln!(self.output, "  {} = icmp eq i64 {}, {}", cmp, sc, tag)
-                                    .unwrap();
+                                writeln!(
+                                    self.output,
+                                    "  {} = icmp eq i64 {}, {}",
+                                    cmp, tag_reg, tag
+                                )
+                                .unwrap();
                                 cmp
                             } else {
                                 "true".to_string()
@@ -2514,10 +2779,75 @@ impl LlvmGen {
                     // Bind pattern variables
                     match &arm.pattern {
                         Pattern::EnumVariant {
-                            binding: Some(b), ..
+                            enum_name,
+                            variant,
+                            binding: Some(b),
+                            ..
+                        } => {
+                            // Bind the PAYLOAD (typed from the enum def), not
+                            // the box pointer.
+                            let pty = self
+                                .enum_payload_tys
+                                .get(enum_name)
+                                .and_then(|m| m.get(variant))
+                                .map(|t| self.llvm_type(t))
+                                .unwrap_or_else(|| "i64".to_string());
+                            match pty.as_str() {
+                                "double" => {
+                                    let pv = self.fresh_var();
+                                    writeln!(
+                                        self.output,
+                                        "  {} = call double @sbx_enum_payload_d(i64 {})",
+                                        pv, sc
+                                    )
+                                    .unwrap();
+                                    let alloca = self.fresh_var();
+                                    writeln!(self.output, "  {} = alloca double", alloca).unwrap();
+                                    writeln!(
+                                        self.output,
+                                        "  store double {}, double* {}",
+                                        pv, alloca
+                                    )
+                                    .unwrap();
+                                    self.variables
+                                        .insert(b.clone(), (alloca, "double".to_string()));
+                                }
+                                "i8*" => {
+                                    let pv = self.fresh_var();
+                                    writeln!(
+                                        self.output,
+                                        "  {} = call i8* @sbx_enum_payload_s(i64 {})",
+                                        pv, sc
+                                    )
+                                    .unwrap();
+                                    let alloca = self.fresh_var();
+                                    writeln!(self.output, "  {} = alloca i8*", alloca).unwrap();
+                                    writeln!(self.output, "  store i8* {}, i8** {}", pv, alloca)
+                                        .unwrap();
+                                    self.variables
+                                        .insert(b.clone(), (alloca, "i8*".to_string()));
+                                }
+                                _ => {
+                                    let pv = self.fresh_var();
+                                    writeln!(
+                                        self.output,
+                                        "  {} = call double @sbx_enum_payload_d(i64 {})",
+                                        pv, sc
+                                    )
+                                    .unwrap();
+                                    let iv = self.fresh_var();
+                                    writeln!(self.output, "  {} = fptosi double {} to i64", iv, pv)
+                                        .unwrap();
+                                    let alloca = self.fresh_var();
+                                    writeln!(self.output, "  {} = alloca i64", alloca).unwrap();
+                                    writeln!(self.output, "  store i64 {}, i64* {}", iv, alloca)
+                                        .unwrap();
+                                    self.variables
+                                        .insert(b.clone(), (alloca, "i64".to_string()));
+                                }
+                            }
                         }
-                        | Pattern::SomePattern { binding: Some(b) }
-                        | Pattern::Variable(b) => {
+                        Pattern::SomePattern { binding: Some(b) } | Pattern::Variable(b) => {
                             let alloca = self.fresh_var();
                             writeln!(self.output, "  {} = alloca i64", alloca).unwrap();
                             writeln!(self.output, "  store i64 {}, i64* {}", sc, alloca).unwrap();
@@ -2547,7 +2877,17 @@ impl LlvmGen {
                             }
                         }
                     }
-                    writeln!(self.output, "  store i64 {}, i64* {}", arm_val, result).unwrap();
+                    let arm_val_stored = if arm_val == "0" && mty != "i64" {
+                        zero_init.to_string()
+                    } else {
+                        arm_val
+                    };
+                    writeln!(
+                        self.output,
+                        "  store {} {}, {}* {}",
+                        mty, arm_val_stored, mty, result
+                    )
+                    .unwrap();
                     writeln!(self.output, "  br label %{}", end_label).unwrap();
                     self.block_terminated = true;
                 }
@@ -2555,7 +2895,12 @@ impl LlvmGen {
                 writeln!(self.output, "{}:", end_label).unwrap();
                 self.block_terminated = false;
                 let loaded = self.fresh_var();
-                writeln!(self.output, "  {} = load i64, i64* {}", loaded, result).unwrap();
+                writeln!(
+                    self.output,
+                    "  {} = load {}, {}* {}",
+                    loaded, mty, mty, result
+                )
+                .unwrap();
                 loaded
             }
             Expr::StructLiteral {
@@ -3475,7 +3820,9 @@ impl LlvmGen {
                     "%".to_string() + name
                 }
             }
-            Type::Result(_, _) => "i64".to_string(),
+            // Result functions return their Ok payload's type (mirrors the C
+            // backend's c_type(ok)); Err never returns - it exits at runtime.
+            Type::Result(ok, _) => self.llvm_type(ok),
             Type::Option(_) => "i64".to_string(),
             Type::Fn(params, ret) => {
                 // Function pointer type: i64 (i64)*
@@ -3494,7 +3841,34 @@ impl LlvmGen {
             Expr::Bool(_) => "i1".to_string(),
             Expr::Str(_) => "i8*".to_string(),
             Expr::EnumVariant { .. } => "i64".to_string(),
-            Expr::Match { .. } => "i64".to_string(),
+            Expr::Match { arms, .. } => {
+                let res: Option<String> = arms.iter().find_map(|arm| {
+                    arm.body.iter().rev().find_map(|s| {
+                        let e = match s {
+                            Stmt::ExprStmt(e) | Stmt::Return(Some(e)) => Some(e),
+                            _ => None,
+                        }?;
+                        match e {
+                            Expr::Str(_) => Some("i8*".to_string()),
+                            Expr::Float(_) => Some("double".to_string()),
+                            Expr::Ident(n) => self
+                                .variables
+                                .get(n)
+                                .map(|(_, t)| t.clone())
+                                .filter(|t| t == "i8*" || t == "double"),
+                            _ => {
+                                let t = self.infer_llvm_type(e);
+                                if t == "double" {
+                                    Some("double".to_string())
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                    })
+                });
+                res.unwrap_or_else(|| "i64".to_string())
+            }
             Expr::Call { name, .. } => {
                 if self.map_fns.contains(name) {
                     "i8*".to_string()
@@ -3549,6 +3923,23 @@ impl LlvmGen {
                 left,
                 ..
             } if matches!(self.infer_llvm_type(left).as_str(), "i8*" | "i8**") => "i8*".to_string(),
+            Expr::BinaryOp {
+                op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div,
+                left,
+                right,
+                ..
+            } => {
+                // Arithmetic propagates float-ness (either side double →
+                // double) so nested float expressions pick fadd/fsub/fmul/fdiv;
+                // comparisons keep the i64 convention.
+                let ld = self.infer_llvm_type(left);
+                let rd = self.infer_llvm_type(right);
+                if ld == "double" || rd == "double" {
+                    "double".to_string()
+                } else {
+                    "i64".to_string()
+                }
+            }
             Expr::BinaryOp { .. } => "i64".to_string(),
             // B2: a unary op's register type matches its operand (fneg double
             // yields double; sub i64 yields i64) — without this, casts of
@@ -3608,6 +3999,13 @@ impl LlvmGen {
                     "i64".to_string()
                 }
             }
+            // Ok/Some/Try are transparent: the value IS the payload.
+            Expr::OkExpr(value) | Expr::SomeExpr(value) | Expr::TryExpr(value) => {
+                self.infer_llvm_type(value)
+            }
+            // Err/panic never yield a value (exit + unreachable); the ret
+            // after them is skipped by the Return handler anyway.
+            Expr::ErrExpr(_) | Expr::PanicExpr(_) => "i64".to_string(),
             _ => "i64".to_string(),
         }
     }

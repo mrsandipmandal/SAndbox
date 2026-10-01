@@ -1543,6 +1543,13 @@ fn exec_block(stmts: &[ast::Stmt], state: &mut InterpreterState) -> anyhow::Resu
                 // C1 also surfaces string-array element reads).
                 match expr {
                     ast::Expr::Str(v) => state.last_returned_str = Some(v.clone()),
+                    ast::Expr::OkExpr(inner) | ast::Expr::SomeExpr(inner) => {
+                        // `return Ok("...")` / `return Some("...")` carry the
+                        // payload through the same string channel.
+                        if let Some(sv) = resolve_str(inner, state) {
+                            state.last_returned_str = Some(sv);
+                        }
+                    }
                     ast::Expr::FString(parts) => {
                         if parts.len() == 1 {
                             if let ast::FStringPart::Literal(lit) = &parts[0] {
@@ -1783,6 +1790,26 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
             state.str_vars.insert(key, s.clone());
             Ok(0)
         }
+        // Ok/Some/Try are transparent: the payload flows through (C/LLVM
+        // parity — a Result's value IS its Ok payload; Err exits first).
+        // Ok/Some of a string plant an __auto_ key exactly like a plain
+        // string literal, so Let/Assign transfer it to the variable name.
+        ast::Expr::OkExpr(value) | ast::Expr::SomeExpr(value) => eval_expr(value, state),
+        ast::Expr::TryExpr(expr) => eval_expr(expr, state),
+        ast::Expr::NoneExpr => Ok(0),
+        ast::Expr::ErrExpr(error) => {
+            // Fail-fast like the compiled backends: the CLI surfaces the
+            // message once on stderr ("Error: <msg>") with exit code 1 via
+            // the anyhow error path.
+            let msg = resolve_str(error, state).unwrap_or_else(|| "error".to_string());
+            Err(anyhow::anyhow!(msg))
+        }
+        ast::Expr::PanicExpr(msg_expr) => {
+            // Compiled backends print "Panic: <msg>" and exit(1); the
+            // interpreter stops through the same error channel.
+            let msg = resolve_str(msg_expr, state).unwrap_or_else(|| "panic".to_string());
+            Err(anyhow::anyhow!(msg))
+        }
         ast::Expr::Ident(name) => {
             // Check strings first, then arrays, then integers
             if state.str_vars.contains_key(name)
@@ -1982,9 +2009,56 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                         match stmt {
                             ast::Stmt::ExprStmt(e) if i == n_stmts - 1 => {
                                 result = eval_expr(e, state)?;
+                                // String arm values travel through the
+                                // last_returned_str channel (same as
+                                // `return "..."`), so a caller printing or
+                                // returning the match sees the string.
+                                match e {
+                                    ast::Expr::Str(v) => state.last_returned_str = Some(v.clone()),
+                                    ast::Expr::FString(_) => {
+                                        if let Some(sv) = take_auto_str(state) {
+                                            state.last_returned_str = Some(sv);
+                                        }
+                                    }
+                                    ast::Expr::Ident(n) => {
+                                        if let Some(sv) = state.str_vars.get(n) {
+                                            state.last_returned_str = Some(sv.clone());
+                                        }
+                                    }
+                                    ast::Expr::OkExpr(inner) | ast::Expr::SomeExpr(inner) => {
+                                        // `Ok("...")` as a match arm's final
+                                        // expression carries its payload.
+                                        if let Some(sv) = resolve_str(inner, state) {
+                                            state.last_returned_str = Some(sv);
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                             ast::Stmt::Return(Some(e)) => {
-                                return eval_expr(e, state);
+                                let val = eval_expr(e, state)?;
+                                match e {
+                                    ast::Expr::Str(v) => state.last_returned_str = Some(v.clone()),
+                                    ast::Expr::FString(_) => {
+                                        if let Some(sv) = take_auto_str(state) {
+                                            state.last_returned_str = Some(sv);
+                                        }
+                                    }
+                                    ast::Expr::Ident(n) => {
+                                        if let Some(sv) = state.str_vars.get(n) {
+                                            state.last_returned_str = Some(sv.clone());
+                                        }
+                                    }
+                                    ast::Expr::OkExpr(inner) | ast::Expr::SomeExpr(inner) => {
+                                        // `Ok("...")` as a match arm's final
+                                        // expression carries its payload.
+                                        if let Some(sv) = resolve_str(inner, state) {
+                                            state.last_returned_str = Some(sv);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                return Ok(val);
                             }
                             ast::Stmt::Return(None) => return Ok(0),
                             _ => {
@@ -3128,6 +3202,8 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                 local_state.inject_scope(&cap);
                 // Inject explicit arguments (override captured if same name)
                 for (param, arg) in params.iter().zip(args.iter()) {
+                    let before_enums: std::collections::HashSet<String> =
+                        state.enum_instances.keys().cloned().collect();
                     let val = eval_expr(arg, state)?;
                     local_state.vars.insert(param.name.clone(), val);
                     // If arg is an Ident referring to a struct, copy the struct instance data
@@ -3142,6 +3218,30 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                                 .struct_type_of
                                 .insert(param.name.clone(), ty.clone());
                         }
+                    }
+                    // Enum instances travel with the argument: an Ident names
+                    // an existing instance; an inline construction (e.g.
+                    // `area(Shape::Circle(5.0))`) created a fresh __enum_N
+                    // auto key during eval above. Either way the callee's
+                    // `match param { Variant(x) => ... }` needs the instance
+                    // under the PARAM name.
+                    let arg_enum = match arg {
+                        ast::Expr::Ident(arg_name) => {
+                            state.enum_instances.get(arg_name.as_str()).cloned()
+                        }
+                        _ => state
+                            .enum_instances
+                            .iter()
+                            .filter(|(k, _)| !before_enums.contains(*k))
+                            .max_by_key(|(k, _)| {
+                                k.trim_start_matches("__enum_")
+                                    .parse::<usize>()
+                                    .unwrap_or(0)
+                            })
+                            .map(|(_, v)| v.clone()),
+                    };
+                    if let Some(inst) = arg_enum {
+                        local_state.enum_instances.insert(param.name.clone(), inst);
                     }
                 }
                 match exec_block(&body, &mut local_state)? {
@@ -3161,6 +3261,8 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                 local_state.struct_instances = state.struct_instances.clone();
                 local_state.struct_type_of = state.struct_type_of.clone();
                 for (param, arg) in params.iter().zip(args.iter()) {
+                    let before_enums: std::collections::HashSet<String> =
+                        state.enum_instances.keys().cloned().collect();
                     let val = eval_expr(arg, state)?;
                     local_state.vars.insert(param.name.clone(), val);
                     // If arg is an Ident referring to a struct, copy the struct instance data
@@ -3185,6 +3287,30 @@ fn eval_expr(expr: &ast::Expr, state: &mut InterpreterState) -> anyhow::Result<i
                                 .strarr_vars
                                 .insert(param.name.clone(), a.clone());
                         }
+                    }
+                    // Enum instances travel with the argument: an Ident names
+                    // an existing instance; an inline construction (e.g.
+                    // `area(Shape::Circle(5.0))`) created a fresh __enum_N
+                    // auto key during eval above. Either way the callee's
+                    // `match param { Variant(x) => ... }` needs the instance
+                    // under the PARAM name.
+                    let arg_enum = match arg {
+                        ast::Expr::Ident(arg_name) => {
+                            state.enum_instances.get(arg_name.as_str()).cloned()
+                        }
+                        _ => state
+                            .enum_instances
+                            .iter()
+                            .filter(|(k, _)| !before_enums.contains(*k))
+                            .max_by_key(|(k, _)| {
+                                k.trim_start_matches("__enum_")
+                                    .parse::<usize>()
+                                    .unwrap_or(0)
+                            })
+                            .map(|(_, v)| v.clone()),
+                    };
+                    if let Some(inst) = arg_enum {
+                        local_state.enum_instances.insert(param.name.clone(), inst);
                     }
                 }
                 let result = exec_block(&body, &mut local_state)?.unwrap_or_default();

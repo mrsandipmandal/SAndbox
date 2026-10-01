@@ -36,7 +36,7 @@ if [ "$BRANCH" != "master" ] && [ "$BRANCH" != "main" ]; then
 fi
 git fetch origin --quiet
 TIP="$(git rev-parse HEAD)"
-REMOTE_TIP="$(git rev-parse origin/${BRANCH})"
+REMOTE_TIP="$(git rev-parse "origin/${BRANCH}")"
 if [ "$TIP" != "$REMOTE_TIP" ]; then
   echo "FAIL: HEAD ($TIP) is not the tip of origin/${BRANCH} ($REMOTE_TIP)." >&2
   echo "      Push or pull first so the release commit is on the remote line." >&2
@@ -118,6 +118,10 @@ echo "── gate: cargo build ──"
 cargo build --quiet
 echo "── gate: playground build ──"
 cargo build --quiet --manifest-path playground-compiler/Cargo.toml
+echo "── rebuild playground compiler.wasm ──"
+# The committed artifact carries the version string (sbx_version); rebuild
+# it here so the playground About line never trails the release version.
+bash scripts/build-playground.sh
 echo "── gate: version consistency ──"
 CLI_VERSION="$(cargo run --quiet -- --version | awk '{print $2}')"
 if [ "$CLI_VERSION" != "$NEXT" ]; then
@@ -126,9 +130,13 @@ if [ "$CLI_VERSION" != "$NEXT" ]; then
 fi
 echo "── gate: unit tests ──"
 cargo test --quiet --manifest-path playground-compiler/Cargo.toml
+echo "── gate: compiler.wasm version consistency ──"
+node scripts/smoke-playground-compiler.mjs \
+  registry/static/playground/compiler.wasm "$NEXT"
 
 # ── Commit + tag ─────────────────────────────────────────────────────────────
-git add Cargo.toml playground-compiler/Cargo.toml CHANGELOG.md src/main.rs
+git add Cargo.toml playground-compiler/Cargo.toml CHANGELOG.md src/main.rs \
+  registry/static/playground/compiler.wasm
 # src/main.rs only changes on the first release after the env!() fix; adding
 # an unchanged file is a no-op, so this is safe on every run.
 git commit -m "release: v${NEXT}"

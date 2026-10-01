@@ -13,7 +13,9 @@
 //   4. A type error surfaces on the error path: out = 0 and the message
 //      names the undefined variable.
 //
-// Usage: node scripts/smoke-playground-compiler.mjs [compiler.wasm]
+// Usage: node scripts/smoke-playground-compiler.mjs [compiler.wasm] [expected-version]
+// With expected-version, sbx_version must match it exactly (used by
+// release.sh as the compiler.wasm version-consistency gate).
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -21,6 +23,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const wasmPath = process.argv[2]
   ?? path.resolve('registry/static/playground/compiler.wasm');
+const expectedVersion = process.argv[3] || null;
 
 const { encodeWat } = require(new URL(
   '../registry/static/playground/playground.js',
@@ -84,6 +87,10 @@ let vEnd = vStart;
 while (mem0[vEnd] !== 0) vEnd++;
 const version = new TextDecoder().decode(mem0.subarray(vStart, vEnd));
 check('sbx_version', /^\d+\.\d+\.\d+$/.test(version), version);
+if (expectedVersion) {
+  check('sbx_version matches release', version === expectedVersion,
+    `${version} != ${expectedVersion}`);
+}
 
 // 2. Block scoping (the freshly-landed semantics, through the wasm pipeline).
 const blockScoping = `fn main() {

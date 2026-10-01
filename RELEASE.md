@@ -58,9 +58,12 @@ bash scripts/release.sh patch   # or: minor | major
 
 The script: verifies the tree is clean and HEAD is pushed → computes
 the next version with the 999-carry rule → bumps all version locations
-→ inserts a dated `## [<version>]` stub into CHANGELOG.md → runs the
-fast gates (build + smoke) → commits `release: v<version>` and tags
-`v<version>`. Pass `--push` to also push `master` and the tag; without
+→ rebuilds `registry/static/playground/compiler.wasm` (its `sbx_version`
+follows the crate version) → inserts a dated `## [<version>]` stub into
+CHANGELOG.md → runs the fast gates (builds, `sandbox --version`
+consistency, playground unit tests, and a compiler.wasm smoke run whose
+`sbx_version` must equal the new version) → commits `release:
+v<version>` and tags `v<version>`. Pass `--push` to also push `master` and the tag; without
 it, push yourself:
 
 ```bash

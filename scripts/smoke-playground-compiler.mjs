@@ -88,8 +88,9 @@ while (mem0[vEnd] !== 0) vEnd++;
 const version = new TextDecoder().decode(mem0.subarray(vStart, vEnd));
 check('sbx_version', /^\d+\.\d+\.\d+$/.test(version), version);
 if (expectedVersion) {
-  check('sbx_version matches release', version === expectedVersion,
-    `${version} != ${expectedVersion}`);
+  const versionOk = version === expectedVersion;
+  check('sbx_version matches release', versionOk,
+    versionOk ? version : `${version} != ${expectedVersion}`);
 }
 
 // 2. Block scoping (the freshly-landed semantics, through the wasm pipeline).

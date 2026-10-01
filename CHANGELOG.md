@@ -17,12 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- (describe user-visible additions here)
+- Release flow now rebuilds `registry/static/playground/compiler.wasm` as
+  part of `scripts/release.sh` and version-gates it: the playground smoke
+  tool accepts an expected version and fails the release unless
+  `sbx_version` matches, so the playground About line can no longer trail
+  a release.
 
 ### Fixed
 
-- (describe fixes here)
-
+- `test_web_app_a4_end_to_end` no longer flakes in full-suite runs: the
+  test asserts on a port probe (ground truth) instead of the child's
+  block-buffered log, spawns the server under `stdbuf -oL`, and allows a
+  30s startup deadline.
 
 ### Added
 

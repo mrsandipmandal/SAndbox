@@ -1437,7 +1437,13 @@ fn test_web_app_a4_end_to_end() {
     let bin = sandbox_bin();
     let log = std::fs::File::create("/tmp/sbx_web_app_test.log").unwrap();
     let err_log = log.try_clone().unwrap();
-    let mut child = Command::new(&bin)
+    // stdbuf -oL: the child's stdout is a file here, so libc block-buffers
+    // it — without line buffering the "listening" banner can still sit in
+    // the buffer when the test SIGKILLs the server, and log-based asserts
+    // see a stale log even though the server served every request.
+    let mut child = Command::new("stdbuf")
+        .args(["-oL", "-eL"])
+        .arg(&bin)
         .args(["run", "examples/web_app.sbx"])
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err_log))
@@ -1445,7 +1451,14 @@ fn test_web_app_a4_end_to_end() {
         .unwrap();
 
     let addr = "127.0.0.1:8090";
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // 30s: the sandbox compile (lex→parse→check→C codegen→gcc) plus server
+    // start must fit in this window even under a fully loaded test runner —
+    // 5s made this test flake whenever the rest of the suite was running
+    // heavy compile subprocesses in parallel (it passes in <1s in
+    // isolation; the deadline only matters on a genuinely broken server,
+    // which the final "server never listened" assert still catches).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut listened = false;
     while Instant::now() < deadline {
         if std::net::TcpStream::connect_timeout(
             &"127.0.0.1:8090".parse().unwrap(),
@@ -1453,9 +1466,31 @@ fn test_web_app_a4_end_to_end() {
         )
         .is_ok()
         {
+            listened = true;
+            break;
+        }
+        // Bail early if the server process already died — its exit status
+        // (captured below into the assert message) then explains why.
+        if let Ok(Some(_)) = child.try_wait() {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+    if !listened {
+        let still_running = child.try_wait().map(|s| s.is_none()).unwrap_or(false);
+        let _ = child.kill();
+        let _ = child.wait();
+        let port_line = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("ss -tln 2>/dev/null | grep 8090 || echo 'port 8090 not bound'")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        panic!(
+            "server never listened after 30s (still_running={still_running}); \
+             port state: {port_line}; log: {}",
+            std::fs::read_to_string("/tmp/sbx_web_app_test.log").unwrap_or_default()
+        );
     }
     std::thread::sleep(Duration::from_millis(200));
 
@@ -1496,11 +1531,16 @@ fn test_web_app_a4_end_to_end() {
 
     let _ = child.kill();
     let _ = child.wait();
-    let server_log = std::fs::read_to_string("/tmp/sbx_web_app_test.log").unwrap_or_default();
+    // Ground truth is the probe loop above: the server demonstrably bound
+    // port 8090 and answered HTTP, or the loop bailed with `listened ==
+    // false` (early exit path reports the child's exit status and port
+    // state). The child's log is only supplementary — block buffering means
+    // a killed child can lose its final lines no matter what.
     assert!(
-        server_log.contains("listening"),
-        "server never listened; log: {}",
-        server_log
+        listened,
+        "server never listened; port probe loop exhausted or child exited; \
+         log: {}",
+        std::fs::read_to_string("/tmp/sbx_web_app_test.log").unwrap_or_default()
     );
 }
 

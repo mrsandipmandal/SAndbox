@@ -255,7 +255,7 @@ fn find_word_at_cursor(line: &str, pos: usize) -> (usize, &str) {
 /// Definitions (fn, enum, struct) accumulate across iterations.
 /// Evaluations are wrapped in `__repl_main()` and re-executed each time.
 pub fn run_repl() -> Result<()> {
-    println!("Sandbox REPL v0.5.0");
+    println!("Sandbox REPL v{}", env!("CARGO_PKG_VERSION"));
     println!("Type expressions to evaluate, or define functions/enums/structs.");
     println!("Tab completion: keywords, built-ins, and user-defined names");
     println!("Ctrl+R: reverse incremental history search");

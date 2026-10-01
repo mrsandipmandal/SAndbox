@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > the patch-999 carry rule (`X.Y.999 → X.(Y+1).0`).
 
 ## [0.0.5] - 2026-09-30
+## [0.0.6] - 2026-10-01
+
+### Added
+
+- (describe user-visible additions here)
+
+### Fixed
+
+- (describe fixes here)
+
 
 ### Added
 

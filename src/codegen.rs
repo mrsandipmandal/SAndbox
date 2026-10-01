@@ -1831,6 +1831,19 @@ impl CodeGen {
         writeln!(self.output).unwrap();
     }
 
+    /// C type of a variant's payload: "double" for float payloads,
+    /// "const char*" for string payloads, "long" for integer/other payloads.
+    /// None if the enum/variant is unknown or the variant carries no payload.
+    fn enum_payload_c_ty(&self, enum_name: &str, variant: &str) -> Option<String> {
+        let variants = self.enums.get(enum_name)?;
+        let def = variants.iter().find(|v| v.name == variant)?;
+        Some(match def.payload.as_ref()? {
+            Type::String => "const char*".to_string(),
+            Type::F64 => "double".to_string(),
+            _ => "long".to_string(),
+        })
+    }
+
     fn gen_fn(&mut self, name: &str, params: &[Param], ret: &Option<Type>, body: &[Stmt]) {
         // Reset function-scoped declaration tracking
         self.declared_vars.clear();
@@ -2426,10 +2439,14 @@ impl CodeGen {
                 self.write_indent();
                 if let Some(e) = expr {
                     if let Expr::ErrExpr(msg) = e {
+                        // Err is fail-fast (matching the ErrExpr expression
+                        // form and the LLVM backend): print and abort — a
+                        // `return 1` here was even invalid C for functions
+                        // returning string/money.
                         let msg_val = self.gen_expr(msg);
                         writeln!(
                             self.output,
-                            "fprintf(stderr, \"Error: %s\\n\", {msg_val}); return 1;"
+                            "fprintf(stderr, \"Error: %s\\n\", {msg_val}); exit(1);"
                         )
                         .unwrap();
                     } else {
@@ -2795,7 +2812,33 @@ impl CodeGen {
                     "long".into()
                 }
             }
-            Expr::Match { .. } => "long".into(),
+            Expr::Match { arms, .. } => {
+                // A match whose arms yield strings produces a char* (the
+                // statement-expression's result holder types the same way);
+                // everything else flows through the double/long holder.
+                let string_result = arms.iter().any(|arm| {
+                    arm.body.iter().any(|s| {
+                        let e = match s {
+                            Stmt::ExprStmt(e) | Stmt::Return(Some(e)) => Some(e),
+                            _ => None,
+                        };
+                        match e {
+                            Some(Expr::Str(_)) => true,
+                            Some(Expr::Ident(n)) => self
+                                .var_types
+                                .get(n.as_str())
+                                .map(|t| t == "const char*")
+                                .unwrap_or(false),
+                            _ => false,
+                        }
+                    })
+                });
+                if string_result {
+                    "const char*".into()
+                } else {
+                    "long".into()
+                }
+            }
             // B2: a cast's C type is the target type (so `-2.5 as u8` no
             // longer classifies as "long" and skips the (long long) float
             // hop). Unary ops propagate ONLY float-ness — `!x`/`~x` yield
@@ -3334,11 +3377,19 @@ impl CodeGen {
                 match payload {
                     Some(expr) => {
                         let val = self.gen_expr(expr);
-                        // Store as double — works for both int and float payloads
-                        format!(
-                            "((sbx_enum){{.tag = {}, .payload = {{.d = {}}}}})",
-                            tag, val
-                        )
+                        if self.infer_c_type(expr) == "const char*" {
+                            // String payloads ride the union's char* slot.
+                            format!(
+                                "((sbx_enum){{.tag = {}, .payload = {{.s = {}}}}})",
+                                tag, val
+                            )
+                        } else {
+                            // Store as double — works for both int and float payloads
+                            format!(
+                                "((sbx_enum){{.tag = {}, .payload = {{.d = {}}}}})",
+                                tag, val
+                            )
+                        }
                     }
                     None => format!("((sbx_enum){{.tag = {}, .payload = {{.d = 0}}}})", tag),
                 }
@@ -3365,23 +3416,55 @@ impl CodeGen {
                 let is_string_match = arms
                     .iter()
                     .any(|arm| matches!(&arm.pattern, Pattern::StrLiteral(_)));
-                // Detect if the match produces string results (any arm body returns a string literal)
+                // Detect if the match produces string results: any arm body's
+                // final expression is a string literal or a variable known to
+                // hold a char* (the result holder must then be const char*).
                 let is_string_result = arms.iter().any(|arm| {
-                    arm.body.iter().any(|s| {
-                        matches!(
-                            s,
-                            Stmt::ExprStmt(Expr::Str(_)) | Stmt::Return(Some(Expr::Str(_)))
-                        )
-                    })
+                    // A variant with a string payload binds a char* — an arm
+                    // body that is just the binder is still a string result.
+                    let payload_is_string = match &arm.pattern {
+                        Pattern::EnumVariant {
+                            enum_name, variant, ..
+                        } => self
+                            .enum_payload_c_ty(enum_name, variant)
+                            .map(|t| t == "const char*")
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    payload_is_string
+                        || arm.body.iter().any(|s| {
+                            let e = match s {
+                                Stmt::ExprStmt(e) | Stmt::Return(Some(e)) => Some(e),
+                                _ => None,
+                            };
+                            match e {
+                                Some(Expr::Str(_)) => true,
+                                Some(Expr::Ident(n)) => self
+                                    .var_types
+                                    .get(n.as_str())
+                                    .map(|t| t == "const char*")
+                                    .unwrap_or(false),
+                                _ => false,
+                            }
+                        })
                 });
-                // GNU statement expression: ({ long __r=0; long __m=tag; if(...) __r=val; ... __r; })
-                let mut c = if is_string_result {
-                    format!("({{ const char* {res} = \"\"; const char* {tmp} = {tag_expr}; ")
-                } else if is_string_match || sc_ty == "const char*" || sc_ty == "string" {
-                    format!("({{ double {res} = 0; const char* {tmp} = {tag_expr}; ")
+                // The tag holder types by SCRUTINEE, not by result: for an
+                // enum match it is the integer .tag field (long) even when the
+                // arms produce strings; only a string scrutinee gets char*.
+                let tag_is_cstr = !is_enum_match
+                    && (is_string_match || sc_ty == "const char*" || sc_ty == "string");
+                let res_decl = if is_string_result {
+                    format!("const char* {res} = \"\"; ")
                 } else {
-                    format!("({{ double {res} = 0; long {tmp} = {tag_expr}; ")
+                    format!("double {res} = 0; ")
                 };
+                let tag_decl = if tag_is_cstr {
+                    format!("const char* {tmp} = {tag_expr}; ")
+                } else {
+                    format!("long {tmp} = {tag_expr}; ")
+                };
+                // GNU statement expression: ({ long __r=0; long __m=tag; if(...) __r=val; ... __r; })
+                let mut c = format!("({{ {res_decl}{tag_decl}");
                 // Pre-declare pattern binding variables for arms with guards (deduplicated)
                 let mut predeclared: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
@@ -3398,11 +3481,24 @@ impl CodeGen {
                         } {
                             if !predeclared.contains(b) && *b != sc {
                                 predeclared.insert(b.clone());
-                                if is_string_scrutinee {
-                                    c.push_str(&format!("const char* {b} = \"\"; "));
-                                } else {
-                                    c.push_str(&format!("long {b} = 0; "));
-                                }
+                                // Enum payload binders pre-declare with the
+                                // variant's payload type so guard expressions
+                                // see the right value shape.
+                                let (decl_ty, init) = match &arm.pattern {
+                                    Pattern::EnumVariant {
+                                        enum_name, variant, ..
+                                    } => {
+                                        match self.enum_payload_c_ty(enum_name, variant).as_deref()
+                                        {
+                                            Some("const char*") => ("const char*", "\"\""),
+                                            Some("double") => ("double", "0"),
+                                            _ => ("long", "0"),
+                                        }
+                                    }
+                                    _ if is_string_scrutinee => ("const char*", "\"\""),
+                                    _ => ("long", "0"),
+                                };
+                                c.push_str(&format!("{decl_ty} {b} = {init}; "));
                             }
                         }
                     }
@@ -3453,25 +3549,78 @@ impl CodeGen {
                     } else {
                         false
                     };
+                    // Enum payload binders get the variant's payload C type so
+                    // `Shape::Circle(r) => r * r * 3.14` binds r as double and
+                    // string payloads bind as const char* (was: always long).
+                    let binder_decl_ty = if is_enum_match {
+                        match &arm.pattern {
+                            Pattern::EnumVariant {
+                                enum_name, variant, ..
+                            } => self
+                                .enum_payload_c_ty(enum_name, variant)
+                                .unwrap_or_else(|| "long".to_string()),
+                            _ => "long".to_string(),
+                        }
+                    } else {
+                        "long".to_string()
+                    };
                     let binding_decl = if let Some(ref b) = binding_name {
-                        if *b == sc {
+                        if is_enum_match && *b == sc {
+                            if has_guard || was_predeclared {
+                                // Pre-declared binder: the assignment reads the
+                                // scrutinee (outer binding) before writing, so
+                                // the name collision is safe here.
+                                match binder_decl_ty.as_str() {
+                                    "const char*" => format!("{b} = {sc}.payload.s; "),
+                                    "double" => format!("{b} = {sc}.payload.d; "),
+                                    _ => format!("{b} = (long){sc}.payload.d; "),
+                                }
+                            } else {
+                                // Binding name == scrutinee (e.g. Square(s) in
+                                // `fn area(s: Shape)`): the body must see the
+                                // PAYLOAD, not the struct. Bind through a temp
+                                // — `double s = s.payload.d` would read the new
+                                // binding, since C scopes a declaration from
+                                // its own initializer onward.
+                                let idx2 = self.var_counter.get();
+                                self.var_counter.set(idx2 + 1);
+                                let t = format!("__b{}", idx2);
+                                match binder_decl_ty.as_str() {
+                                    "const char*" => format!(
+                                        "const char* {t} = {sc}.payload.s; const char* {b} = {t}; "
+                                    ),
+                                    "double" => {
+                                        format!("double {t} = {sc}.payload.d; double {b} = {t}; ")
+                                    }
+                                    _ => {
+                                        format!("long {t} = (long){sc}.payload.d; long {b} = {t}; ")
+                                    }
+                                }
+                            }
+                        } else if *b == sc {
                             // Binding name equals scrutinee — no assignment needed
                             String::new()
                         } else if has_guard || was_predeclared {
                             // Variable pre-declared; just assign
                             if is_enum_match {
-                                format!("{b} = (long){sc}.payload.d; ")
+                                match binder_decl_ty.as_str() {
+                                    "const char*" => format!("{b} = {sc}.payload.s; "),
+                                    "double" => format!("{b} = {sc}.payload.d; "),
+                                    _ => format!("{b} = (long){sc}.payload.d; "),
+                                }
                             } else {
                                 format!("{b} = {sc}; ")
                             }
-                        } else {
-                            if is_enum_match {
-                                format!("long {b} = (long){sc}.payload.d; ")
-                            } else if is_string_scrutinee {
-                                format!("const char* {b} = {sc}; ")
-                            } else {
-                                format!("long {b} = {sc}; ")
+                        } else if is_enum_match {
+                            match binder_decl_ty.as_str() {
+                                "const char*" => format!("const char* {b} = {sc}.payload.s; "),
+                                "double" => format!("double {b} = {sc}.payload.d; "),
+                                _ => format!("long {b} = (long){sc}.payload.d; "),
                             }
+                        } else if is_string_scrutinee {
+                            format!("const char* {b} = {sc}; ")
+                        } else {
+                            format!("long {b} = {sc}; ")
                         }
                     } else {
                         String::new()

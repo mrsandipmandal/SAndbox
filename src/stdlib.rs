@@ -3101,8 +3101,28 @@ typedef struct {
     union {
         double d;
         long i64_val;
+        const char* s;
     } payload;
 } sbx_enum;
+
+/* Enum accessors used by the LLVM backend: an enum instance travels as an
+   i64 holding a pointer to a heap-allocated sbx_enum (every LLVM value
+   lives in a single i64 slot; strings ride the same way as i8*). */
+static sbx_enum* sbx_enum_new(long tag, double payload) {
+    sbx_enum* e = (sbx_enum*)malloc(sizeof(sbx_enum));
+    e->tag = tag;
+    e->payload.d = payload;
+    return e;
+}
+static sbx_enum* sbx_enum_new_s(long tag, const char* payload) {
+    sbx_enum* e = (sbx_enum*)malloc(sizeof(sbx_enum));
+    e->tag = tag;
+    e->payload.s = payload;
+    return e;
+}
+static long sbx_enum_tag(const sbx_enum* e) { return e->tag; }
+static double sbx_enum_payload_d(const sbx_enum* e) { return e->payload.d; }
+static const char* sbx_enum_payload_s(const sbx_enum* e) { return e->payload.s; }
 
 /* ── Range helpers ── */
 /* Ranges are used by for-in loops; the codegen emits C for-loops directly.

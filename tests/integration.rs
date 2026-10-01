@@ -1231,6 +1231,210 @@ fn main() {
 }
 
 #[test]
+fn test_enum_match_string_arms() {
+    // A match whose arms produce strings, returned through a function call
+    // (regression: the C emitter typed the match's tag holder as char* and
+    // the result holder as long, so gcc rejected `char* == long`).
+    let source = r#"
+enum Color { Red, Green, Blue }
+
+fn describe(c: Color) -> string {
+    match c {
+        Color::Red => "red",
+        Color::Green => "green",
+        Color::Blue => "blue",
+        _ => "unknown",
+    }
+}
+
+fn main() {
+    print(describe(Color::Red))
+    print(describe(Color::Green))
+    print(describe(Color::Blue))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Enum string arms failed: {}", output);
+    assert!(output.contains("red"), "Missing red: {}", output);
+    assert!(output.contains("green"), "Missing green: {}", output);
+    assert!(output.contains("blue"), "Missing blue: {}", output);
+    assert!(
+        !output.contains("unknown"),
+        "Wildcard must not match: {}",
+        output
+    );
+}
+
+#[test]
+fn test_enum_match_payload_shadowed_binder() {
+    // The Square binder deliberately shadows the scrutinee name `s`
+    // (regression: codegen emitted `s * s` on the whole struct and skipped
+    // the payload binding). Also exercises inline construction — the enum
+    // instance is built directly in the call argument.
+    let source = r#"
+enum Shape { Circle(f64), Square(f64), Point }
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle(r) => r * r * 3.14,
+        Shape::Square(s) => s * s,
+        Shape::Point => 0.0,
+    }
+}
+
+fn main() {
+    print(area(Shape::Circle(5.0)))
+    print(area(Shape::Square(2.5)))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "Shadowed binder failed: {}", output);
+    assert!(output.contains("78.5"), "circle area: {}", output);
+    assert!(output.contains("6.25"), "square area: {}", output);
+}
+
+#[test]
+fn test_enum_match_payload_string() {
+    // String payloads ride the union's char* slot; an arm body that is just
+    // the binder must be recognized as a string result.
+    let source = r#"
+enum Msg { Text(string), Empty }
+
+fn show(m: Msg) -> string {
+    match m {
+        Msg::Text(t) => t,
+        Msg::Empty => "",
+    }
+}
+
+fn main() {
+    print(show(Msg::Text("hello payload")))
+    print(show(Msg::Empty))
+}
+"#;
+    let (output, ok) = compile_and_run(source);
+    assert!(ok, "String payload failed: {}", output);
+    assert!(
+        output.contains("hello payload"),
+        "payload string: {}",
+        output
+    );
+}
+
+#[test]
+fn test_enum_match_payload_interpreter() {
+    // The interpreter must carry enum instances across function calls
+    // (regression: `match param { Variant(x) => ... }` reported
+    // "no arm matched" for every enum passed as an argument).
+    // Integer payloads keep the arithmetic exact in the interpreter's
+    // i64 value model.
+    let source = r#"
+enum Shape { Circle(i64), Square(i64), Point }
+
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape::Circle(r) => r * r,
+        Shape::Square(s) => s * s,
+        Shape::Point => 0,
+    }
+}
+
+fn main() {
+    print(area(Shape::Circle(5)))
+    print(area(Shape::Square(7)))
+    print(area(Shape::Point))
+}
+"#;
+    let (output, ok) = interpret_source(source);
+    assert!(ok, "Interpreter enum payload failed: {}", output);
+    assert!(output.contains("25"), "circle: {}", output);
+    assert!(output.contains("49"), "square: {}", output);
+    assert!(output.contains("0"), "point: {}", output);
+}
+
+#[test]
+fn test_llvm_enum_match() {
+    // LLVM: enum instances box through the runtime accessors; the match
+    // result slot types by the arms' result (i8* for strings, double for
+    // floats) so the module verifier accepts the function signatures.
+    let source = r#"
+enum Color { Red, Green, Blue }
+enum Shape { Circle(f64), Square(f64), Point }
+
+fn describe(c: Color) -> string {
+    match c {
+        Color::Red => "red",
+        Color::Green => "green",
+        Color::Blue => "blue",
+        _ => "unknown",
+    }
+}
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle(r) => r * r * 3.14,
+        Shape::Square(s) => s * s,
+        Shape::Point => 0.0,
+    }
+}
+
+fn main() {
+    print(describe(Color::Green))
+    print(area(Shape::Circle(5.0)))
+    print(area(Shape::Square(2.5)))
+}
+"#;
+    let output = llvm_build_and_run(source);
+    assert!(output.contains("green"), "string arms: {}", output);
+    assert!(output.contains("78.5"), "float payload: {}", output);
+    assert!(output.contains("6.25"), "float payload square: {}", output);
+}
+
+#[test]
+fn test_result_ok_string_all_backends() {
+    // Result<string, string> functions: Ok carries the payload (C backend
+    // models a Result as its Ok type; LLVM now mirrors that; the interpreter
+    // passes it through). Err fails fast everywhere.
+    let src = r#"
+fn transfer(amount: i64) -> Result<string, string> {
+    if amount > 100 {
+        return Err("Insufficient balance")
+    }
+    return Ok("Transfer successful")
+}
+
+fn main() {
+    let result = transfer(50)
+    print(result)
+}
+"#;
+    let (out, ok) = compile_and_run(src);
+    assert!(ok, "C backend failed:\n{}", out);
+    assert!(out.contains("Transfer successful"), "C out: {}", out);
+
+    let out = llvm_build_and_run(src);
+    assert!(out.contains("Transfer successful"), "LLVM out: {}", out);
+
+    let (out, ok) = interpret_source(src);
+    assert!(ok, "interpreter failed:\n{}", out);
+    assert!(out.contains("Transfer successful"), "interp out: {}", out);
+
+    // Err path: fail-fast on C and interpreter (LLVM Err shares the C
+    // exit(1) semantics; the message goes to stderr).
+    let src_err = src.replace("50", "500");
+    let (_, ok_c) = compile_and_run(&src_err);
+    assert!(!ok_c, "C should exit nonzero on Err path");
+
+    let (out, ok_i) = interpret_source(&src_err);
+    assert!(!ok_i, "interpreter should fail on Err path");
+    assert!(
+        out.contains("Insufficient balance"),
+        "interp err out: {}",
+        out
+    );
+}
+
+#[test]
 fn test_http_serve_multi_request() {
     use std::time::Duration;
 
